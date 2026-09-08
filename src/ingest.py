@@ -17,6 +17,7 @@ ARTIFACT_TEMPLATES = {
     "openapi": TEMPLATES / "openapi.skeleton.yaml",
     "mermaid": TEMPLATES / "mermaid.skeleton.md",
     "historia": TEMPLATES / "historia.skeleton.md",
+    "prd": TEMPLATES / "prd.skeleton.md",
 }
 
 

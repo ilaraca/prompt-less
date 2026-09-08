@@ -1,10 +1,10 @@
 # Prompt-less
 
-> Gera OpenAPI, fluxo Mermaid e história técnica a partir de Figma, regras e docs — com contexto comprimido e custo de tokens sob controle.
+> Gera OpenAPI, fluxo Mermaid, história técnica e PRD a partir de Figma, regras e docs — com contexto comprimido e custo de tokens sob controle.
 
 **Repositório:** [github.com/ilaraca/prompt-less](https://github.com/ilaraca/prompt-less)
 
-Pipeline de tech lead que transforma insumos desidratados (UI, regras, TXT/DOCX) em três artefatos: contrato de API, diagrama de sequência e história BFF/MFE. Em vez de mandar tudo ao LLM, filtra o sinal, comprime o contexto e só então gera.
+Pipeline de tech lead que transforma insumos desidratados (UI, regras, TXT/DOCX) em artefatos: contrato de API, diagrama de sequência, história BFF/MFE e **PRD.md** (insumo para SDD). Em vez de mandar tudo ao LLM, filtra o sinal, comprime o contexto e só então gera.
 
 Inspirada nas práticas descritas por Yuval Ben-itzhak (*How I reduced LLM token costs by ~90%*): o custo real não está no prompt “bonito”, e sim na **explosão de contexto** (system repetido, tools verbosas, histórico, RAG bruto, logs).
 
@@ -12,12 +12,13 @@ Inspirada nas práticas descritas por Yuval Ben-itzhak (*How I reduced LLM token
 
 ## Objetivo
 
-Receber insumos de produto/UX/negócio e emitir **somente o artefato final**, com:
+Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**, com:
 
 - contexto **comprimido e estruturado** antes do modelo de raciocínio;
 - estado do workflow **fora do prompt**;
 - prefixo de system/tools **estável e cacheável** (OpenAI / Claude);
-- budget explícito de tokens (alvo ~650; teto ~2000).
+- budget explícito de tokens (alvo ~650; teto ~2000);
+- **PRD.md** gerado junto com a história, como insumo canônico para **SDD**.
 
 **Princípio:** nunca enviar dados brutos ao modelo se puderem ser filtrados ou comprimidos antes.
 
@@ -32,6 +33,7 @@ Receber insumos de produto/UX/negócio e emitir **somente o artefato final**, co
 | **Geração assistida de contratos OpenAPI** a partir de Figma + regras | Inputs/listas viram schemas; bloqueios viram 4xx tipados |
 | **Diagramas de sequência Frontend → BFF → API** | Traduz regras em `alt`/`opt` sem reenviar specs inteiras |
 | **Histórias técnicas BFF/MFE** (BDD) | Critérios espelham `regras.yaml`; payloads espelham UI |
+| **PRD.md para SDD (Spec-Driven Development)** | `historia` emite também o PRD com RF/AC, contrato de dados e handoff |
 | **Onboarding / tech lead docs** | Padroniza artefatos a partir de fontes heterogêneas |
 | **Specs longas (milhares de linhas)** | Compressão hierárquica: sinal de negócio entra; ruído sai |
 | **Agentes multi-etapa com custo controlado** | State externo + pacote LLM enxuto por request |
@@ -48,7 +50,7 @@ Receber insumos de produto/UX/negócio e emitir **somente o artefato final**, co
 
 ### Público-alvo
 
-- Tech Leads / Arquitetos montando pipeline de artefatos
+- Tech Leads / Arquitetos montando pipeline de artefatos e PRD→SDD
 - Times de plataforma de IA que precisam **orçar tokens**
 - Squads BFF/MFE que partem de Figma + regras desidratadas
 
@@ -79,7 +81,7 @@ Dados brutos (figma.json, regras.yaml, *.txt/*.docx/*.doc/*.md)
    [reason] ─────────────── pacote OpenAI/Claude  |  dry-run scaffold
         │
         ▼
-    [emit] ──────────────── outputs/openapi.yaml | sequence.mmd | historia.md
+    [emit] ──────────────── outputs/openapi.yaml | sequence.mmd | historia.md | PRD.md
 ```
 
 ### Técnicas de economia de tokens (mapeamento do artigo)
@@ -109,7 +111,7 @@ A orquestração está em `src/run.py`. Cada etapa tem um módulo próprio; o da
 |-------|--------|-------------|
 | `inputs/figma.json` | `ingest.py` | JSON da UI |
 | `inputs/regras.yaml` | `ingest.py` | YAML de negócio |
-| Template do tipo pedido | `ingest.py` | esqueleto OpenAPI / Mermaid / História |
+| Template do tipo pedido | `ingest.py` | esqueleto OpenAPI / Mermaid / História / PRD |
 | `*.txt`, `*.md`, `*.docx`, `*.doc` | `docs_ingest.py` | texto extraído + metadados (`name`, `lines`, `chars`, `est_tokens_raw`) |
 
 - `.docx` → `python-docx` (parágrafos + tabelas).
@@ -152,7 +154,7 @@ documento (N linhas)
                 → consolidado ≤ ~800 chars (~200 tokens)
 ```
 
-`SIGNAL_RE` detecta termos de negócio/API, por exemplo: `regra`, `bloqueio`, `http`, `endpoint`, `path`, `request`, `response`, `dado`, `quando`, `então`, `auth`, `permiss`, `api`, `bff`, `status`, `openapi`…
+`SIGNAL_RE` detecta termos de negócio/API, por exemplo: `regra`, `bloqueio`, `http`, `endpoint`, `path`, `request`, `response`, `dado`, `quando`, `então`, `auth`, `permiss`, `api`, `bff`, `status`, `openapi`, `fluxo`…
 
 - Chunk **sem** sinal → resumo vazio (ruído/telemetria descartados).
 - Consolidado prioriza resumos com sinal e respeita o budget de caracteres.
@@ -218,7 +220,7 @@ Evolução natural (próximo passo): manter `doc_compress` / budget e trocar só
 
 1. **`system`** — texto fixo de `prompts/system.compact.txt` (prefixo estável).
 2. **`dynamic`** — JSON enxuto:
-   - `comando` (`Gerar openapi|mermaid|historia`)
+   - `comando` (`Gerar openapi|mermaid|historia|prd`)
    - `state` (metadados, sem docs brutos)
    - `contexto_comprimido` (saída do RAG)
    - `template` (esqueleto; se estourar budget, trunca o template)
@@ -232,12 +234,16 @@ Estimativa de tokens: `len(texto) // 4` (heurística, não tokenizer oficial).
 - **`build_llm_package`**: gera JSON dual:
   - `openai`: `instructions` + `input` + `store: true` (encadeamento futuro via `previous_response_id`)
   - `claude`: `system` com `cache_control: ephemeral` + `messages`
-- **`dry_run_scaffold`**: preenche o template localmente (sem API) para validar a pipeline.
+- **`dry_run_scaffold`**: preenche o template localmente (sem API) para `openapi`, `mermaid`, `historia` e **`prd`**.
+- No PRD, o scaffold usa UI + regras + `consolidated` do RAG (RF/AC, dados, handoff SDD).
 - **`--live`**: slot ainda não implementado — deve consumir o pacote já comprimido.
 
-### 8. `emit` (`src/emit.py`)
+### 8. `emit` (`src/emit.py` + `also_emit` em `run.py`)
 
-**Papel:** gravar um único arquivo por tipo em `outputs/`, mais o `llm_package_*.json` (gravado em `run.py`).
+**Papel:** gravar o arquivo do tipo pedido em `outputs/` (+ `llm_package_*.json`).
+
+- Um tipo → um arquivo principal (`openapi.yaml`, `sequence.mmd`, `historia.md`, `PRD.md`).
+- Exceção: `historia` declara `also_emit: [prd]` em `config/pipeline.yaml` — `run.py` gera **história e PRD** na mesma execução (mesmo contexto comprimido, dois templates).
 
 ### Diagrama de dados (o que viaja vs o que para)
 
@@ -250,7 +256,8 @@ state/workflow.json ◄── só metadados                          context_bui
                                                                        │
                                                                        ▼
                                                               llm_package_*.json
-                                                              + artefato em outputs/
+                                                              + artefato(s) em outputs/
+                                                              (historia → também PRD.md)
 ```
 
 ---
@@ -261,15 +268,39 @@ state/workflow.json ◄── só metadados                          context_bui
 |---------|----------|--------|
 | `openapi` | `templates/openapi.skeleton.yaml` | `outputs/openapi.yaml` |
 | `mermaid` | `templates/mermaid.skeleton.md` | `outputs/sequence.mmd` |
-| `historia` | `templates/historia.skeleton.md` | `outputs/historia.md` |
+| `historia` | `templates/historia.skeleton.md` | `outputs/historia.md` **+** `outputs/PRD.md` |
+| `prd` | `templates/prd.skeleton.md` | `outputs/PRD.md` |
+
+`historia` emite também o **PRD** (`also_emit` em `config/pipeline.yaml`): a história é o recorte de implementação; o PRD é o documento canônico para um **SDD** futuro (arquitetura, contrato, tasks).
 
 Além do artefato, a pipeline grava o **pacote LLM** (contexto já comprimido):
 
 - `outputs/llm_package_openapi.json`
 - `outputs/llm_package_mermaid.json`
 - `outputs/llm_package_historia.json`
+- `outputs/llm_package_prd.json`
 
 Cada pacote inclui variantes `openai` e `claude` para plugar a API no modo `--live`.
+
+### PRD → SDD
+
+O `PRD.md` nasce com:
+
+- **frontmatter YAML** (`id`, `artifacts`, `sdd.expected`) para parsers de SDD
+- RF (`RF-xx`) a partir das regras/UI
+- AC (`AC-xx`) BDD alinhados à história
+- contrato de dados (entrada/saída/ações)
+- seção **Handoff para SDD** (o que o próximo estágio deve gerar)
+- contexto comprimido do Prompt-less (sem texto bruto)
+
+Fluxo sugerido:
+
+```
+Figma + regras + docs
+        → Prompt-less (historia + PRD + opcionalmente openapi/mermaid)
+                → SDD consome PRD.md
+                        → architecture / api / tasks
+```
 
 ### Regras de tradução (quando o LLM/live estiver ativo)
 
@@ -290,6 +321,12 @@ Cada pacote inclui variantes `openai` e `claude` para plugar a API no modo `--li
 - Título, Contexto (1 linha), Critérios BDD (Dado/Quando/Então), Dependências
 - Critérios = tradução das condições de `regras.yaml`
 - Payloads alinhados ao Figma
+
+**PRD**
+
+- Preencher `prd.skeleton.md` sem remover o frontmatter
+- RF/AC rastreáveis; dados da UI; regras → erros HTTP
+- Handoff SDD lista artefatos esperados (`architecture.md`, contrato, tasks)
 
 ---
 
@@ -386,12 +423,163 @@ Gera scaffold do artefato + pacote LLM comprimido:
 ```bash
 .venv/bin/python -m src.run openapi --dry-run
 .venv/bin/python -m src.run mermaid --dry-run
-.venv/bin/python -m src.run historia --dry-run
+.venv/bin/python -m src.run historia --dry-run   # → historia.md + PRD.md
+.venv/bin/python -m src.run prd --dry-run        # só PRD.md
 ```
 
 ### Live (API)
 
 `--live` está reservado para plugar clientes OpenAI/Claude em `src/reason.py` usando o JSON já montado em `outputs/llm_package_*.json`. Hoje levanta `NotImplementedError` de propósito.
+
+---
+
+## Exemplos de uso
+
+Os exemplos abaixo assumem que você está em `pipeline/` com o venv ativo (ou use o prefixo `.venv/bin/python`).
+
+### 1. Quickstart com os insumos de exemplo
+
+O repositório já traz `inputs/figma.json`, `inputs/regras.yaml` e docs de amostra.
+
+```bash
+# História técnica + PRD (insumo para SDD)
+.venv/bin/python -m src.run historia --dry-run
+
+# Ver saídas
+ls outputs/historia.md outputs/PRD.md
+head -40 outputs/PRD.md
+```
+
+Saída esperada no terminal (resumo):
+
+```json
+{
+  "outputs": {
+    "historia": ".../outputs/historia.md",
+    "prd": ".../outputs/PRD.md"
+  },
+  "est_tokens": 580,
+  "rag": { "raw": 48000, "compressed": 150, "doc_reduction_pct": 99.8 }
+}
+```
+
+### 2. Gerar o pacote técnico completo (API + fluxo + história + PRD)
+
+```bash
+.venv/bin/python -m src.run openapi --dry-run
+.venv/bin/python -m src.run mermaid --dry-run
+.venv/bin/python -m src.run historia --dry-run
+```
+
+Artefatos:
+
+| Arquivo | Uso |
+|---------|-----|
+| `outputs/openapi.yaml` | Contrato (ainda com markers no dry-run) |
+| `outputs/sequence.mmd` | Sequência Frontend → BFF → API |
+| `outputs/historia.md` | História BFF/MFE (BDD) |
+| `outputs/PRD.md` | PRD canônico para SDD |
+
+### 3. Só o PRD (sem reemitir a história)
+
+Útil quando a história já existe e você quer regenerar o handoff SDD:
+
+```bash
+.venv/bin/python -m src.run prd --dry-run
+cat outputs/PRD.md
+```
+
+### 4. Colocar seus próprios insumos
+
+```bash
+# 1) Substitua / adicione arquivos em inputs/
+cp ~/Downloads/minha-tela.json inputs/figma.json
+cp ~/Downloads/regras-negocio.yaml inputs/regras.yaml
+cp ~/Downloads/spec-produto.docx inputs/
+
+# 2) Rode o artefato desejado
+.venv/bin/python -m src.run historia --dry-run
+
+# 3) Encaminhe o PRD ao estágio SDD
+cp outputs/PRD.md ../sdd/inbox/PRD.md
+```
+
+Formato mínimo de `figma.json` e `regras.yaml`: ver seção [Insumos suportados](#insumos-suportados).
+
+### 5. Spec longa (milhares de linhas) + compressão
+
+```bash
+# Amostra de 3000 linhas já inclusa
+wc -l inputs/amostra_3000.txt
+
+.venv/bin/python -m src.run openapi --dry-run
+
+# Conferir que o pacote LLM NÃO carrega o texto bruto
+.venv/bin/python -c "
+import json
+p = json.load(open('outputs/llm_package_openapi.json'))
+d = p['openai']['input']
+print('est_tokens', p['meta']['est_tokens'])
+print('tem_ruido_telemetria', 'ruido de telemetria' in d)
+print('rag', p['meta']['rag_stats'])
+"
+```
+
+### 6. Inspecionar o pacote LLM (antes do `--live`)
+
+```bash
+.venv/bin/python -m src.run mermaid --dry-run
+
+# Prefixo estável (cacheável) vs payload dinâmico
+.venv/bin/python -c "
+import json
+p = json.load(open('outputs/llm_package_mermaid.json'))
+print('comando:', p['meta']['comando'])
+print('system_chars:', len(p['openai']['instructions']))
+print('input_chars:', len(p['openai']['input']))
+print('claude_cache:', p['claude']['system'][0].get('cache_control'))
+"
+```
+
+### 7. Fluxo Prompt-less → SDD
+
+```bash
+# A) Prompt-less gera o canônico
+.venv/bin/python -m src.run historia --dry-run
+
+# B) (opcional) complete contrato e sequência na mesma pasta
+.venv/bin/python -m src.run openapi --dry-run
+.venv/bin/python -m src.run mermaid --dry-run
+
+# C) O SDD consome o frontmatter de outputs/PRD.md
+#    campos: artifacts.* e sdd.expected
+#    → architecture.md, sequence_refined.mmd, api_contract.yaml, tasks.md
+grep -A20 '^---' outputs/PRD.md | head -25
+```
+
+### 8. Ajustar budget e reexecutar
+
+Em `config/pipeline.yaml`:
+
+```yaml
+budget:
+  max_context_tokens: 2000
+  consolidated_summary_max_tokens: 200
+  doc_lines_per_chunk: 40
+```
+
+```bash
+# Depois de editar o YAML, rode de novo — o consolidated muda
+.venv/bin/python -m src.run prd --dry-run
+```
+
+### 9. Estado externo (sem histórico no prompt)
+
+```bash
+.venv/bin/python -m src.run historia --dry-run
+cat state/workflow.json
+# → tipo, fluxo, inputs, bloqueios, metadados de docs (sem texto bruto)
+```
 
 ---
 
@@ -406,12 +594,16 @@ pipeline/
 │   └── tools.compact.yaml    # definições de tools sem prosa (economia de tokens)
 ├── prompts/
 │   └── system.compact.txt    # system estável → candidato a prompt cache
-├── templates/                # esqueletos preenchidos no reason/emit
+├── templates/
+│   ├── openapi.skeleton.yaml
+│   ├── mermaid.skeleton.md
+│   ├── historia.skeleton.md
+│   └── prd.skeleton.md       # PRD → SDD (frontmatter + RF/AC)
 ├── inputs/                   # corpus da execução (Figma, regras, docs)
 ├── state/                    # estado externo (sem histórico/docs brutos)
-├── outputs/                  # artefato final + llm_package_*.json
+├── outputs/                  # artefatos + PRD.md + llm_package_*.json
 └── src/
-    ├── run.py                # orquestra as 8 etapas e imprime métricas
+    ├── run.py                # orquestra etapas; also_emit (historia→prd)
     ├── ingest.py             # carrega figma/regras/template
     ├── docs_ingest.py        # extrai texto de txt/md/docx/doc
     ├── preprocess.py         # desidrata UI/regras (pré-LLM)
@@ -419,8 +611,8 @@ pipeline/
     ├── doc_compress.py       # compressão hierárquica + SIGNAL_RE
     ├── rag_compress.py       # retrieve estrutural + merge UI/regras/docs
     ├── context_builder.py    # system + dynamic ≤ budget
-    ├── reason.py             # pacote OpenAI/Claude + dry-run
-    └── emit.py               # escreve arquivo único em outputs/
+    ├── reason.py             # pacote OpenAI/Claude + dry-run (inclui PRD)
+    └── emit.py               # mapeia tipo → arquivo em outputs/
 ```
 
 Leitura recomendada do código, nesta ordem: `run.py` → `rag_compress.py` → `doc_compress.py` → `context_builder.py`.
@@ -439,7 +631,20 @@ Parâmetros principais de budget:
 | `rag_chunk_max_tokens` | 120 | Influencia tamanho do resumo por chunk |
 | `doc_lines_per_chunk` | 40 | Granularidade do fatiamento de docs |
 
-Ajuste esses valores conforme o provedor (janela, preço de cache) e o risco de “cortar demais” sinais.
+Artefatos e encadeamento:
+
+```yaml
+artifacts:
+  historia:
+    template: templates/historia.skeleton.md
+    output: outputs/historia.md
+    also_emit: [prd]          # mesma run → também outputs/PRD.md
+  prd:
+    template: templates/prd.skeleton.md
+    output: outputs/PRD.md
+```
+
+Ajuste o budget conforme o provedor (janela, preço de cache) e o risco de “cortar demais” sinais.
 
 ---
 
@@ -457,7 +662,9 @@ Ajuste esses valores conforme o provedor (janela, preço de cache) e o risco de 
 
 Cada execução imprime JSON com:
 
-- `est_tokens` — estimativa do pacote (chars/4)
+- `output` / `outputs` — caminho principal e mapa de todos os arquivos emitidos (ex.: `historia` + `prd`)
+- `llm_package` / `llm_packages` — pacotes por tipo
+- `est_tokens` — estimativa do pacote principal (chars/4)
 - `rag.raw` / `rag.compressed` — antes/depois da compressão
 - `rag.doc_reduction_pct` — % de redução documental
 - `docs_ingested` — lista de arquivos e linhas
@@ -481,6 +688,7 @@ Use essas métricas para validar que a pipeline continua “barata” ao crescer
 2. Trocar extrativo por modelo small só quando o score de sinais for baixo
 3. Persistência Redis + TTL alinhado ao cache Claude (5m / 1h)
 4. Telemetria de custo real (tokens billable + cache hits)
+5. Consumidor SDD que leia `outputs/PRD.md` (frontmatter `sdd.expected`) e gere architecture/tasks
 
 ---
 
@@ -488,4 +696,4 @@ Use essas métricas para validar que a pipeline continua “barata” ao crescer
 
 > Sistemas LLM em produção funcionam melhor quando o modelo vê a **informação certa**, não a **maior quantidade** de informação.
 
-Esta pipeline aplica isso ao domínio de **artefatos de tech lead**: Figma, regras e documentos longos viram um contexto pequeno, estável e auditável — pronto para gerar OpenAPI, Mermaid e histórias com custo previsível.
+O **Prompt-less** aplica isso ao domínio de artefatos de tech lead: Figma, regras e documentos longos viram um contexto pequeno, estável e auditável — pronto para gerar OpenAPI, Mermaid, histórias e **PRD para SDD** com custo previsível.

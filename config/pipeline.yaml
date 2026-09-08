@@ -1,4 +1,4 @@
-# Prompt-less — artefatos técnicos com contexto comprimido (OpenAPI | Mermaid | Historia)
+# Prompt-less — artefatos técnicos com contexto comprimido (OpenAPI | Mermaid | Historia | PRD)
 # Princípio: nunca enviar bruto se puder comprimir antes.
 # Repo: https://github.com/ilaraca/prompt-less
 
@@ -46,7 +46,12 @@ artifacts:
   historia:
     template: templates/historia.skeleton.md
     output: outputs/historia.md
-
+    also_emit:
+      - prd
+  prd:
+    template: templates/prd.skeleton.md
+    output: outputs/PRD.md
+    purpose: Insumo canônico para SDD (Spec-Driven Development)
 caching:
   openai:
     strategy: stable_prefix   # system + tools fixos no início

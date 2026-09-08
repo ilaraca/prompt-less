@@ -8,6 +8,7 @@ OUTPUTS = {
     "openapi": ROOT / "outputs" / "openapi.yaml",
     "mermaid": ROOT / "outputs" / "sequence.mmd",
     "historia": ROOT / "outputs" / "historia.md",
+    "prd": ROOT / "outputs" / "PRD.md",
 }
 
 

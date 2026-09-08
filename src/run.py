@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pipeline token-eficiente (Yuval Ben-itzhak → artefatos techlead).
+Prompt-less — pipeline token-eficiente de artefatos técnicos.
 
   Dados brutos (json/yaml/txt/docx/doc)
     → preprocess → state → RAG+doc compress → context ≤ budget → reason → emit
@@ -8,7 +8,8 @@ Pipeline token-eficiente (Yuval Ben-itzhak → artefatos techlead).
 Uso:
   python -m src.run openapi [--dry-run]
   python -m src.run mermaid [--dry-run]
-  python -m src.run historia [--dry-run]
+  python -m src.run historia [--dry-run]   # também emite PRD.md (insumo SDD)
+  python -m src.run prd [--dry-run]
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.context_builder import build_context  # noqa: E402
 from src.emit import emit  # noqa: E402
-from src.ingest import load_inputs  # noqa: E402
+from src.ingest import ARTIFACT_TEMPLATES, load_inputs  # noqa: E402
 from src.preprocess import preprocess  # noqa: E402
 from src.rag_compress import compress_rag  # noqa: E402
 from src.reason import build_llm_package, dry_run_scaffold  # noqa: E402
@@ -33,6 +34,47 @@ from src.state_store import write_state  # noqa: E402
 
 def load_cfg() -> dict:
     return yaml.safe_load((ROOT / "config" / "pipeline.yaml").read_text(encoding="utf-8"))
+
+
+def _also_emit(cfg: dict, tipo: str) -> list[str]:
+    art = (cfg.get("artifacts") or {}).get(tipo) or {}
+    return list(art.get("also_emit") or [])
+
+
+def _build_one(
+    tipo: str,
+    slim: dict,
+    state: dict,
+    rag: dict,
+    max_ctx: int,
+    dry_run: bool,
+) -> tuple[Path, Path, dict]:
+    template = ARTIFACT_TEMPLATES[tipo].read_text(encoding="utf-8")
+    context = build_context(
+        tipo=tipo,
+        state=state,
+        rag=rag,
+        template=template,
+        budget_tokens=max_ctx,
+    )
+    package = build_llm_package(context)
+    pkg_path = ROOT / "outputs" / f"llm_package_{tipo}.json"
+    pkg_path.parent.mkdir(parents=True, exist_ok=True)
+    pkg_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if dry_run:
+        artifact = dry_run_scaffold(
+            tipo,
+            slim["ui"],
+            slim["regras"],
+            template,
+            consolidated=rag.get("consolidated") or "",
+        )
+    else:
+        raise NotImplementedError("Mode --live: plugar client OpenAI/Claude no reason.py")
+
+    out = emit(tipo, artifact)
+    return out, pkg_path, context
 
 
 def run(tipo: str, dry_run: bool = True) -> dict:
@@ -48,34 +90,23 @@ def run(tipo: str, dry_run: bool = True) -> dict:
     state = write_state(
         {**slim, "status": "preprocessing_done", "previous_actions": ["ingest", "preprocess"]}
     )
-    # texto dos docs não vai para o state; só para compressão
     rag = compress_rag(
         slim,
         consolidated_chars=consolidated_chars,
         lines_per_chunk=lines_per_chunk,
         chunk_summary_chars=chunk_summary_chars,
     )
-    # remove texto bruto antes de montar pacote LLM (já está em consolidated)
-    slim_for_reason = {**slim, "documents": state.get("documents", [])}
-    context = build_context(
-        tipo=tipo,
-        state=state,
-        rag=rag,
-        template=slim_for_reason["template"],
-        budget_tokens=max_ctx,
-    )
-    package = build_llm_package(context)
 
-    pkg_path = ROOT / "outputs" / f"llm_package_{tipo}.json"
-    pkg_path.parent.mkdir(parents=True, exist_ok=True)
-    pkg_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+    out, pkg_path, context = _build_one(tipo, slim, state, rag, max_ctx, dry_run)
+    outputs = {tipo: str(out)}
+    packages = {tipo: str(pkg_path)}
 
-    if dry_run:
-        artifact = dry_run_scaffold(tipo, slim["ui"], slim["regras"], slim["template"])
-    else:
-        raise NotImplementedError("Mode --live: plugar client OpenAI/Claude no reason.py")
+    # história → também gera PRD.md (canônico para SDD)
+    for extra in _also_emit(cfg, tipo):
+        extra_out, extra_pkg, _ = _build_one(extra, slim, state, rag, max_ctx, dry_run)
+        outputs[extra] = str(extra_out)
+        packages[extra] = str(extra_pkg)
 
-    out = emit(tipo, artifact)
     write_state(
         {
             **slim,
@@ -86,7 +117,9 @@ def run(tipo: str, dry_run: bool = True) -> dict:
 
     return {
         "output": str(out),
+        "outputs": outputs,
         "llm_package": str(pkg_path),
+        "llm_packages": packages,
         "est_tokens": context["est_tokens"],
         "rag": context["rag_stats"],
         "docs_ingested": [
@@ -97,8 +130,8 @@ def run(tipo: str, dry_run: bool = True) -> dict:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Techlead artifact pipeline (token-efficient)")
-    p.add_argument("tipo", choices=["openapi", "mermaid", "historia"])
+    p = argparse.ArgumentParser(description="Prompt-less — token-efficient tech artifacts")
+    p.add_argument("tipo", choices=["openapi", "mermaid", "historia", "prd"])
     p.add_argument("--dry-run", action="store_true", default=True, help="scaffold sem LLM (default)")
     p.add_argument("--live", action="store_true", help="chamar LLM (ainda não implementado)")
     args = p.parse_args()

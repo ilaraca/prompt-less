@@ -1,0 +1,15 @@
+fluxo: Cadastro de Cliente
+bloqueios:
+  - trigger: CPF inválido
+    status: 400
+    code: CPF_INVALIDO
+  - trigger: sem autenticação
+    status: 401
+  - trigger: sem permissão admin
+    status: 403
+  - trigger: saldo negativo
+    status: 422
+    code: SALDO_NEGATIVO
+decisoes:
+  - quando: cliente ativo e payload válido
+    entao: persistir e retornar 200
