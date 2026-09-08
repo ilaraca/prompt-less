@@ -4,3 +4,5 @@ __pycache__/
 state/workflow.json
 outputs/*
 !outputs/.gitkeep
+*.bak
+.scratch/

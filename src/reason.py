@@ -95,7 +95,16 @@ def _ownership_md(svc: dict) -> str:
     if not svc or not svc.get("id"):
         return "- _(contexto único — sem `mapa-servicos.yaml` ou `--context`)_"
     repos = svc.get("repos") or []
-    repo_lines = "\n".join(f"  - `{r}`" for r in repos) if repos else "  - _(definir repos no mapa)_"
+    camadas = svc.get("camadas") or {}
+    if camadas:
+        repo_lines = "\n".join(
+            f"  - **{tier}:** " + ", ".join(f"`{r}`" for r in (lista or []))
+            for tier, lista in camadas.items()
+        )
+    elif repos:
+        repo_lines = "\n".join(f"  - `{r}`" for r in repos)
+    else:
+        repo_lines = "  - _(definir repos no mapa)_"
     return (
         f"- **Serviço:** `{svc.get('id')}` — {svc.get('nome') or svc.get('id')}\n"
         f"- **Repositórios:**\n{repo_lines}"
@@ -207,6 +216,8 @@ def _scaffold_prd(
     prd_id = f"prd-{slug[:48]}"
     repos = svc.get("repos") or []
     repos_yaml = json.dumps(repos, ensure_ascii=False)
+    camadas_yaml = json.dumps(svc.get("camadas") or {}, ensure_ascii=False)
+    artifacts_dir = f"outputs/contextos/{sid}" if svc.get("id") else "outputs"
 
     rfs = []
     for i, b in enumerate(regras.get("bloqueios") or [], start=1):
@@ -265,6 +276,8 @@ def _scaffold_prd(
         .replace("{{service_id}}", str(sid))
         .replace("{{service_nome}}", str(svc.get("nome") or sid))
         .replace("{{repos_yaml}}", repos_yaml)
+        .replace("{{camadas_yaml}}", camadas_yaml)
+        .replace("{{artifacts_dir}}", artifacts_dir)
         .replace(
             "{{problema}}",
             f"Necessidade de especificar e entregar **{fluxo}**"

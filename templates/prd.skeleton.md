@@ -5,16 +5,17 @@ title: "{{titulo}}"
 status: draft
 source: prompt-less
 artifacts:
-  historia: outputs/historia.md
-  openapi: outputs/openapi.yaml
-  sequence: outputs/sequence.mmd
-  prd: outputs/PRD.md
+  historia: {{artifacts_dir}}/historia.md
+  openapi: {{artifacts_dir}}/openapi.yaml
+  sequence: {{artifacts_dir}}/sequence.mmd
+  prd: {{artifacts_dir}}/PRD.md
   engenharia: inputs/engenharia.yaml
   mapa_servicos: inputs/mapa-servicos.yaml
 ownership:
   service_id: "{{service_id}}"
   service_name: "{{service_nome}}"
   repos: {{repos_yaml}}
+  camadas: {{camadas_yaml}}
 sdd:
   expected:
     - architecture.md

@@ -39,7 +39,7 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 | **Specs longas (milhares de linhas)** | Compressão hierárquica: sinal de negócio entra; ruído sai |
 | **Agentes multi-etapa com custo controlado** | State externo + pacote LLM enxuto por request |
 | **Handoff para Devin CLI** | `outputs/` / `docs/prompt-less/` como contexto curto para implementação |
-| **Microsserviços / multi-repo** | `mapa-servicos.yaml` + marcadores/keywords → `outputs/contextos/<id>/` |
+| **Microsserviços / multi-repo** | `scan-repos.sh` lê a pasta de repos → mapa → marcadores → `outputs/contextos/<id>/` |
 | **Pré-processamento barato + raciocínio caro** | Camada local (“modelo pequeno”) + slot para LLM grande |
 
 ### Onde *não* é a melhor ferramenta (ainda)
@@ -657,6 +657,9 @@ chmod +x scripts/devin-from-promptless.sh
 
 # Só prepara docs/prompt-less/ (sem chamar `devin`)
 ./scripts/devin-from-promptless.sh /caminho/do/seu-bff --dry-prep
+
+# Pasta com TODOS os repos: escaneia → mapa → marcadores → um pacote por repo
+./scripts/devin-from-promptless.sh --workspace ~/dev/repos --dry-prep
 ```
 
 O script grava em `APP/docs/prompt-less/`:
@@ -711,6 +714,67 @@ Devin por repo dono:
 ./scripts/devin-from-promptless.sh ../ms-pagamento --context ms-pagamento --dry-prep
 ```
 
+### 12. De/para automático: pasta de repos → mapa → marcadores
+
+Se você já trabalha numa pasta com **todos os repositórios** (padrão de uso do Devin CLI), não precisa escrever o `mapa-servicos.yaml` à mão. O `scripts/scan-repos.sh` deriva o mapa dos nomes dos repos e o `src/marcar.py` injeta os marcadores no texto de negócio.
+
+```
+~/dev/repos/                          inputs/mapa-servicos.yaml
+├── gestao-de-ofertas-api    ─┐       gestao-de-ofertas:
+├── gestao-de-ofertas-bff     ├──►      repos: [4 repos]
+├── gestao-de-ofertas-mfe     │         camadas: {api, bff, mfe, gtw}
+├── ofertas-gtw              ─┘         keywords: [gestao-de-ofertas, gestao, ofertas, /ofertas]
+├── cadastro-cliente-api     ─┐       cadastro-cliente:
+└── cadastro-cliente-bff     ─┘         camadas: {api, bff}
+```
+
+**Como o nome do repo é lido**
+
+1. Tokeniza por `-`/`_`/`.` e separa **camada** (`api`, `gtw`, `gateway`, `bff`, `mfe`, `ms`, `svc`, `worker`, `batch`, `orq`, `web`, `front`) do resto
+2. O resto vira a **jornada** → `service_id` (ex.: `gestao-de-ofertas`)
+3. Jornadas contidas em outra são **fundidas**: `ofertas-gtw` entra em `gestao-de-ofertas` e `ofertas` fica como keyword/alias (desligue com `--no-merge`)
+4. `keywords` = slug + tokens significativos (sem `de`/`da`/`para`…) + `/ultimo-token` para casar rotas no texto
+
+**Injeção dos marcadores (de/para)**
+
+`src/marcar.py` corta o doc **por seção** (títulos `## …`, `2.`, `2.1)`, `SEÇÃO …`), pontua cada seção com as keywords do mapa e escreve `[[service:<id>]]` na primeira linha da seção vencedora.
+
+```bash
+./scripts/scan-repos.sh --workspace ~/dev/repos      # gera o mapa (--dry-run p/ só ver)
+.venv/bin/python -m src.marcar                        # de/para em dry-run + relatório
+.venv/bin/python -m src.marcar --apply                # escreve os marcadores (.bak ao lado)
+.venv/bin/python -m src.run historia --all-contexts
+```
+
+O relatório `outputs/marcadores_report.json` mostra a decisão seção por seção, para revisar antes de aplicar:
+
+```json
+"de_para": [
+  { "secao": "2. Gestão de ofertas",   "servico": "gestao-de-ofertas", "score": 6 },
+  { "secao": "3. Cadastro de cliente", "servico": "cadastro-cliente",  "score": 9 },
+  { "secao": "5. Telemetria",          "servico": "_unassigned",       "score": 0 }
+]
+```
+
+Detalhes de comportamento:
+
+- **Idempotente**: marcadores gerados antes são removidos e recalculados; rodar 3× dá o mesmo arquivo
+- **Marcador manual manda**: `## Serviço: x` escrito por você é preservado e vira o serviço corrente
+- **Empate/ruído**: suba o corte com `--min-score 3` para deixar seções genéricas como `_unassigned`
+- **`.docx`/`.doc`**: não são editados. Com `--apply --convert-binarios` a pipeline gera `<nome>.marcado.md` e renomeia o original para `.bak` (evita ingestão duplicada)
+
+**Tudo de uma vez, com o Devin**
+
+```bash
+# escaneia repos → marca docs → gera por serviço → docs/prompt-less em CADA repo
+./scripts/devin-from-promptless.sh --workspace ~/dev/repos --dry-prep
+
+# um serviço só, e já chamando o devin em cada repo dele
+./scripts/devin-from-promptless.sh --workspace ~/dev/repos --context gestao-de-ofertas
+```
+
+Cada repo recebe um `DEVIN_PROMPT.md` **escopado pela camada** — o `-api` é instruído a implementar só a API, o `-mfe` só o front — com o resto do serviço declarado como fora de escopo. Use `--no-scan` para reaproveitar o mapa atual e `--no-marcar` para não tocar nos docs.
+
 ---
 
 ## Estrutura do repositório
@@ -720,6 +784,7 @@ pipeline/
 ├── README.md
 ├── requirements.txt
 ├── scripts/
+│   ├── scan-repos.sh              # pasta de repos → mapa-servicos.yaml (de/para)
 │   └── devin-from-promptless.sh   # gera artefatos → docs/prompt-less → Devin CLI
 ├── config/
 │   ├── pipeline.yaml         # budget, stages, caching, mapeamento de artefatos
@@ -741,6 +806,7 @@ pipeline/
     ├── preprocess.py         # desidrata UI/regras/engenharia (pré-LLM)
     ├── engenharia.py         # baseline stack + NFR (retry, logs)
     ├── servicos.py           # mapa + marcadores + keywords → split MS
+    ├── marcar.py             # de/para: keywords do mapa → [[service:id]] nos docs
     ├── state_store.py        # persiste estado mínimo em JSON
     ├── doc_compress.py       # compressão hierárquica + SIGNAL_RE
     ├── rag_compress.py       # retrieve estrutural + merge UI/regras/docs

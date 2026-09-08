@@ -234,3 +234,37 @@ def docs_for_service(
             "text": bucket["text"],
         }
     ]
+
+
+def plan_lines(mapa: dict[str, Any]) -> list[str]:
+    """TSV `service_id<TAB>repo<TAB>tier` — consumido pelos scripts shell."""
+    linhas: list[str] = []
+    for sid, meta in (mapa.get("servicos") or {}).items():
+        camadas = meta.get("camadas") or {}
+        tier_por_repo = {
+            repo: tier for tier, repos in camadas.items() for repo in (repos or [])
+        }
+        for repo in meta.get("repos") or []:
+            linhas.append(f"{sid}\t{repo}\t{tier_por_repo.get(repo, 'app')}")
+    return linhas
+
+
+def main() -> None:
+    import argparse
+
+    p = argparse.ArgumentParser(description="Inspeciona o mapa de serviços")
+    p.add_argument("--plan", action="store_true", help="TSV service_id/repo/tier")
+    p.add_argument("--mapa", metavar="FILE")
+    args = p.parse_args()
+
+    mapa = load_mapa(Path(args.mapa) if args.mapa else None)
+    if not mapa:
+        raise SystemExit("erro: mapa-servicos.yaml ausente ou vazio")
+    if args.plan:
+        print("\n".join(plan_lines(mapa)))
+    else:
+        print("\n".join(list_service_ids(mapa)))
+
+
+if __name__ == "__main__":
+    main()

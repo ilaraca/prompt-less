@@ -17,6 +17,10 @@ models:
   reason: large       # raciocínio final do artefato
 
 stages:
+  - id: repos_scan
+    desc: (opcional) scripts/scan-repos.sh — pasta de repos → mapa-servicos.yaml
+  - id: marcar
+    desc: (opcional) src.marcar — keywords do mapa → [[service:id]] por seção do doc
   - id: ingest
     desc: Carrega FIGMA_JSON, REGRAS_YAML, ENGENHARIA, MAPA_SERVICOS, TEMPLATE + docs
   - id: servicos_split
