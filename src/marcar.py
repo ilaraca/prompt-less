@@ -1,10 +1,18 @@
 """
 De/para repos → marcadores nos docs.
 
-Lê `inputs/mapa-servicos.yaml` (gerado por `scripts/scan-repos.sh`), pontua cada
-chunk dos documentos por keywords e injeta `[[service:<id>]]` onde houver match.
+Pontua cada seção do documento contra o vocabulário de cada serviço e injeta
+`[[service:<id>]]` na vencedora. O vocabulário vem de duas fontes:
+
+  1. `inputs/mapa-servicos.yaml`  — keywords derivadas do nome dos repos (peso alto)
+  2. `state/repo_index.json`      — termos extraídos do código real (rotas, entidades,
+                                    tabelas, campos), quando `src.repo_index` já rodou
+
+Todo termo é ponderado por IDF: o que aparece em vários serviços perde peso, o que
+é exclusivo de um ganha. Sem LLM, sem embeddings — busca léxica sobre o código.
 
   python -m src.marcar                      # dry-run + relatório
+  python -m src.marcar --explain            # tabela legível da decisão por seção
   python -m src.marcar --apply              # escreve marcadores em .txt/.md (com .bak)
   python -m src.marcar --apply --convert-binarios   # .docx/.doc → <stem>.marcado.md
 """
@@ -12,8 +20,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +32,8 @@ sys.path.insert(0, str(ROOT))
 
 from src.doc_compress import chunk_text  # noqa: E402
 from src.docs_ingest import load_documents  # noqa: E402
-from src.servicos import MARKER_RE, load_mapa, resolve_service_id  # noqa: E402
+from src.repo_index import load_index, service_terms  # noqa: E402
+from src.servicos import MARKER_RE, fold, load_mapa, resolve_service_id  # noqa: E402
 
 INPUTS = ROOT / "inputs"
 TEXT_EXTS = {".txt", ".md"}
@@ -65,15 +76,56 @@ def segment(text: str, *, lines_per_chunk: int = 40) -> list[str]:
     return segments
 
 
-def _score(chunk: str, keywords: list[str]) -> int:
-    low = chunk.lower()
-    total = 0
-    for kw in keywords:
-        k = str(kw).lower().strip()
-        if len(k) < 3:
+PESO_KEYWORD = 3.0  # veio do nome do repo: sinal forte e curado
+PESO_CODIGO = 1.0  # veio do código: sinal abundante, então vale menos por termo
+MAX_OCORRENCIAS = 3  # trava para uma palavra repetida não dominar a seção
+
+
+def build_vocab(
+    mapa: dict[str, Any], index: dict[str, Any] | None = None
+) -> dict[str, dict[str, float]]:
+    """{service_id: {termo: peso}} com IDF entre serviços."""
+    servicos = mapa.get("servicos") or {}
+    bruto: dict[str, dict[str, float]] = {}
+
+    for sid, meta in servicos.items():
+        pesos: dict[str, float] = {}
+        for kw in meta.get("keywords") or []:
+            termo = fold(kw).strip().lstrip("/")
+            if len(termo) >= 3:
+                pesos[termo] = max(pesos.get(termo, 0.0), PESO_KEYWORD)
+        for bruto_termo, freq in service_terms(index, sid).items():
+            termo = fold(bruto_termo)
+            if len(termo) < 4:
+                continue
+            # frequência no código dá um empurrão pequeno e saturado
+            peso = PESO_CODIGO * (1.0 + min(1.0, freq / 50.0))
+            pesos[termo] = max(pesos.get(termo, 0.0), peso)
+        bruto[sid] = pesos
+
+    total = len(bruto) or 1
+    ocorre_em: Counter[str] = Counter(termo for pesos in bruto.values() for termo in pesos)
+    for pesos in bruto.values():
+        for termo in list(pesos):
+            idf = 1.0 + math.log(total / ocorre_em[termo])
+            pesos[termo] = round(pesos[termo] * idf, 3)
+    return bruto
+
+
+def score_section(secao: str, pesos: dict[str, float]) -> tuple[float, list[tuple[str, int]]]:
+    """Pontua uma seção e devolve os termos que sustentaram a decisão."""
+    low = fold(secao)
+    total = 0.0
+    achados: list[tuple[str, int]] = []
+    for termo, peso in pesos.items():
+        # casa plural/flexão simples, mas não pedaço de outra palavra
+        n = len(re.findall(rf"(?<![a-z0-9]){re.escape(termo)}[a-z]{{0,3}}", low))
+        if not n:
             continue
-        total += low.count(k)
-    return total
+        total += peso * min(n, MAX_OCORRENCIAS)
+        achados.append((termo, n))
+    achados.sort(key=lambda kv: -pesos[kv[0]] * min(kv[1], MAX_OCORRENCIAS))
+    return round(total, 2), achados[:5]
 
 
 def classify_chunks(
@@ -81,22 +133,53 @@ def classify_chunks(
     mapa: dict[str, Any],
     *,
     lines_per_chunk: int = 40,
-    min_score: int = 1,
+    min_score: float = 2.0,
+    min_margin: float = 1.3,
+    min_terms: int = 2,
+    index: dict[str, Any] | None = None,
+    vocab: dict[str, dict[str, float]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Retorna [{index, service_id|None, score, has_marker, text}] por chunk."""
-    servicos = mapa.get("servicos") or {}
+    """Retorna a decisão por seção, com score, vice-colocado e evidência."""
+    vocab = vocab if vocab is not None else build_vocab(mapa, index)
     out: list[dict[str, Any]] = []
+
     for i, chunk in enumerate(segment(text, lines_per_chunk=lines_per_chunk)):
-        best_id, best_score = None, 0
-        for sid, meta in servicos.items():
-            sc = _score(chunk, list(meta.get("keywords") or []))
-            if sc > best_score:
-                best_id, best_score = sid, sc
+        ranking: list[tuple[str, float, list[tuple[str, int]]]] = []
+        for sid, pesos in vocab.items():
+            score, achados = score_section(chunk, pesos)
+            if score > 0:
+                ranking.append((sid, score, achados))
+        ranking.sort(key=lambda r: -r[1])
+
+        melhor = ranking[0] if ranking else None
+        vice = ranking[1] if len(ranking) > 1 else None
+        sid, score, achados = (melhor or (None, 0.0, []))
+        vice_score = vice[1] if vice else 0.0
+
+        distintos = len(achados)
+        repeticoes = max((n for _, n in achados), default=0)
+
+        if not sid or score < min_score:
+            decisao, motivo = None, "sem_sinal"
+        elif distintos < min_terms and repeticoes < 2:
+            # uma menção solta ("cpf" perdido num log) não classifica a seção
+            decisao, motivo = None, "sinal_isolado"
+        elif vice_score and score < vice_score * min_margin:
+            # dois serviços empatados: não adivinha, deixa para revisão humana
+            decisao, motivo = None, f"ambiguo_com_{vice[0]}"
+        else:
+            decisao, motivo = sid, "classificado"
+
         out.append(
             {
                 "index": i,
-                "service_id": best_id if best_score >= min_score else None,
-                "score": best_score,
+                "service_id": decisao,
+                "candidato": sid,
+                "score": score,
+                "vice": (vice[0] if vice else None),
+                "vice_score": vice_score,
+                "motivo": motivo,
+                "evidencia": [{"termo": t, "ocorrencias": n} for t, n in achados],
                 "has_marker": bool(MARKER_RE.search(chunk)),
                 "text": chunk,
             }
@@ -129,9 +212,12 @@ def process(
     apply_changes: bool = False,
     convert_binarios: bool = False,
     lines_per_chunk: int = 40,
-    min_score: int = 1,
+    min_score: float = 2.0,
+    min_margin: float = 1.3,
+    min_terms: int = 2,
     inputs_dir: Path | None = None,
     mapa_path: Path | None = None,
+    index_path: Path | None = None,
 ) -> dict[str, Any]:
     inputs = inputs_dir or INPUTS
     mapa = load_mapa(mapa_path)
@@ -145,6 +231,9 @@ def process(
     if not docs:
         raise SystemExit(f"erro: nenhum documento em {inputs} (.txt/.md/.docx/.doc)")
 
+    index = load_index(index_path)
+    vocab = build_vocab(mapa, index)
+
     report: list[dict[str, Any]] = []
     written: list[str] = []
     skipped: list[dict[str, str]] = []
@@ -157,6 +246,9 @@ def process(
             mapa,
             lines_per_chunk=lines_per_chunk,
             min_score=min_score,
+            min_margin=min_margin,
+            min_terms=min_terms,
+            vocab=vocab,
         )
         por_servico: dict[str, int] = {}
         for c in chunks:
@@ -174,6 +266,10 @@ def process(
                         "secao": (c["text"].strip().splitlines() or [""])[0][:80],
                         "servico": c["service_id"] or "_unassigned",
                         "score": c["score"],
+                        "motivo": c["motivo"],
+                        "vice": c["vice"],
+                        "vice_score": c["vice_score"],
+                        "evidencia": c["evidencia"],
                     }
                     for c in chunks
                 ],
@@ -215,6 +311,16 @@ def process(
 
     resumo = {
         "servicos": list((mapa.get("servicos") or {}).keys()),
+        "vocabulario": {
+            "fonte": "mapa + repo_index" if index else "mapa (sem índice de código)",
+            "indexado_em": (index or {}).get("generated_at"),
+            "termos_por_servico": {sid: len(p) for sid, p in vocab.items()},
+        },
+        "corte": {
+            "min_score": min_score,
+            "min_margin": min_margin,
+            "min_terms": min_terms,
+        },
         "docs": report,
         "aplicado": apply_changes,
         "arquivos_escritos": written,
@@ -228,6 +334,42 @@ def process(
     return resumo
 
 
+def _print_explain(resumo: dict[str, Any]) -> None:
+    voc = resumo["vocabulario"]
+    print(f"Vocabulário: {voc['fonte']}", end="")
+    if voc.get("indexado_em"):
+        print(f" (índice de {voc['indexado_em']})")
+    else:
+        print()
+    print(
+        "Termos por serviço: "
+        + ", ".join(f"{sid}={n}" for sid, n in voc["termos_por_servico"].items())
+    )
+    corte = resumo["corte"]
+    print(
+        f"Corte: score ≥ {corte['min_score']}, margem ≥ {corte['min_margin']}x o vice, "
+        f"≥ {corte['min_terms']} termos distintos (ou 1 repetido)\n"
+    )
+
+    for doc in resumo["docs"]:
+        print(f"── {doc['doc']} ({doc['chunks']} seções)")
+        for linha in doc["de_para"]:
+            evid = ", ".join(
+                f"{e['termo']}×{e['ocorrencias']}" for e in linha["evidencia"][:3]
+            )
+            marca = "✓" if linha["motivo"] == "classificado" else "·"
+            print(f"  {marca} {linha['secao'][:52]:<52} → {linha['servico']}")
+            detalhe = f"score {linha['score']}"
+            if linha["vice"]:
+                detalhe += f" | vice {linha['vice']} {linha['vice_score']}"
+            if linha["motivo"] != "classificado":
+                detalhe += f" | {linha['motivo']}"
+            print(f"      {detalhe}")
+            if evid:
+                print(f"      evidência: {evid}")
+        print()
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="De/para repos → marcadores nos docs")
     p.add_argument("--apply", action="store_true", help="escreve os marcadores nos arquivos")
@@ -236,10 +378,24 @@ def main() -> None:
         action="store_true",
         help=".docx/.doc → <stem>.marcado.md (original vira .bak)",
     )
+    p.add_argument("--explain", action="store_true", help="tabela legível em vez de JSON")
     p.add_argument("--lines-per-chunk", type=int, default=40)
-    p.add_argument("--min-score", type=int, default=1)
+    p.add_argument("--min-score", type=float, default=2.0, help="score mínimo (default: 2.0)")
+    p.add_argument(
+        "--min-margin",
+        type=float,
+        default=1.3,
+        help="quanto o 1º precisa superar o 2º para não ser ambíguo (default: 1.3)",
+    )
+    p.add_argument(
+        "--min-terms",
+        type=int,
+        default=2,
+        help="termos distintos exigidos por seção (default: 2)",
+    )
     p.add_argument("--inputs", metavar="DIR", help="diretório de docs (default: inputs/)")
     p.add_argument("--mapa", metavar="FILE", help="mapa (default: inputs/mapa-servicos.yaml)")
+    p.add_argument("--index", metavar="FILE", help="índice (default: state/repo_index.json)")
     args = p.parse_args()
 
     resumo = process(
@@ -247,10 +403,16 @@ def main() -> None:
         convert_binarios=args.convert_binarios,
         lines_per_chunk=args.lines_per_chunk,
         min_score=args.min_score,
+        min_margin=args.min_margin,
+        min_terms=args.min_terms,
         inputs_dir=Path(args.inputs) if args.inputs else None,
         mapa_path=Path(args.mapa) if args.mapa else None,
+        index_path=Path(args.index) if args.index else None,
     )
-    print(json.dumps(resumo, ensure_ascii=False, indent=2))
+    if args.explain:
+        _print_explain(resumo)
+    else:
+        print(json.dumps(resumo, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

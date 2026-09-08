@@ -85,19 +85,28 @@ sdd:
 ### Segurança mínima (`NFR-S`)
 {{nfr_seguranca}}
 
-## 11. Dependências
+## 11. Estado atual do código (baseline verificável)
+> Evidência estática de `state/repo_index.json` — rotas, entidades e códigos HTTP
+> que já existem nos repos deste serviço. Não é inferência de LLM.
+
+{{estado_atual}}
+
+### Gaps entre requisito e código
+{{gaps}}
+
+## 12. Dependências
 {{dependencias}}
 
-## 12. Métricas de sucesso
+## 13. Métricas de sucesso
 {{metricas}}
 
-## 13. Riscos e abertos
+## 14. Riscos e abertos
 {{riscos}}
 
-## 14. Handoff para SDD
+## 15. Handoff para SDD
 O SDD deve consumir este PRD + artefatos linkados no frontmatter e produzir:
 
-1. Arquitetura alvo (BFF / MFE / API de Domínio) alinhada à seção 10
+1. Arquitetura alvo (BFF / MFE / API de Domínio) alinhada às seções 10–11
 2. Sequência refinada (happy path + `alt`/`opt` das regras)
 3. Contrato OpenAPI alinhado às seções 7–8
 4. Breakdown de tasks com rastreio `RF-xx` / `AC-xx` / `NFR-R|O|S-xx`

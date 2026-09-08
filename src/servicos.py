@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -80,11 +81,17 @@ def split_by_markers(text: str, mapa: dict[str, Any]) -> dict[str, str]:
     return {k: "".join(v).strip() for k, v in buckets.items() if "".join(v).strip()}
 
 
+def fold(texto: str) -> str:
+    """minúsculas sem acento — 'Gestão de Ofertas' e 'gestao-de-ofertas' casam."""
+    normalizado = unicodedata.normalize("NFKD", str(texto).lower())
+    return "".join(c for c in normalizado if not unicodedata.combining(c))
+
+
 def _keyword_score(text: str, keywords: list[str]) -> int:
-    low = text.lower()
+    low = fold(text)
     score = 0
     for kw in keywords:
-        k = str(kw).lower()
+        k = fold(kw)
         if not k:
             continue
         # conta ocorrências simples

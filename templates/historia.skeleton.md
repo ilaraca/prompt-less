@@ -9,6 +9,15 @@
 ## Critérios de Aceite (funcionais)
 {{criterios_bdd}}
 
+## Estado atual do código (evidência estática — sem LLM)
+> Extraído de `state/repo_index.json`. Confirme antes de estimar: o que já existe
+> vira ajuste, não implementação nova.
+
+{{estado_atual}}
+
+### Gaps entre regra e código
+{{gaps}}
+
 ## Escopo técnico
 ### Stack
 {{stack}}

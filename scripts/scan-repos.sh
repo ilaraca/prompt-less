@@ -44,7 +44,8 @@ Uso: ./scripts/scan-repos.sh --workspace DIR [opções]
   -h|--help         Esta ajuda
 
 Depois:
-  python -m src.marcar --apply          # injeta [[service:id]] nos docs
+  python -m src.repo_index --workspace DIR   # indexa o código dos repos
+  python -m src.marcar --apply               # injeta [[service:id]] nos docs
   python -m src.run historia --all-contexts
 EOF
 }
@@ -306,6 +307,7 @@ awk '
 ' "$OUT"
 echo ""
 echo "Próximos passos:"
-echo "  python -m src.marcar                 # de/para (dry-run)"
+echo "  python -m src.repo_index --workspace $WORKSPACE   # indexa o código (assertividade)"
+echo "  python -m src.marcar --explain       # de/para com evidência (dry-run)"
 echo "  python -m src.marcar --apply         # injeta marcadores nos docs"
 echo "  python -m src.run historia --all-contexts"

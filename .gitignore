@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 state/workflow.json
+state/repo_index.json
 outputs/*
 !outputs/.gitkeep
 *.bak

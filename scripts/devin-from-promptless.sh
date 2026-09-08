@@ -21,6 +21,7 @@ CONTEXT=""
 ALL_CONTEXTS=0
 WORKSPACE=""
 SCAN=1
+INDEX=1
 MARCAR=1
 
 usage() {
@@ -37,6 +38,7 @@ Uso: ./scripts/devin-from-promptless.sh <APP_ROOT> [opções]
   --context ID      só este microsserviço (ex.: gestao-de-ofertas)
   --all-contexts    gera todos os serviços do mapa
   --no-scan         em modo workspace, reusa o mapa-servicos.yaml atual
+  --no-index        não reindexa o código (reusa state/repo_index.json)
   --no-marcar       não injeta [[service:id]] nos docs
 
 Com --context, artefatos vêm de outputs/contextos/<ID>/.
@@ -51,6 +53,7 @@ while [[ $# -gt 0 ]]; do
     --all-contexts) ALL_CONTEXTS=1; shift ;;
     --workspace) WORKSPACE="${2:-}"; shift 2 ;;
     --no-scan) SCAN=0; shift ;;
+    --no-index) INDEX=0; shift ;;
     --no-marcar) MARCAR=0; shift ;;
     *)
       if [[ -z "$APP_ROOT" ]]; then APP_ROOT="$1"; shift
@@ -79,6 +82,18 @@ if [[ -n "$WORKSPACE" ]]; then
   if [[ "$SCAN" -eq 1 ]]; then
     echo "==> Escaneando repos em ${WORKSPACE}"
     "${SCRIPT_DIR}/scan-repos.sh" --workspace "$WORKSPACE"
+  fi
+
+  if [[ "$INDEX" -eq 1 ]]; then
+    echo "==> Indexando código dos repos (rotas, entidades, status HTTP)"
+    "$PYTHON" -m src.repo_index --workspace "$WORKSPACE" | \
+      "$PYTHON" -c "
+import json,sys
+d=json.load(sys.stdin)
+for sid,ev in (d.get('servicos') or {}).items():
+    print(f\"    {sid}: {ev['arquivos']} arquivos, {ev['rotas']} rotas, \"
+          f\"status {','.join(ev['status']) or '-'}, {ev['termos']} termos\")
+"
   fi
 
   if [[ "$MARCAR" -eq 1 ]]; then

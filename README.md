@@ -208,8 +208,9 @@ Esse `consolidated` é o que vai para o campo `contexto_comprimido` do pacote LL
 | Embeddings (OpenAI, sentence-transformers, etc.) | Não |
 | Vector DB (Chroma, Pinecone, pgvector…) | Não |
 | Similarity search / top-k por query | Não |
-| Índice persistente entre execuções | Não |
+| Índice persistente entre execuções | **Sim** — `state/repo_index.json` (código dos repos, ver seção 13) |
 | Reranker cross-encoder | Não |
+| Ponderação por IDF | **Sim** — no de/para de serviços (`src/marcar.py`) |
 
 **Por quê assim?** O corpus por execução é **pequeno e conhecido** (Figma + regras + poucos docs da pasta `inputs/`). Para esse caso, retrieve estrutural + filtro lexical é mais barato, determinístico e suficiente para controlar tokens. RAG vetorial passa a valer quando houver **base grande** (wiki, Confluence, dezenas de specs) e queries variáveis.
 
@@ -775,6 +776,80 @@ Detalhes de comportamento:
 
 Cada repo recebe um `DEVIN_PROMPT.md` **escopado pela camada** — o `-api` é instruído a implementar só a API, o `-mfe` só o front — com o resto do serviço declarado como fora de escopo. Use `--no-scan` para reaproveitar o mapa atual e `--no-marcar` para não tocar nos docs.
 
+### 13. Índice do código: assertividade sem LLM (`src/repo_index.py`)
+
+O nome do repositório é um sinal pobre. Um documento pode falar de "vitrine", "cupom" e "carrinho" sem nunca escrever "ofertas" — e aí o de/para por nome de repo erra. O `repo_index` resolve isso lendo o **código real** e transformando-o em vocabulário.
+
+```bash
+.venv/bin/python -m src.repo_index --workspace ~/dev/repos   # → state/repo_index.json
+.venv/bin/python -m src.repo_index --show gestao-de-ofertas  # evidência de um serviço
+```
+
+**O que é extraído** (regex estático, nada é executado):
+
+| Sinal | Como | Exemplo real |
+|-------|------|--------------|
+| Rotas HTTP | Spring, Nest, Express, Fastify, FastAPI, Flask, Gin/Echo | `GET /v1/ofertas/ativas` |
+| Rotas de spec | chaves sob `paths:` em OpenAPI/Swagger | `SPEC /gtw/ofertas/cupom` |
+| Códigos HTTP | `HttpStatus.*`, `ResponseEntity.status()`, `status_code=`, `http.Status*` | `422`, `409` |
+| Entidades | `class`/`interface`/`record`/`type … struct` | `Oferta`, `AplicarCupomDto` |
+| Tabelas | `@Table(name=…)`, `CREATE TABLE` | `oferta_ativa` |
+| Campos | atributos privados Java, campos tipados TS/Python | `percentualDesconto`, `cupom` |
+| Stack | `pom.xml`, `build.gradle`, `package.json` (deps), `go.mod`… | `java/maven`, `nestjs` |
+
+A base da classe é concatenada com a do método, então `@RequestMapping("/v1/ofertas")` + `@GetMapping("/ativas")` sai como `GET /v1/ofertas/ativas`, e não como `/ativas` solto.
+
+#### Como isso melhora o de/para
+
+O `src.marcar` monta um vocabulário por serviço e pondera cada termo por **IDF**: o que aparece em vários serviços perde peso, o que é exclusivo de um ganha. Keyword de repo pesa `3.0`; termo de código pesa ~`1.0`. Acentos são normalizados, então "Gestão de Ofertas" casa com `gestao-de-ofertas`.
+
+```bash
+.venv/bin/python -m src.marcar --explain
+```
+
+Comparação na mesma amostra, uma seção intitulada **"Regras da vitrine e do cupom"**:
+
+| Vocabulário | Decisão | Evidência |
+|-------------|---------|-----------|
+| Só nomes de repo | `_unassigned` (score 0) | — |
+| Mapa + índice do código | `gestao-de-ofertas` (score 21.8) | `cupom×2`, `vitrine×2`, `segmento×1` |
+
+Duas regras cortam o palpite silencioso, e cada seção não classificada declara o porquê:
+
+| Regra | Flag | Motivo no relatório |
+|-------|------|---------------------|
+| Score mínimo | `--min-score` (2.0) | `sem_sinal` |
+| Evidência mínima: 2 termos distintos, ou 1 repetido | `--min-terms` (2) | `sinal_isolado` |
+| O 1º precisa superar o 2º em 1.3× | `--min-margin` (1.3) | `ambiguo_com_<servico>` |
+
+Na prática: um `cpf` solto numa linha de log de telemetria não classifica a seção (`sinal_isolado`), e uma seção de visão geral que cita as três jornadas sai como `ambiguo_com_cadastro-cliente` em vez de ser atribuída à sorte.
+
+#### Como isso melhora a história
+
+`historia.md` e `PRD.md` passam a ter uma seção de **estado atual** e uma de **gaps**, ambas derivadas do índice:
+
+```markdown
+**Endpoints existentes** (2):
+- `cadastro-cliente-api: POST /v1/clientes/cadastro`
+- `cadastro-cliente-api: GET /v1/clientes/{cpf}`
+
+**Códigos HTTP já tratados:** `201`, `400`, `409`
+
+### Gaps entre regra e código
+- `400` — **já tratado no código**; validar gatilho: CPF inválido
+- `401` — **não encontrado no código**; implementar: sem autenticação
+- códigos no código sem regra correspondente no doc: `409` _(regra implícita ou legado — confirmar)_
+```
+
+O efeito prático é a história deixar de descrever tudo como novo: o que já existe vira ajuste, o que falta vira implementação, e código sem regra no documento aparece como pergunta para o negócio. O índice **não** entra no prompt — ele alimenta o scaffold e fica em `state/`, fora do budget de tokens.
+
+#### Limites honestos
+
+- É **léxico**, não semântico: sinônimo sem raiz comum ("desconto" vs "abatimento") não casa. Para isso seria preciso embeddings.
+- Regex cobre os frameworks da tabela acima; stack fora dela (gRPC, GraphQL, serverless) ainda não é reconhecida.
+- Repo grande é limitado a 4000 arquivos e 256 KB por arquivo, ignorando `node_modules`, `target`, `dist` e afins.
+- O índice é um retrato: reindexe quando os repos mudarem (`--no-index` reaproveita o anterior).
+
 ---
 
 ## Estrutura do repositório
@@ -785,7 +860,7 @@ pipeline/
 ├── requirements.txt
 ├── scripts/
 │   ├── scan-repos.sh              # pasta de repos → mapa-servicos.yaml (de/para)
-│   └── devin-from-promptless.sh   # gera artefatos → docs/prompt-less → Devin CLI
+│   └── devin-from-promptless.sh   # scan + index + marcar + artefatos → Devin CLI
 ├── config/
 │   ├── pipeline.yaml         # budget, stages, caching, mapeamento de artefatos
 │   └── tools.compact.yaml    # definições de tools sem prosa (economia de tokens)
@@ -797,7 +872,7 @@ pipeline/
 │   ├── historia.skeleton.md
 │   └── prd.skeleton.md       # PRD → SDD (frontmatter + RF/AC/NFR + ownership)
 ├── inputs/                   # figma, regras, engenharia, mapa-servicos, docs
-├── state/                    # estado externo (sem histórico/docs brutos)
+├── state/                    # estado externo + repo_index.json (fora do prompt)
 ├── outputs/                  # artefatos raiz + contextos/<serviço>/
 └── src/
     ├── run.py                # --context / --all-contexts / --no-split
@@ -806,7 +881,8 @@ pipeline/
     ├── preprocess.py         # desidrata UI/regras/engenharia (pré-LLM)
     ├── engenharia.py         # baseline stack + NFR (retry, logs)
     ├── servicos.py           # mapa + marcadores + keywords → split MS
-    ├── marcar.py             # de/para: keywords do mapa → [[service:id]] nos docs
+    ├── repo_index.py         # índice léxico do código (rotas, entidades, status)
+    ├── marcar.py             # de/para com IDF + margem → [[service:id]] nos docs
     ├── state_store.py        # persiste estado mínimo em JSON
     ├── doc_compress.py       # compressão hierárquica + SIGNAL_RE
     ├── rag_compress.py       # retrieve estrutural + merge UI/regras/docs

@@ -27,6 +27,7 @@ from src.ingest import ARTIFACT_TEMPLATES, load_inputs  # noqa: E402
 from src.preprocess import preprocess  # noqa: E402
 from src.rag_compress import compress_rag  # noqa: E402
 from src.reason import build_llm_package, dry_run_scaffold  # noqa: E402
+from src.repo_index import load_index, service_evidence  # noqa: E402
 from src.servicos import (  # noqa: E402
     docs_for_service,
     get_service,
@@ -183,7 +184,9 @@ def _run_single(
         packages[extra] = str(extra_pkg)
     return {
         "context": context,
-        "servico": servico,
+        # o índice fica fora do retorno (e do prompt): só alimenta o scaffold
+        "servico": {k: v for k, v in (servico or {}).items() if k != "indice"} or None,
+        "indice_usado": bool((servico or {}).get("indice")),
         "output": str(out),
         "outputs": outputs,
         "llm_packages": packages,
@@ -283,6 +286,7 @@ def run(
 
     by_context = []
     all_outputs: dict[str, Any] = {}
+    index = load_index()
     for sid in targets:
         svc = (
             get_service(mapa, sid)
@@ -294,6 +298,9 @@ def run(
                 "keywords": [],
             }
         )
+        evidencia = service_evidence(index, sid)
+        if evidencia:
+            svc["indice"] = {k: v for k, v in evidencia.items() if k != "repos"}
         docs = docs_for_service(
             documents, mapa, sid, lines_per_chunk=lines_per_chunk
         )

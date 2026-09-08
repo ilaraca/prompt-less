@@ -111,6 +111,88 @@ def _ownership_md(svc: dict) -> str:
     )
 
 
+SEM_INDICE = (
+    "- _(sem índice de código — rode `python -m src.repo_index --workspace ~/dev/repos`)_"
+)
+
+
+def _estado_atual_md(svc: dict) -> str:
+    """O que já existe nos repos do serviço, por extração estática."""
+    idx = svc.get("indice") or {}
+    if not idx:
+        return SEM_INDICE
+
+    linhas: list[str] = []
+    rotas = idx.get("rotas") or []
+    if rotas:
+        linhas.append(f"**Endpoints existentes** ({len(rotas)}):")
+        linhas.extend(f"- `{r}`" for r in rotas[:12])
+        if len(rotas) > 12:
+            linhas.append(f"- _(+{len(rotas) - 12} rotas — ver `state/repo_index.json`)_")
+    else:
+        linhas.append("**Endpoints existentes:** nenhum detectado (serviço novo?)")
+
+    status = idx.get("status") or []
+    if status:
+        linhas.append("")
+        linhas.append("**Códigos HTTP já tratados:** " + ", ".join(f"`{s}`" for s in status))
+
+    entidades = (idx.get("classes") or [])[:10]
+    if entidades:
+        linhas.append("")
+        linhas.append("**Entidades/classes:** " + ", ".join(f"`{c}`" for c in entidades))
+
+    tabelas = idx.get("tabelas") or []
+    if tabelas:
+        linhas.append("**Tabelas:** " + ", ".join(f"`{t}`" for t in tabelas))
+
+    campos = (idx.get("campos") or [])[:12]
+    if campos:
+        linhas.append("**Campos conhecidos:** " + ", ".join(f"`{c}`" for c in campos))
+
+    stack = idx.get("stack") or []
+    if stack:
+        linhas.append("")
+        linhas.append("**Stack detectada:** " + ", ".join(f"`{s}`" for s in stack))
+
+    return "\n".join(linhas)
+
+
+def _gaps_md(regras: dict, svc: dict) -> str:
+    """Cruza status/regras do doc com o que o código já trata."""
+    idx = svc.get("indice") or {}
+    if not idx:
+        return SEM_INDICE
+
+    tratados = set(str(s) for s in (idx.get("status") or []))
+    bloqueios = regras.get("bloqueios") or []
+    if not bloqueios and not tratados:
+        return "- _(sem regras de bloqueio para cruzar)_"
+
+    linhas: list[str] = []
+    for b in bloqueios:
+        if not isinstance(b, dict):
+            continue
+        status = str(b.get("status") or "").strip()
+        gatilho = b.get("trigger") or b.get("gatilho") or "regra"
+        if status and status in tratados:
+            linhas.append(f"- `{status}` — **já tratado no código**; validar gatilho: {gatilho}")
+        elif status:
+            linhas.append(f"- `{status}` — **não encontrado no código**; implementar: {gatilho}")
+        else:
+            linhas.append(f"- sem status declarado; definir contrato para: {gatilho}")
+
+    esperados = {str(b.get("status")) for b in bloqueios if isinstance(b, dict)}
+    sobrando = sorted(tratados - esperados - {"200", "201", "204"}, key=str)
+    if sobrando:
+        linhas.append(
+            "- códigos no código sem regra correspondente no doc: "
+            + ", ".join(f"`{s}`" for s in sobrando)
+            + " _(regra implícita ou legado — confirmar)_"
+        )
+    return "\n".join(linhas) if linhas else "- _(nenhum gap identificado)_"
+
+
 def _fluxo_nome(regras: dict, svc: dict) -> str:
     if svc.get("nome"):
         return str(svc["nome"])
@@ -190,6 +272,8 @@ def _scaffold_historia(
             + " e baseline de engenharia.",
         )
         .replace("{{criterios_bdd}}", "\n".join(criterios_hist))
+        .replace("{{estado_atual}}", _estado_atual_md(svc))
+        .replace("{{gaps}}", _gaps_md(regras, svc))
         .replace("{{stack}}", format_stack(eng))
         .replace("{{padroes}}", format_padroes(eng))
         .replace("{{arquitetura}}", format_arquitetura(eng))
@@ -278,6 +362,8 @@ def _scaffold_prd(
         .replace("{{repos_yaml}}", repos_yaml)
         .replace("{{camadas_yaml}}", camadas_yaml)
         .replace("{{artifacts_dir}}", artifacts_dir)
+        .replace("{{estado_atual}}", _estado_atual_md(svc))
+        .replace("{{gaps}}", _gaps_md(regras, svc))
         .replace(
             "{{problema}}",
             f"Necessidade de especificar e entregar **{fluxo}**"
