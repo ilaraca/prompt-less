@@ -38,6 +38,7 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 | **Onboarding / tech lead docs** | Padroniza artefatos a partir de fontes heterogêneas |
 | **Specs longas (milhares de linhas)** | Compressão hierárquica: sinal de negócio entra; ruído sai |
 | **Agentes multi-etapa com custo controlado** | State externo + pacote LLM enxuto por request |
+| **Handoff para Devin CLI** | `outputs/` / `docs/prompt-less/` como contexto curto para implementação |
 | **Pré-processamento barato + raciocínio caro** | Camada local (“modelo pequeno”) + slot para LLM grande |
 
 ### Onde *não* é a melhor ferramenta (ainda)
@@ -618,6 +619,66 @@ cat state/workflow.json
 # → tipo, fluxo, inputs, bloqueios, metadados de docs (sem texto bruto)
 ```
 
+### 10. Prompt-less → Devin CLI (implementação)
+
+A pipeline **gera** o contexto curto; o [Devin CLI](https://docs.devin.ai/) **implementa** no repo de código. Não aponte o Devin para `inputs/` brutos (ex.: txt de 3000 linhas) — só para `outputs/` / `docs/prompt-less/`.
+
+```
+inputs/ (Figma, regras, engenharia, docs)
+        │
+        ▼
+   Prompt-less (compressão + artefatos)
+        │
+        ▼
+ outputs/PRD.md + historia.md (+ openapi/mermaid)
+        │
+        ▼
+  docs/prompt-less/ no repo do app
+        │
+        ▼
+   Devin CLI → código + PR
+        │
+        ▼  (opcional)
+   /handoff → Devin Cloud
+```
+
+**Script incluso**
+
+```bash
+chmod +x scripts/devin-from-promptless.sh
+
+# Gera historia+PRD, copia para o app e abre o Devin
+./scripts/devin-from-promptless.sh /caminho/do/seu-bff
+
+# Também gera OpenAPI + Mermaid
+./scripts/devin-from-promptless.sh /caminho/do/seu-bff --full
+
+# Só prepara docs/prompt-less/ (sem chamar `devin`)
+./scripts/devin-from-promptless.sh /caminho/do/seu-bff --dry-prep
+```
+
+O script grava em `APP/docs/prompt-less/`:
+
+| Arquivo | Papel |
+|---------|--------|
+| `PRD.md` / `historia.md` | Fonte da verdade (RF/AC/NFR) |
+| `openapi.yaml` / `sequence.mmd` | Contrato e fluxo (se `--full` ou já existirem) |
+| `engenharia.yaml` | Stack + baseline NFR v1 |
+| `DEVIN_PROMPT.md` | Prompt enxuto passado ao `devin -- …` |
+
+**Manual (sem script)**
+
+```bash
+.venv/bin/python -m src.run historia --dry-run
+mkdir -p ../meu-app/docs/prompt-less
+cp outputs/PRD.md outputs/historia.md ../meu-app/docs/prompt-less/
+cd ../meu-app
+devin -- "Implemente docs/prompt-less/PRD.md e historia.md. Respeite NFR-R/O/S. Não releia specs brutas."
+```
+
+Instalação do CLI (se ainda não tiver): `curl -fsSL https://cli.devin.ai/install.sh | bash`  
+Handoff cloud, se a tarefa crescer: `/handoff` na sessão Devin ([docs](https://cognitionai.mintlify.app/work-with-devin/devin-cli)).
+
 ---
 
 ## Estrutura do repositório
@@ -626,6 +687,8 @@ cat state/workflow.json
 pipeline/
 ├── README.md
 ├── requirements.txt
+├── scripts/
+│   └── devin-from-promptless.sh   # gera artefatos → docs/prompt-less → Devin CLI
 ├── config/
 │   ├── pipeline.yaml         # budget, stages, caching, mapeamento de artefatos
 │   └── tools.compact.yaml    # definições de tools sem prosa (economia de tokens)
@@ -728,6 +791,7 @@ Use essas métricas para validar que a pipeline continua “barata” ao crescer
 4. Telemetria de custo real (tokens billable + cache hits)
 5. Consumidor SDD que leia `outputs/PRD.md` (frontmatter `sdd.expected` / `nfr_ids`) e gere architecture/tasks com RF + NFR
 6. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing, authn/authz) sem inchir o prompt
+7. CI que rode Prompt-less e anexe `docs/prompt-less/` ao PR para o Devin CLI / Cloud
 
 ---
 
