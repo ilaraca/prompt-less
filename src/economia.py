@@ -106,7 +106,10 @@ MODELOS: dict[str, dict[str, float]] = {
     },
 }
 
-# Heurísticas do cenário "naive" (chat/agente sem Prompt-less)
+# Heurísticas do cenário "naive" (baseline sem Prompt-less).
+# Naive = usar o LLM do jeito mais direto: colar docs brutos + system/tools
+# longos + histórico no prompt. Não é um modo da pipeline — é o contraste
+# da calculadora ("o que custaria sem compressão").
 NAIVE_SYSTEM_TOKENS = 2500  # system prompt + persona + instruções longas
 NAIVE_TOOLS_TOKENS = 1800  # tool defs verbosas
 NAIVE_HISTORY_TOKENS = 3000  # histórico de conversa tipico
@@ -428,7 +431,7 @@ def render_texto(rel: dict[str, Any]) -> str:
     linhas += [
         "",
         "Notas: preços de referência (USD/1M tokens); estimativa chars÷4;",
-        "naive = docs brutos + system/tools verbosos + histórico típico.",
+        "naive = baseline sem Prompt-less (docs brutos + system/tools longos + histórico).",
         "Ajuste com --modelo, --runs-mes, --cache-hit, --output-tokens.",
     ]
     return "\n".join(linhas)

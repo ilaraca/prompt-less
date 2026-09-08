@@ -887,7 +887,7 @@ pipeline/
     ├── doc_compress.py       # compressão hierárquica + SIGNAL_RE
     ├── rag_compress.py       # retrieve estrutural + merge UI/regras/docs
     ├── context_builder.py    # system + dynamic ≤ budget
-    ├── economia.py           # calculadora de tokens/custo (naive vs prompt-less)
+    ├── economia.py           # calculadora de tokens/custo (baseline naive vs prompt-less)
     ├── reason.py             # pacote OpenAI/Claude + dry-run (inclui PRD)
     └── emit.py               # mapeia tipo → arquivo em outputs/
 ```
@@ -950,7 +950,36 @@ Use essas métricas para validar que a pipeline continua “barata” ao crescer
 
 ### Calculadora de economia (`src/economia.py`)
 
-Mede o que iria para o LLM **sem** compressão (docs brutos + system/tools verbosos + histórico) versus o pacote Prompt-less, e projeta custo em USD.
+Mede o custo estimado de gerar o mesmo artefato de **duas formas** e mostra a diferença em tokens e USD.
+
+#### O que é “naive”?
+
+**Naive** (do inglês *ingênuo*) é o **cenário-baseline**: usar o LLM “do jeito mais direto”, **sem** as técnicas do Prompt-less. É o contraste da calculadora — não um modo da pipeline.
+
+Na prática, é o que acontece quando alguém cola tudo no chat/agente:
+
+| Componente | O que o cenário naive assume |
+|------------|------------------------------|
+| Documentos | Texto **inteiro** de `inputs/` (ex.: txt de 3000 linhas) vai no prompt |
+| Figma / regras / engenharia | JSON/YAML **brutos**, sem desidratar |
+| System prompt | Longo e repetido a cada turno (~2,5k tokens) |
+| Tools | Definições verbosas (~1,8k tokens) |
+| Histórico | Conversa acumulada no contexto (~3k tokens) |
+| Cache | Baixo aproveitamento (prefixo muda com o histórico) |
+
+Ou seja: **naive = “manda tudo pro modelo”**. Não há compressão hierárquica, state externo, system compacto nem budget.
+
+O **Prompt-less** é o outro lado da conta: só o consolidado + state mínimo + system/tools curtos, **sem** histórico e **sem** texto bruto.
+
+```
+naive:        [system longo][tools longas][histórico][docs 3000 linhas][figma bruto]…
+                 └───────────── dezenas de milhares de tokens ─────────────┘
+
+prompt-less:  [system curto][tools curtas][state][consolidado ≤ budget][template]
+                 └───────────── ~1k tokens ─────────────┘
+```
+
+A calculadora **não executa** o cenário naive de verdade — ela **estima** quantos tokens ele gastaria com os mesmos insumos, para você ver a economia.
 
 ```bash
 # Mede os inputs/ atuais (default: gpt-4o, 40 runs/mês, historia+prd)
@@ -981,8 +1010,8 @@ Na amostra incluída (~3000 linhas + microserviços + docx), a calculadora típi
 | `--output-tokens` | tokens estimados da completion |
 | `--what-if --linhas N` | simula sem depender dos arquivos em `inputs/` |
 
-**O que entra no “naive”:** docs brutos + figma/regras/engenharia/template + ~2.5k system + ~1.8k tools + ~3k histórico.  
-**O que entra no Prompt-less:** pacote de `build_context` (system compacto + state + consolidado + template) + tools compactas — **sem** histórico e **sem** texto bruto.
+**Contagem naive (baseline):** docs brutos + figma/regras/engenharia/template + ~2,5k system + ~1,8k tools + ~3k histórico.  
+**Contagem Prompt-less:** pacote de `build_context` (system compacto + state + consolidado + template) + tools compactas — **sem** histórico e **sem** texto bruto.
 
 Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `src/economia.py` se o vendor mudar a lista. Estimativa de tokens continua sendo `chars÷4` (não tokenizer oficial).
 
