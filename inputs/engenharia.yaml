@@ -49,3 +49,33 @@ seguranca:
   validar_input: true
   # authn: required        # futuro
   # authz: required        # futuro
+
+# --- Documentação (DoD — entrega sem README/changelog incompleto) ---
+documentacao:
+  readme:
+    obrigatorio: true
+    secoes_minimas:
+      - proposito
+      - como-rodar-local
+      - arquitetura
+      - endpoints-ou-contratos
+      - variaveis-de-ambiente
+      - ownership
+  changelog:
+    obrigatorio: true
+    formato: keep-a-changelog   # https://keepachangelog.com
+    path: CHANGELOG.md
+  api_docs:
+    obrigatorio: true
+    # resolvido automaticamente pela stack; override por linguagem se precisar
+    por_linguagem:
+      java: javadoc
+      kotlin: kdoc
+      typescript: tsdoc
+      javascript: jsdoc
+      python: docstring
+      go: godoc
+      csharp: xml-doc
+      rust: rustdoc
+  # adrs: true              # futuro
+  # openapi_publicado: true # futuro

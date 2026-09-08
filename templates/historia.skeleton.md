@@ -40,6 +40,9 @@
 ### Segurança (mínimo)
 {{seguranca}}
 
+### Documentação
+{{documentacao}}
+
 ## Dependências
 {{dependencias}}
 

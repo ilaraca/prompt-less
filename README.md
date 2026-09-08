@@ -19,7 +19,7 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 - prefixo de system/tools **estável e cacheável** (OpenAI / Claude);
 - budget explícito de tokens (alvo ~650; teto ~2000);
 - **PRD.md** gerado junto com a história, como insumo canônico para **SDD**;
-- baseline de engenharia (**stack + NFR v1**: timeout/retry + logs) via `inputs/engenharia.yaml`.
+- baseline de engenharia (**stack + NFR v1**: timeout/retry + logs + README/changelog/Javadoc) via `inputs/engenharia.yaml`.
 
 **Princípio:** nunca enviar dados brutos ao modelo se puderem ser filtrados ou comprimidos antes.
 
@@ -33,8 +33,8 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 |--------|---------|
 | **Geração assistida de contratos OpenAPI** a partir de Figma + regras | Inputs/listas viram schemas; bloqueios viram 4xx tipados |
 | **Diagramas de sequência Frontend → BFF → API** | Traduz regras em `alt`/`opt` sem reenviar specs inteiras |
-| **Histórias técnicas BFF/MFE** (BDD + DoD NFR) | Funcional = `regras.yaml`; técnico = `engenharia.yaml` (stack, retry, logs) |
-| **PRD.md para SDD (Spec-Driven Development)** | `historia` emite também o PRD com RF/AC, contrato de dados, NFR-R/O/S e handoff |
+| **Histórias técnicas BFF/MFE** (BDD + DoD NFR) | Funcional = `regras.yaml`; técnico = `engenharia.yaml` (stack, retry, logs, docs) |
+| **PRD.md para SDD (Spec-Driven Development)** | `historia` emite também o PRD com RF/AC, contrato de dados, NFR-R/O/S/D e handoff |
 | **Onboarding / tech lead docs** | Padroniza artefatos a partir de fontes heterogêneas |
 | **Specs longas (milhares de linhas)** | Compressão hierárquica: sinal de negócio entra; ruído sai |
 | **Agentes multi-etapa com custo controlado** | State externo + pacote LLM enxuto por request |
@@ -279,7 +279,7 @@ state/workflow.json ◄── só metadados                               contex
 | `historia` | `templates/historia.skeleton.md` | `outputs/historia.md` **+** `outputs/PRD.md` |
 | `prd` | `templates/prd.skeleton.md` | `outputs/PRD.md` |
 
-`historia` emite também o **PRD** (`also_emit` em `config/pipeline.yaml`): a história é o recorte de implementação (**BDD funcional + DoD NFR**); o PRD é o documento canônico para um **SDD** futuro (arquitetura, contrato, tasks, NFR-R/O/S).
+`historia` emite também o **PRD** (`also_emit` em `config/pipeline.yaml`): a história é o recorte de implementação (**BDD funcional + DoD NFR**); o PRD é o documento canônico para um **SDD** futuro (arquitetura, contrato, tasks, NFR-R/O/S/D).
 
 Além do artefato, a pipeline grava o **pacote LLM** (contexto já comprimido):
 
@@ -297,7 +297,7 @@ O `PRD.md` nasce com:
 - **frontmatter YAML** (`id`, `artifacts`, `sdd.expected`, `nfr_ids`) para parsers de SDD
 - RF (`RF-xx`) a partir das regras/UI
 - AC (`AC-xx`) BDD alinhados à história
-- NFR (`NFR-R|O|S-xx`) a partir de `engenharia.yaml` (baseline v1)
+- NFR (`NFR-R|O|S|D-xx`) a partir de `engenharia.yaml` (baseline v1)
 - contrato de dados (entrada/saída/ações)
 - seção **Handoff para SDD** (o que o próximo estágio deve gerar)
 - contexto comprimido do Prompt-less (sem texto bruto)
@@ -330,13 +330,13 @@ Figma + regras + docs
 - Título, Contexto (1 linha), Critérios BDD (Dado/Quando/Então), Dependências
 - Critérios = tradução das condições de `regras.yaml`
 - Payloads alinhados ao Figma
-- Escopo técnico + DoD NFR a partir de `engenharia.yaml` (baseline v1: timeout/retry + logs)
+- Escopo técnico + DoD NFR a partir de `engenharia.yaml` (baseline v1: timeout/retry + logs + documentação)
 
 **PRD**
 
 - Preencher `prd.skeleton.md` sem remover o frontmatter
 - RF/AC rastreáveis; dados da UI; regras → erros HTTP
-- NFR-R / NFR-O / NFR-S a partir do baseline de engenharia
+- NFR-R / NFR-O / NFR-S / NFR-D a partir do baseline de engenharia
 - Handoff SDD lista artefatos esperados + rastreio RF/AC/NFR
 
 ---
@@ -349,7 +349,7 @@ Coloque os arquivos em `pipeline/inputs/`:
 |------------------|--------------|-----|
 | `figma.json` | Não | Inputs, botões/actions, colunas de lista |
 | `regras.yaml` | Não | Happy path, bloqueios, tabela de decisão |
-| `engenharia.yaml` | Não | Stack, padrões, arquitetura, NFR baseline (retry, logs…) |
+| `engenharia.yaml` | Não | Stack, padrões, arquitetura, NFR baseline (retry, logs, documentação…) |
 | `mapa-servicos.yaml` | Não | Keywords/marcadores → serviço + repos (microsserviços) |
 | `*.txt`, `*.md` | Não | Specs/notas longas (comprimidas; podem ter `## Serviço:`) |
 | `*.docx` | Não | Word moderno (`python-docx`) |
@@ -380,9 +380,32 @@ observabilidade:
     sem_pii: true
 seguranca:
   validar_input: true
+documentacao:
+  readme:
+    obrigatorio: true
+    secoes_minimas:
+      - proposito
+      - como-rodar-local
+      - arquitetura
+      - endpoints-ou-contratos
+      - variaveis-de-ambiente
+      - ownership
+  changelog:
+    obrigatorio: true
+    formato: keep-a-changelog
+    path: CHANGELOG.md
+  api_docs:
+    obrigatorio: true
+    por_linguagem:
+      java: javadoc
+      typescript: tsdoc
+      python: docstring
+      go: godoc
 ```
 
-Baseline **v1** de propósito: só timeout/retry + logs. Circuit breaker, metrics, tracing e alertas ficam comentados/`_(futuro)_` para evoluir sem estourar tokens.
+Baseline **v1**: timeout/retry + logs + segurança mínima + **documentação** (README estruturado, CHANGELOG, docs de API conforme a stack — Javadoc, TSDoc, GoDoc…). Circuit breaker, metrics, tracing, ADRs e alertas ficam comentados/`_(futuro)_` para evoluir sem estourar tokens.
+
+A seção `documentacao` vira **NFR-D** na história/PRD. O padrão de doc de código é derivado da `stack` (ex.: BFF Java → Javadoc; MFE TypeScript → TSDoc); `por_linguagem` só sobrescreve quando necessário.
 
 ### Exemplo mínimo de `figma.json`
 
@@ -679,7 +702,7 @@ O script grava em `APP/docs/prompt-less/`:
 mkdir -p ../meu-app/docs/prompt-less
 cp outputs/PRD.md outputs/historia.md ../meu-app/docs/prompt-less/
 cd ../meu-app
-devin -- "Implemente docs/prompt-less/PRD.md e historia.md. Respeite NFR-R/O/S. Não releia specs brutas."
+devin -- "Implemente docs/prompt-less/PRD.md e historia.md. Respeite NFR-R/O/S/D (README, CHANGELOG, docs de API). Não releia specs brutas."
 ```
 
 Instalação do CLI (se ainda não tiver): `curl -fsSL https://cli.devin.ai/install.sh | bash`  

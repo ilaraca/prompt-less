@@ -2,7 +2,7 @@ Coloque aqui os insumos:
 
   figma.json             (opcional)
   regras.yaml            (opcional)
-  engenharia.yaml        (stack + NFR baseline)
+  engenharia.yaml        (stack + NFR: resiliência, logs, documentação)
   mapa-servicos.yaml     (keywords/marcadores → microsserviço + repos)
   *.txt | *.md           docs (podem ter ## Serviço: id)
   *.docx | *.doc         Word

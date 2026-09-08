@@ -145,7 +145,7 @@ for i in r.get('ignorados') or []:
       echo ""
       echo "## Regras"
       echo "1. Não releia specs brutas fora de \`docs/prompt-less/\`."
-      echo "2. Respeite RF/AC e NFR-R/O/S."
+      echo "2. Respeite RF/AC e NFR-R/O/S/D (inclui README, CHANGELOG e docs de API da stack)."
       echo "3. Fora de escopo: o que pertence às outras camadas do serviço."
       echo "4. Ao final, rastreie \`RF-xx\`/\`AC-xx\`/\`NFR-*\` e abra PR se houver remoto."
       echo ""
@@ -250,7 +250,7 @@ Implemente neste repositório conforme \`docs/prompt-less/\` (contexto: **${CTX_
 
 ## Regras
 1. **Não** releia specs brutas fora de \`docs/prompt-less/\`.
-2. Respeite RF/AC e NFR-R/O/S; implemente só o ownership deste contexto/repos.
+2. Respeite RF/AC e NFR-R/O/S/D (inclui README, CHANGELOG e docs de API da stack); implemente só o ownership deste contexto/repos.
 3. Ao final: mapeie \`RF-xx\` / \`AC-xx\` / \`NFR-*\` e abra PR se houver remoto.
 
 Gerado por https://github.com/ilaraca/prompt-less

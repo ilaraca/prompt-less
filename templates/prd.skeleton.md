@@ -26,6 +26,7 @@ sdd:
     - NFR-R
     - NFR-O
     - NFR-S
+    - NFR-D
 ---
 
 # PRD — {{titulo}}
@@ -85,6 +86,9 @@ sdd:
 ### Segurança mínima (`NFR-S`)
 {{nfr_seguranca}}
 
+### Documentação (`NFR-D`)
+{{nfr_documentacao}}
+
 ## 11. Estado atual do código (baseline verificável)
 > Evidência estática de `state/repo_index.json` — rotas, entidades e códigos HTTP
 > que já existem nos repos deste serviço. Não é inferência de LLM.
@@ -109,7 +113,7 @@ O SDD deve consumir este PRD + artefatos linkados no frontmatter e produzir:
 1. Arquitetura alvo (BFF / MFE / API de Domínio) alinhada às seções 10–11
 2. Sequência refinada (happy path + `alt`/`opt` das regras)
 3. Contrato OpenAPI alinhado às seções 7–8
-4. Breakdown de tasks com rastreio `RF-xx` / `AC-xx` / `NFR-R|O|S-xx`
+4. Breakdown de tasks com rastreio `RF-xx` / `AC-xx` / `NFR-R|O|S|D-xx`
 
 ### Contexto comprimido (Prompt-less)
 {{contexto_comprimido}}

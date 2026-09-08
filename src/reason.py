@@ -6,6 +6,7 @@ from typing import Any
 
 from src.engenharia import (
     format_arquitetura,
+    format_documentacao,
     format_nfr_stack_arch,
     format_observabilidade,
     format_padroes,
@@ -280,6 +281,7 @@ def _scaffold_historia(
         .replace("{{resiliencia}}", format_resiliencia(eng))
         .replace("{{observabilidade}}", format_observabilidade(eng))
         .replace("{{seguranca}}", format_seguranca(eng))
+        .replace("{{documentacao}}", format_documentacao(eng))
         .replace("{{dependencias}}", "\n".join(deps) if deps else "- (nenhuma)")
         .replace("{{fora_escopo}}", "\n".join(fora))
     )
@@ -409,11 +411,12 @@ def _scaffold_prd(
         .replace("{{nfr_resiliencia}}", format_resiliencia(eng, with_ids=True))
         .replace("{{nfr_observabilidade}}", format_observabilidade(eng, with_ids=True))
         .replace("{{nfr_seguranca}}", format_seguranca(eng, with_ids=True))
+        .replace("{{nfr_documentacao}}", format_documentacao(eng, with_ids=True))
         .replace("{{dependencias}}", "\n".join(deps) if deps else "- (nenhuma explícita)")
         .replace(
             "{{metricas}}",
             "- 100% dos RF cobertos por AC neste contexto\n"
-            "- NFR-R/O/S do baseline na DoD\n"
+            "- NFR-R/O/S/D do baseline na DoD\n"
             "- Ownership claro (service_id + repos)\n"
             "- Devin/SDD consome só `outputs/contextos/<id>/`",
         )
