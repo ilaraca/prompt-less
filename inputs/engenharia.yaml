@@ -1,0 +1,51 @@
+# Defaults de engenharia da plataforma (Prompt-less).
+# Histórias/PRD consomem este baseline; evolua aqui sem inchir o prompt.
+# Futuro: overrides por fluxo, circuit breaker, métricas, tracing, alertas.
+
+version: 1
+
+stack:
+  bff:
+    - Java 17
+    - Spring Boot 3
+  mfe:
+    - TypeScript
+    - React
+
+padroes:
+  - hexagonal
+  - openapi-first
+  - bff-for-frontend
+
+arquitetura:
+  fluxo: MFE -> BFF -> API Domínio
+  contrato: openapi
+
+# --- Baseline mínimo (v1) ---
+resiliencia:
+  timeout_ms: 2000
+  retry:
+    max_attempts: 2
+    backoff: exponential
+    # on: [5xx, timeout]   # futuro
+  # circuit_breaker: {}    # futuro
+  # idempotencia: true     # futuro
+
+observabilidade:
+  logs:
+    formato: structured_json
+    campos_minimos:
+      - timestamp
+      - level
+      - service
+      - correlation_id
+      - message
+    sem_pii: true
+  # metrics: []            # futuro
+  # tracing: {}            # futuro
+  # alerting: {}           # futuro
+
+seguranca:
+  validar_input: true
+  # authn: required        # futuro
+  # authz: required        # futuro

@@ -321,12 +321,14 @@ Figma + regras + docs
 - Título, Contexto (1 linha), Critérios BDD (Dado/Quando/Então), Dependências
 - Critérios = tradução das condições de `regras.yaml`
 - Payloads alinhados ao Figma
+- Escopo técnico + DoD NFR a partir de `engenharia.yaml` (baseline v1: timeout/retry + logs)
 
 **PRD**
 
 - Preencher `prd.skeleton.md` sem remover o frontmatter
 - RF/AC rastreáveis; dados da UI; regras → erros HTTP
-- Handoff SDD lista artefatos esperados (`architecture.md`, contrato, tasks)
+- NFR-R / NFR-O / NFR-S a partir do baseline de engenharia
+- Handoff SDD lista artefatos esperados + rastreio RF/AC/NFR
 
 ---
 
@@ -338,11 +340,39 @@ Coloque os arquivos em `pipeline/inputs/`:
 |------------------|--------------|-----|
 | `figma.json` | Não | Inputs, botões/actions, colunas de lista |
 | `regras.yaml` | Não | Happy path, bloqueios, tabela de decisão |
+| `engenharia.yaml` | Não | Stack, padrões, arquitetura, NFR baseline (retry, logs…) |
 | `*.txt`, `*.md` | Não | Specs/notas longas (comprimidas) |
 | `*.docx` | Não | Word moderno (`python-docx`) |
 | `*.doc` | Não | Word legado (`textutil` no macOS ou `antiword`) |
 
 `README.txt` em `inputs/` é **ignorado** na ingestão de documentos.
+
+### Exemplo mínimo de `engenharia.yaml`
+
+```yaml
+version: 1
+stack:
+  bff: [Java 17, Spring Boot 3]
+  mfe: [TypeScript, React]
+padroes: [hexagonal, openapi-first, bff-for-frontend]
+arquitetura:
+  fluxo: MFE -> BFF -> API Domínio
+  contrato: openapi
+resiliencia:
+  timeout_ms: 2000
+  retry:
+    max_attempts: 2
+    backoff: exponential
+observabilidade:
+  logs:
+    formato: structured_json
+    campos_minimos: [timestamp, level, service, correlation_id, message]
+    sem_pii: true
+seguranca:
+  validar_input: true
+```
+
+Baseline **v1** de propósito: só timeout/retry + logs. Circuit breaker, metrics, tracing e alertas ficam comentados/`_(futuro)_` para evoluir sem estourar tokens.
 
 ### Exemplo mínimo de `figma.json`
 
@@ -598,15 +628,16 @@ pipeline/
 │   ├── openapi.skeleton.yaml
 │   ├── mermaid.skeleton.md
 │   ├── historia.skeleton.md
-│   └── prd.skeleton.md       # PRD → SDD (frontmatter + RF/AC)
-├── inputs/                   # corpus da execução (Figma, regras, docs)
+│   └── prd.skeleton.md       # PRD → SDD (frontmatter + RF/AC/NFR)
+├── inputs/                   # figma, regras, engenharia.yaml, docs
 ├── state/                    # estado externo (sem histórico/docs brutos)
 ├── outputs/                  # artefatos + PRD.md + llm_package_*.json
 └── src/
     ├── run.py                # orquestra etapas; also_emit (historia→prd)
-    ├── ingest.py             # carrega figma/regras/template
+    ├── ingest.py             # carrega figma/regras/engenharia/template
     ├── docs_ingest.py        # extrai texto de txt/md/docx/doc
-    ├── preprocess.py         # desidrata UI/regras (pré-LLM)
+    ├── preprocess.py         # desidrata UI/regras/engenharia (pré-LLM)
+    ├── engenharia.py         # baseline stack + NFR (retry, logs)
     ├── state_store.py        # persiste estado mínimo em JSON
     ├── doc_compress.py       # compressão hierárquica + SIGNAL_RE
     ├── rag_compress.py       # retrieve estrutural + merge UI/regras/docs

@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.doc_compress import compress_documents
+from src.engenharia import rag_snippet
 
 
 def _clip(text: str, max_chars: int) -> str:
@@ -41,6 +42,10 @@ def retrieve_chunks(ctx: dict[str, Any]) -> list[dict[str, str]]:
 
     for i, d in enumerate(regras.get("decisoes") or []):
         chunks.append({"id": f"rule.decision.{i}", "text": _clip(str(d), 180)})
+
+    eng = ctx.get("engenharia") or {}
+    if eng:
+        chunks.append({"id": "eng.baseline", "text": rag_snippet(eng)})
 
     return chunks
 

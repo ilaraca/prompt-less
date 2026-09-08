@@ -4,6 +4,16 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from src.engenharia import (
+    format_arquitetura,
+    format_nfr_stack_arch,
+    format_observabilidade,
+    format_padroes,
+    format_resiliencia,
+    format_seguranca,
+    format_stack,
+)
+
 
 def build_llm_package(context: dict[str, Any]) -> dict[str, Any]:
     """Pacote pronto p/ OpenAI Responses (previous_response_id) ou Claude cache_control."""
@@ -13,7 +23,7 @@ def build_llm_package(context: dict[str, Any]) -> dict[str, Any]:
         "openai": {
             "instructions": system,
             "input": json.dumps(dynamic, ensure_ascii=False),
-            "store": True,  # permite encadear via previous_response_id
+            "store": True,
         },
         "claude": {
             "system": [
@@ -45,16 +55,18 @@ def dry_run_scaffold(
     template: str,
     *,
     consolidated: str = "",
+    engenharia: dict[str, Any] | None = None,
 ) -> str:
     """Preenche esqueleto sem LLM — útil p/ validar pipeline antes do teste com artefatos."""
+    eng = engenharia or {}
     if tipo == "openapi":
         return _scaffold_openapi(ui, regras, template)
     if tipo == "mermaid":
         return _scaffold_mermaid(ui, regras, template)
     if tipo == "historia":
-        return _scaffold_historia(ui, regras, template)
+        return _scaffold_historia(ui, regras, template, eng)
     if tipo == "prd":
-        return _scaffold_prd(ui, regras, template, consolidated=consolidated)
+        return _scaffold_prd(ui, regras, template, eng, consolidated=consolidated)
     raise ValueError(tipo)
 
 
@@ -71,7 +83,6 @@ def _bdd_items(ui: dict, regras: dict) -> list[str]:
         criterios.append(
             "- **AC-01**\n  **Dado** dados válidos\n  **Quando** submeter\n  **Então** sucesso 200"
         )
-    # happy path explícito se houver
     for j, h in enumerate(regras.get("happy") or [], start=len(criterios) + 1):
         criterios.append(
             f"- **AC-{j:02d}**\n  **Dado** fluxo feliz\n  **Quando** {h}\n  **Então** sucesso"
@@ -80,7 +91,6 @@ def _bdd_items(ui: dict, regras: dict) -> list[str]:
 
 
 def _scaffold_openapi(ui: dict, regras: dict, template: str) -> str:
-    # marca placeholders; LLM/teste real completa paths
     props = {i["name"]: {"type": i["type"]} for i in ui.get("inputs", [])}
     cols = {c["name"]: {"type": c["type"]} for c in ui.get("columns", [])}
     marker = (
@@ -117,7 +127,7 @@ def _scaffold_mermaid(ui: dict, regras: dict, template: str) -> str:
     )
 
 
-def _scaffold_historia(ui: dict, regras: dict, template: str) -> str:
+def _scaffold_historia(ui: dict, regras: dict, template: str, eng: dict) -> str:
     fluxo = regras.get("fluxo") or "Fluxo"
     criterios_hist = []
     for b in regras.get("bloqueios") or []:
@@ -133,14 +143,33 @@ def _scaffold_historia(ui: dict, regras: dict, template: str) -> str:
     deps = [f"- campo `{i['name']}` ({i['type']})" for i in ui.get("inputs", [])]
     return (
         template.replace("{{titulo}}", f"[BFF/MFE] {fluxo}")
-        .replace("{{contexto}}", f"Implementar {fluxo} conforme UI e regras desidratadas.")
+        .replace(
+            "{{contexto}}",
+            f"Implementar {fluxo} conforme UI, regras e baseline de engenharia.",
+        )
         .replace("{{criterios_bdd}}", "\n".join(criterios_hist))
+        .replace("{{stack}}", format_stack(eng))
+        .replace("{{padroes}}", format_padroes(eng))
+        .replace("{{arquitetura}}", format_arquitetura(eng))
+        .replace("{{resiliencia}}", format_resiliencia(eng))
+        .replace("{{observabilidade}}", format_observabilidade(eng))
+        .replace("{{seguranca}}", format_seguranca(eng))
         .replace("{{dependencias}}", "\n".join(deps) if deps else "- (nenhuma)")
+        .replace(
+            "{{fora_escopo}}",
+            "- Mudanças de plataforma fora deste fluxo\n"
+            "- Evoluções de NFR marcadas como _(futuro)_ em engenharia.yaml",
+        )
     )
 
 
 def _scaffold_prd(
-    ui: dict, regras: dict, template: str, *, consolidated: str = ""
+    ui: dict,
+    regras: dict,
+    template: str,
+    eng: dict,
+    *,
+    consolidated: str = "",
 ) -> str:
     fluxo = regras.get("fluxo") or "Fluxo"
     slug = "".join(ch if ch.isalnum() else "-" for ch in fluxo.lower()).strip("-") or "prd"
@@ -163,7 +192,10 @@ def _scaffold_prd(
         rfs.append("- **RF-01** Permitir submissão com dados válidos (HTTP 200)")
 
     entrada = (
-        "\n".join(f"- `{i['name']}` ({i['type']})" + (" — obrigatório" if i.get("required") else "") for i in ui.get("inputs", []))
+        "\n".join(
+            f"- `{i['name']}` ({i['type']})" + (" — obrigatório" if i.get("required") else "")
+            for i in ui.get("inputs", [])
+        )
         or "- (não informado no Figma)"
     )
     saida = (
@@ -189,32 +221,40 @@ def _scaffold_prd(
     for a in ui.get("actions") or []:
         if a.get("path"):
             deps.append(f"- endpoint `{(a.get('method') or 'POST').upper()} {a.get('path')}`")
+    deps.append("- baseline `inputs/engenharia.yaml` (stack + NFR v1)")
 
     return (
         template.replace("{{prd_id}}", prd_id)
         .replace("{{titulo}}", fluxo)
         .replace(
             "{{problema}}",
-            f"Necessidade de especificar e entregar o fluxo **{fluxo}** com regras e contrato claros para implementação BFF/MFE.",
+            f"Necessidade de especificar e entregar o fluxo **{fluxo}** com regras, contrato e NFRs mínimos claros para BFF/MFE.",
         )
         .replace(
             "{{objetivo}}",
-            f"Viabilizar {fluxo} com validação de regras de negócio, contrato de dados e critérios BDD rastreáveis até o SDD.",
+            f"Viabilizar {fluxo} com RF/AC rastreáveis e baseline de resiliência/observabilidade até o SDD.",
         )
         .replace(
             "{{non_goals}}",
             "- Implementação de código de produção\n"
             "- Design visual / handoff de UI pixel-perfect\n"
-            "- Infraestrutura e deploy",
+            "- Infraestrutura e deploy\n"
+            "- NFRs avançados marcados como futuro (circuit breaker, tracing, etc.)",
         )
-        .replace("{{personas}}", "- Usuário final da jornada\n- Time BFF/MFE\n- Tech Lead / Arquiteto (SDD)")
+        .replace(
+            "{{personas}}",
+            "- Usuário final da jornada\n- Time BFF/MFE\n- Tech Lead / Arquiteto (SDD)",
+        )
         .replace(
             "{{escopo_in}}",
-            f"- Fluxo `{fluxo}`\n- Validações e erros HTTP das regras\n- Campos e ações da UI\n- Artefatos Prompt-less (história, OpenAPI, sequência)",
+            f"- Fluxo `{fluxo}`\n- Validações e erros HTTP das regras\n- Campos e ações da UI\n"
+            "- Baseline engenharia v1 (timeout/retry + logs)\n"
+            "- Artefatos Prompt-less (história, OpenAPI, sequência, PRD)",
         )
         .replace(
             "{{escopo_out}}",
-            "- Features adjacentes não citadas nas regras\n- Otimizações de performance não especificadas",
+            "- Features adjacentes não citadas nas regras\n"
+            "- Evoluções NFR além do baseline v1",
         )
         .replace("{{requisitos_funcionais}}", "\n".join(rfs))
         .replace("{{dados_entrada}}", entrada)
@@ -222,10 +262,15 @@ def _scaffold_prd(
         .replace("{{acoes}}", acoes)
         .replace("{{regras_negocio}}", regras_txt)
         .replace("{{criterios_bdd}}", "\n".join(_bdd_items(ui, regras)))
+        .replace("{{nfr_stack_arch}}", format_nfr_stack_arch(eng))
+        .replace("{{nfr_resiliencia}}", format_resiliencia(eng, with_ids=True))
+        .replace("{{nfr_observabilidade}}", format_observabilidade(eng, with_ids=True))
+        .replace("{{nfr_seguranca}}", format_seguranca(eng, with_ids=True))
         .replace("{{dependencias}}", "\n".join(deps) if deps else "- (nenhuma explícita)")
         .replace(
             "{{metricas}}",
             "- 100% dos RF cobertos por AC\n"
+            "- NFR-R/O/S do baseline presentes na DoD da história\n"
             "- Contrato OpenAPI alinhado às seções 7–8\n"
             "- Sequência Mermaid cobre happy path + bloqueios",
         )
@@ -233,7 +278,7 @@ def _scaffold_prd(
             "{{riscos}}",
             "- Insumos incompletos (Figma/regras) → RF/AC parciais\n"
             "- Docs longos sem sinais lexicais podem omitir requisitos no contexto comprimido\n"
-            "- OpenAPI/Mermaid ainda não gerados nesta execução: SDD deve regenerar ou apontar versões",
+            "- Baseline NFR v1 é mínimo — gaps avançados ficam para iterações",
         )
         .replace(
             "{{contexto_comprimido}}",

@@ -69,6 +69,7 @@ def _build_one(
             slim["regras"],
             template,
             consolidated=rag.get("consolidated") or "",
+            engenharia=slim.get("engenharia") or {},
         )
     else:
         raise NotImplementedError("Mode --live: plugar client OpenAI/Claude no reason.py")

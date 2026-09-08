@@ -9,12 +9,17 @@ artifacts:
   openapi: outputs/openapi.yaml
   sequence: outputs/sequence.mmd
   prd: outputs/PRD.md
+  engenharia: inputs/engenharia.yaml
 sdd:
   expected:
     - architecture.md
     - sequence_refined.mmd
     - api_contract.yaml
     - tasks.md
+  nfr_ids:
+    - NFR-R
+    - NFR-O
+    - NFR-S
 ---
 
 # PRD — {{titulo}}
@@ -59,22 +64,37 @@ sdd:
 
 {{criterios_bdd}}
 
-## 10. Dependências
+## 10. Requisitos não-funcionais (baseline v1)
+> Fonte: `inputs/engenharia.yaml`. Expandir em versões futuras (circuit breaker, metrics, tracing…).
+
+### Stack e arquitetura
+{{nfr_stack_arch}}
+
+### Resiliência (`NFR-R`)
+{{nfr_resiliencia}}
+
+### Observabilidade (`NFR-O`)
+{{nfr_observabilidade}}
+
+### Segurança mínima (`NFR-S`)
+{{nfr_seguranca}}
+
+## 11. Dependências
 {{dependencias}}
 
-## 11. Métricas de sucesso
+## 12. Métricas de sucesso
 {{metricas}}
 
-## 12. Riscos e abertos
+## 13. Riscos e abertos
 {{riscos}}
 
-## 13. Handoff para SDD
+## 14. Handoff para SDD
 O SDD deve consumir este PRD + artefatos linkados no frontmatter e produzir:
 
-1. Arquitetura alvo (BFF / MFE / API de Domínio)
+1. Arquitetura alvo (BFF / MFE / API de Domínio) alinhada à seção 10
 2. Sequência refinada (happy path + `alt`/`opt` das regras)
 3. Contrato OpenAPI alinhado às seções 7–8
-4. Breakdown de tasks com rastreio `RF-xx` / `AC-xx`
+4. Breakdown de tasks com rastreio `RF-xx` / `AC-xx` / `NFR-R|O|S-xx`
 
 ### Contexto comprimido (Prompt-less)
 {{contexto_comprimido}}

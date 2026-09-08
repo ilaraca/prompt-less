@@ -28,6 +28,14 @@ def write_state(data: dict[str, Any], path: Path = DEFAULT_PATH) -> dict[str, An
         "inputs": [i.get("name") for i in (data.get("ui") or {}).get("inputs", [])],
         "actions": (data.get("ui") or {}).get("actions", []),
         "bloqueios": (data.get("regras") or {}).get("bloqueios", []),
+        "engenharia": {
+            "version": (data.get("engenharia") or {}).get("version"),
+            "stack": (data.get("engenharia") or {}).get("stack"),
+            "resiliencia": (data.get("engenharia") or {}).get("resiliencia"),
+            "observabilidade": {
+                "logs": ((data.get("engenharia") or {}).get("observabilidade") or {}).get("logs")
+            },
+        },
         "documents": docs_meta,  # metadados só — sem texto bruto
         "previous_actions": data.get("previous_actions", []),
         "status": data.get("status", "ready"),

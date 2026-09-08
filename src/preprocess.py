@@ -4,6 +4,9 @@ from __future__ import annotations
 from typing import Any
 
 
+from src.engenharia import dehydrate_engenharia
+
+
 TYPE_HINTS = {
     "idade": "integer",
     "age": "integer",
@@ -137,6 +140,7 @@ def preprocess(raw: dict[str, Any]) -> dict[str, Any]:
         "tipo": raw["tipo"],
         "ui": dehydrate_figma(raw.get("figma") or {}),
         "regras": dehydrate_regras(raw.get("regras") or {}),
+        "engenharia": dehydrate_engenharia(raw.get("engenharia") or {}),
         "documents": dehydrate_documents(raw.get("documents") or []),
         "template": raw.get("template", ""),
     }
