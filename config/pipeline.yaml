@@ -1,0 +1,63 @@
+# Prompt-less — artefatos técnicos com contexto comprimido (OpenAPI | Mermaid | Historia)
+# Princípio: nunca enviar bruto se puder comprimir antes.
+# Repo: https://github.com/ilaraca/prompt-less
+
+name: prompt-less
+version: "1.0"
+
+budget:
+  max_context_tokens: 2000
+  target_context_tokens: 650
+  rag_chunk_max_tokens: 120
+  consolidated_summary_max_tokens: 200
+  doc_lines_per_chunk: 40
+
+models:
+  preprocess: small   # sumarizar / filtrar / desidratar / docs
+  reason: large       # raciocínio final do artefato
+
+stages:
+  - id: ingest
+    desc: Carrega FIGMA_JSON, REGRAS_YAML, TEMPLATE + docs (.txt/.docx/.doc/.md)
+  - id: preprocess
+    desc: Modelo pequeno — filtra campos, inferência de tipos, desidrata
+  - id: state_write
+    desc: Persiste estado do workflow fora do prompt (sem texto bruto de docs)
+  - id: doc_compress
+    desc: Docs → chunks → resumos → consolidado (compressão hierárquica)
+  - id: rag_retrieve
+    desc: Recupera só chunks relevantes às regras/UI do artefato
+  - id: rag_compress
+    desc: UI/regras + docs comprimidos → consolidated ≤ budget
+  - id: context_build
+    desc: Monta contexto hierárquico ≤ budget
+  - id: reason
+    desc: LLM grande + prompt estável cacheável + tools compactas
+  - id: emit
+    desc: Saída estruturada única (sem prosa)
+
+artifacts:
+  openapi:
+    template: templates/openapi.skeleton.yaml
+    output: outputs/openapi.yaml
+  mermaid:
+    template: templates/mermaid.skeleton.md
+    output: outputs/sequence.mmd
+  historia:
+    template: templates/historia.skeleton.md
+    output: outputs/historia.md
+
+caching:
+  openai:
+    strategy: stable_prefix   # system + tools fixos no início
+  claude:
+    strategy: cache_control
+    breakpoints:
+      - system_prompt
+      - tool_defs
+    min_cacheable_tokens: 1024
+    ttl: 5m
+
+state:
+  backend: file              # file | redis
+  path: state/workflow.json

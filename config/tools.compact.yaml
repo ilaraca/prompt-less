@@ -1,0 +1,12 @@
+# Definições compactas (evitar prosa longa nas tools)
+tools:
+  - id: load_inputs
+    sig: load_inputs(tipo: openapi|mermaid|historia) -> {figma, regras, template}
+  - id: infer_types
+    sig: infer_types(inputs: object) -> schema_props
+  - id: map_errors
+    sig: map_errors(regras: object) -> [{status, trigger}]
+  - id: fill_template
+    sig: fill_template(template: str, payload: object) -> artifact
+  - id: emit
+    sig: emit(artifact: str, path: str) -> ok
