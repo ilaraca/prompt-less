@@ -887,6 +887,7 @@ pipeline/
     ├── doc_compress.py       # compressão hierárquica + SIGNAL_RE
     ├── rag_compress.py       # retrieve estrutural + merge UI/regras/docs
     ├── context_builder.py    # system + dynamic ≤ budget
+    ├── economia.py           # calculadora de tokens/custo (naive vs prompt-less)
     ├── reason.py             # pacote OpenAI/Claude + dry-run (inclui PRD)
     └── emit.py               # mapeia tipo → arquivo em outputs/
 ```
@@ -947,6 +948,44 @@ Cada execução imprime JSON com:
 
 Use essas métricas para validar que a pipeline continua “barata” ao crescer o volume de insumos.
 
+### Calculadora de economia (`src/economia.py`)
+
+Mede o que iria para o LLM **sem** compressão (docs brutos + system/tools verbosos + histórico) versus o pacote Prompt-less, e projeta custo em USD.
+
+```bash
+# Mede os inputs/ atuais (default: gpt-4o, 40 runs/mês, historia+prd)
+.venv/bin/python -m src.economia
+
+# Outro modelo / volume
+.venv/bin/python -m src.economia --modelo claude-sonnet --runs-mes 80
+
+# Comparativo entre modelos
+.venv/bin/python -m src.economia --comparar
+
+# Cenário hipotético (doc de 3000 linhas, sem ler inputs/)
+.venv/bin/python -m src.economia --what-if --linhas 3000 --runs-mes 40
+
+# JSON para CI/dashboard
+.venv/bin/python -m src.economia --json
+.venv/bin/python -m src.economia --listar-modelos
+```
+
+Na amostra incluída (~3000 linhas + microserviços + docx), a calculadora típica reporta **~98% menos tokens de input** e dezenas de dólares/ano mesmo em volume baixo — o salto cresce linearmente com `runs-mes` e com o tamanho dos docs.
+
+| Flag | Papel |
+|------|--------|
+| `--modelo` | `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `claude-sonnet`, `claude-haiku`, `gemini-flash` |
+| `--runs-mes` | quantas execuções da pipeline por mês |
+| `--artefatos` | chamadas LLM por run (default 2 = história + PRD) |
+| `--cache-hit` | fração do prefixo estável lida do cache (0–1) |
+| `--output-tokens` | tokens estimados da completion |
+| `--what-if --linhas N` | simula sem depender dos arquivos em `inputs/` |
+
+**O que entra no “naive”:** docs brutos + figma/regras/engenharia/template + ~2.5k system + ~1.8k tools + ~3k histórico.  
+**O que entra no Prompt-less:** pacote de `build_context` (system compacto + state + consolidado + template) + tools compactas — **sem** histórico e **sem** texto bruto.
+
+Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `src/economia.py` se o vendor mudar a lista. Estimativa de tokens continua sendo `chars÷4` (não tokenizer oficial).
+
 ---
 
 ## Limitações atuais e próximos passos
@@ -963,7 +1002,7 @@ Use essas métricas para validar que a pipeline continua “barata” ao crescer
 1. Plugar OpenAI Responses / Claude Messages no `reason.py` usando `llm_package_*.json`
 2. Trocar extrativo por modelo small só quando o score de sinais for baixo
 3. Persistência Redis + TTL alinhado ao cache Claude (5m / 1h)
-4. Telemetria de custo real (tokens billable + cache hits)
+4. Telemetria de custo real (tokens billable + cache hits) — a calculadora `src/economia.py` já projeta; plugar billing real no `--live`
 5. Consumidor SDD que leia `outputs/PRD.md` (frontmatter `sdd.expected` / `nfr_ids`) e gere architecture/tasks com RF + NFR
 6. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing, authn/authz) sem inchir o prompt
 7. CI que rode Prompt-less e anexe `docs/prompt-less/` ao PR para o Devin CLI / Cloud
