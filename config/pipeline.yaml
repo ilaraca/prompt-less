@@ -18,7 +18,9 @@ models:
 
 stages:
   - id: ingest
-    desc: Carrega FIGMA_JSON, REGRAS_YAML, TEMPLATE + docs (.txt/.docx/.doc/.md)
+    desc: Carrega FIGMA_JSON, REGRAS_YAML, ENGENHARIA, MAPA_SERVICOS, TEMPLATE + docs
+  - id: servicos_split
+    desc: Particiona docs por marcador/keyword do mapa-servicos (microsserviços)
   - id: preprocess
     desc: Modelo pequeno — filtra campos, inferência de tipos, desidrata
   - id: state_write

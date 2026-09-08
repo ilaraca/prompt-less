@@ -1,0 +1,49 @@
+# Mapa keyword/marker → serviço (microsserviços / multi-repo).
+# Sem este arquivo, a pipeline trata tudo como um único fluxo (comportamento legado).
+#
+# Marcadores aceitos no texto:
+#   ## Serviço: ms-cliente
+#   [[service:ms-cliente]]
+#   <!-- service: ms-cliente -->
+#
+# Chunks sem marcador são classificados por keywords (score).
+# Unassigned: drop | bucket (_unassigned)
+
+version: 1
+
+unassigned:
+  strategy: bucket   # drop | bucket
+
+servicos:
+  ms-cliente:
+    nome: Cadastro de Cliente
+    repos:
+      - mfe-onboarding
+      - bff-cliente
+      - ms-cliente
+    keywords:
+      - cliente
+      - cpf
+      - /clientes
+      - cadastro
+      - onboarding
+    # aliases opcionais nos marcadores [[service:…]]
+    aliases:
+      - cliente
+      - cadastro-cliente
+
+  ms-pagamento:
+    nome: Pagamentos
+    repos:
+      - bff-pagamentos
+      - ms-pagamento
+    keywords:
+      - pagamento
+      - pix
+      - /pagamentos
+      - saldo
+      - cobranca
+      - cobrança
+    aliases:
+      - pagamento
+      - pagamentos

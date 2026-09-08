@@ -10,6 +10,11 @@ artifacts:
   sequence: outputs/sequence.mmd
   prd: outputs/PRD.md
   engenharia: inputs/engenharia.yaml
+  mapa_servicos: inputs/mapa-servicos.yaml
+ownership:
+  service_id: "{{service_id}}"
+  service_name: "{{service_nome}}"
+  repos: {{repos_yaml}}
 sdd:
   expected:
     - architecture.md

@@ -56,17 +56,18 @@ def dry_run_scaffold(
     *,
     consolidated: str = "",
     engenharia: dict[str, Any] | None = None,
+    servico: dict[str, Any] | None = None,
 ) -> str:
-    """Preenche esqueleto sem LLM — útil p/ validar pipeline antes do teste com artefatos."""
     eng = engenharia or {}
+    svc = servico or {}
     if tipo == "openapi":
         return _scaffold_openapi(ui, regras, template)
     if tipo == "mermaid":
         return _scaffold_mermaid(ui, regras, template)
     if tipo == "historia":
-        return _scaffold_historia(ui, regras, template, eng)
+        return _scaffold_historia(ui, regras, template, eng, svc)
     if tipo == "prd":
-        return _scaffold_prd(ui, regras, template, eng, consolidated=consolidated)
+        return _scaffold_prd(ui, regras, template, eng, svc, consolidated=consolidated)
     raise ValueError(tipo)
 
 
@@ -88,6 +89,23 @@ def _bdd_items(ui: dict, regras: dict) -> list[str]:
             f"- **AC-{j:02d}**\n  **Dado** fluxo feliz\n  **Quando** {h}\n  **Então** sucesso"
         )
     return criterios
+
+
+def _ownership_md(svc: dict) -> str:
+    if not svc or not svc.get("id"):
+        return "- _(contexto único — sem `mapa-servicos.yaml` ou `--context`)_"
+    repos = svc.get("repos") or []
+    repo_lines = "\n".join(f"  - `{r}`" for r in repos) if repos else "  - _(definir repos no mapa)_"
+    return (
+        f"- **Serviço:** `{svc.get('id')}` — {svc.get('nome') or svc.get('id')}\n"
+        f"- **Repositórios:**\n{repo_lines}"
+    )
+
+
+def _fluxo_nome(regras: dict, svc: dict) -> str:
+    if svc.get("nome"):
+        return str(svc["nome"])
+    return regras.get("fluxo") or "Fluxo"
 
 
 def _scaffold_openapi(ui: dict, regras: dict, template: str) -> str:
@@ -127,8 +145,12 @@ def _scaffold_mermaid(ui: dict, regras: dict, template: str) -> str:
     )
 
 
-def _scaffold_historia(ui: dict, regras: dict, template: str, eng: dict) -> str:
-    fluxo = regras.get("fluxo") or "Fluxo"
+def _scaffold_historia(
+    ui: dict, regras: dict, template: str, eng: dict, svc: dict
+) -> str:
+    fluxo = _fluxo_nome(regras, svc)
+    sid = svc.get("id")
+    title_prefix = f"[{sid}] " if sid and sid != "_unassigned" else "[BFF/MFE] "
     criterios_hist = []
     for b in regras.get("bloqueios") or []:
         criterios_hist.append(
@@ -141,11 +163,22 @@ def _scaffold_historia(ui: dict, regras: dict, template: str, eng: dict) -> str:
             "- **Dado** dados válidos\n  **Quando** submeter\n  **Então** sucesso 200"
         ]
     deps = [f"- campo `{i['name']}` ({i['type']})" for i in ui.get("inputs", [])]
+    for r in svc.get("repos") or []:
+        deps.append(f"- repo `{r}`")
+    fora = [
+        "- Mudanças de plataforma fora deste fluxo",
+        "- Evoluções de NFR marcadas como _(futuro)_ em engenharia.yaml",
+    ]
+    if sid:
+        fora.append(f"- Outros serviços fora de `{sid}` (ver `mapa-servicos.yaml`)")
     return (
-        template.replace("{{titulo}}", f"[BFF/MFE] {fluxo}")
+        template.replace("{{titulo}}", f"{title_prefix}{fluxo}")
+        .replace("{{ownership}}", _ownership_md(svc))
         .replace(
             "{{contexto}}",
-            f"Implementar {fluxo} conforme UI, regras e baseline de engenharia.",
+            f"Implementar {fluxo} conforme UI, regras, docs do contexto"
+            + (f" `{sid}`" if sid else "")
+            + " e baseline de engenharia.",
         )
         .replace("{{criterios_bdd}}", "\n".join(criterios_hist))
         .replace("{{stack}}", format_stack(eng))
@@ -155,11 +188,7 @@ def _scaffold_historia(ui: dict, regras: dict, template: str, eng: dict) -> str:
         .replace("{{observabilidade}}", format_observabilidade(eng))
         .replace("{{seguranca}}", format_seguranca(eng))
         .replace("{{dependencias}}", "\n".join(deps) if deps else "- (nenhuma)")
-        .replace(
-            "{{fora_escopo}}",
-            "- Mudanças de plataforma fora deste fluxo\n"
-            "- Evoluções de NFR marcadas como _(futuro)_ em engenharia.yaml",
-        )
+        .replace("{{fora_escopo}}", "\n".join(fora))
     )
 
 
@@ -168,12 +197,16 @@ def _scaffold_prd(
     regras: dict,
     template: str,
     eng: dict,
+    svc: dict,
     *,
     consolidated: str = "",
 ) -> str:
-    fluxo = regras.get("fluxo") or "Fluxo"
-    slug = "".join(ch if ch.isalnum() else "-" for ch in fluxo.lower()).strip("-") or "prd"
+    fluxo = _fluxo_nome(regras, svc)
+    sid = svc.get("id") or "default"
+    slug = "".join(ch if ch.isalnum() else "-" for ch in str(sid).lower()).strip("-") or "prd"
     prd_id = f"prd-{slug[:48]}"
+    repos = svc.get("repos") or []
+    repos_yaml = json.dumps(repos, ensure_ascii=False)
 
     rfs = []
     for i, b in enumerate(regras.get("bloqueios") or [], start=1):
@@ -222,38 +255,49 @@ def _scaffold_prd(
         if a.get("path"):
             deps.append(f"- endpoint `{(a.get('method') or 'POST').upper()} {a.get('path')}`")
     deps.append("- baseline `inputs/engenharia.yaml` (stack + NFR v1)")
+    deps.append("- mapa `inputs/mapa-servicos.yaml`")
+    for r in repos:
+        deps.append(f"- implementação em `{r}`")
 
     return (
         template.replace("{{prd_id}}", prd_id)
         .replace("{{titulo}}", fluxo)
+        .replace("{{service_id}}", str(sid))
+        .replace("{{service_nome}}", str(svc.get("nome") or sid))
+        .replace("{{repos_yaml}}", repos_yaml)
         .replace(
             "{{problema}}",
-            f"Necessidade de especificar e entregar o fluxo **{fluxo}** com regras, contrato e NFRs mínimos claros para BFF/MFE.",
+            f"Necessidade de especificar e entregar **{fluxo}**"
+            + (f" (`{sid}`)" if svc.get("id") else "")
+            + " com regras, contrato e NFRs mínimos para os repos donos.",
         )
         .replace(
             "{{objetivo}}",
-            f"Viabilizar {fluxo} com RF/AC rastreáveis e baseline de resiliência/observabilidade até o SDD.",
+            f"Viabilizar {fluxo} com RF/AC rastreáveis, ownership de microsserviço e baseline NFR até o SDD/Devin.",
         )
         .replace(
             "{{non_goals}}",
-            "- Implementação de código de produção\n"
+            "- Implementação de código de produção nesta pipeline\n"
             "- Design visual / handoff de UI pixel-perfect\n"
             "- Infraestrutura e deploy\n"
-            "- NFRs avançados marcados como futuro (circuit breaker, tracing, etc.)",
+            "- Escopo de **outros** serviços do mapa\n"
+            "- NFRs avançados marcados como futuro",
         )
         .replace(
             "{{personas}}",
-            "- Usuário final da jornada\n- Time BFF/MFE\n- Tech Lead / Arquiteto (SDD)",
+            "- Usuário final da jornada\n- Time dono do(s) repo(s)\n- Tech Lead / Arquiteto (SDD)",
         )
         .replace(
             "{{escopo_in}}",
-            f"- Fluxo `{fluxo}`\n- Validações e erros HTTP das regras\n- Campos e ações da UI\n"
+            f"- Contexto `{sid}` — {fluxo}\n"
+            f"- Repos: {', '.join(f'`{r}`' for r in repos) or '(definir no mapa)'}\n"
+            "- Validações/erros HTTP das regras aplicáveis\n"
             "- Baseline engenharia v1 (timeout/retry + logs)\n"
-            "- Artefatos Prompt-less (história, OpenAPI, sequência, PRD)",
+            "- Artefatos Prompt-less deste contexto",
         )
         .replace(
             "{{escopo_out}}",
-            "- Features adjacentes não citadas nas regras\n"
+            "- Outros microsserviços do `mapa-servicos.yaml`\n"
             "- Evoluções NFR além do baseline v1",
         )
         .replace("{{requisitos_funcionais}}", "\n".join(rfs))
@@ -269,16 +313,16 @@ def _scaffold_prd(
         .replace("{{dependencias}}", "\n".join(deps) if deps else "- (nenhuma explícita)")
         .replace(
             "{{metricas}}",
-            "- 100% dos RF cobertos por AC\n"
-            "- NFR-R/O/S do baseline presentes na DoD da história\n"
-            "- Contrato OpenAPI alinhado às seções 7–8\n"
-            "- Sequência Mermaid cobre happy path + bloqueios",
+            "- 100% dos RF cobertos por AC neste contexto\n"
+            "- NFR-R/O/S do baseline na DoD\n"
+            "- Ownership claro (service_id + repos)\n"
+            "- Devin/SDD consome só `outputs/contextos/<id>/`",
         )
         .replace(
             "{{riscos}}",
-            "- Insumos incompletos (Figma/regras) → RF/AC parciais\n"
-            "- Docs longos sem sinais lexicais podem omitir requisitos no contexto comprimido\n"
-            "- Baseline NFR v1 é mínimo — gaps avançados ficam para iterações",
+            "- Texto sem marcadores/keywords → chunks em `_unassigned` ou drop\n"
+            "- Mapa desatualizado classifica mal o serviço\n"
+            "- Baseline NFR v1 é mínimo",
         )
         .replace(
             "{{contexto_comprimido}}",

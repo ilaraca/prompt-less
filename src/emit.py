@@ -4,16 +4,22 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# arquivos na raiz de outputs/ (legado / single-context)
 OUTPUTS = {
-    "openapi": ROOT / "outputs" / "openapi.yaml",
-    "mermaid": ROOT / "outputs" / "sequence.mmd",
-    "historia": ROOT / "outputs" / "historia.md",
-    "prd": ROOT / "outputs" / "PRD.md",
+    "openapi": "openapi.yaml",
+    "mermaid": "sequence.mmd",
+    "historia": "historia.md",
+    "prd": "PRD.md",
 }
 
 
-def emit(tipo: str, content: str) -> Path:
-    path = OUTPUTS[tipo]
+def emit(tipo: str, content: str, *, context: str | None = None) -> Path:
+    name = OUTPUTS[tipo]
+    if context:
+        path = ROOT / "outputs" / "contextos" / context / name
+    else:
+        path = ROOT / "outputs" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path

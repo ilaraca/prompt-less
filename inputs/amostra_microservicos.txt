@@ -1,0 +1,21 @@
+# Spec longa simulando microsserviços (marcadores + keywords).
+# Use com: python -m src.run historia --all-contexts
+
+L1: ruido telemetria cpu=10%
+L2: ruido telemetria mem=1GB
+
+## Serviço: ms-cliente
+REGRA bloqueio — se CPF inválido retornar HTTP 400
+endpoint POST /clientes requestBody nome email cpf idade
+Dado cliente ativo Quando cadastro válido Então status 200
+permissao admin obrigatoria senao HTTP 403 no BFF cliente
+campo obrigatorio email no onboarding
+
+## Serviço: ms-pagamento
+REGRA — saldo negativo → HTTP 422
+endpoint POST /pagamentos pix cobranca
+Dado pagamento pendente Quando confirmar PIX Então status 200
+timeout recomendado 5000ms no ms-pagamento
+auth ausente → HTTP 401
+
+L99: mais ruido telemetria processo=x

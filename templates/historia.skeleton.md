@@ -1,5 +1,8 @@
 # {{titulo}}
 
+## Ownership
+{{ownership}}
+
 ## Contexto
 {{contexto}}
 

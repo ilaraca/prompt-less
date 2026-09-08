@@ -39,6 +39,7 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 | **Specs longas (milhares de linhas)** | Compressão hierárquica: sinal de negócio entra; ruído sai |
 | **Agentes multi-etapa com custo controlado** | State externo + pacote LLM enxuto por request |
 | **Handoff para Devin CLI** | `outputs/` / `docs/prompt-less/` como contexto curto para implementação |
+| **Microsserviços / multi-repo** | `mapa-servicos.yaml` + marcadores/keywords → `outputs/contextos/<id>/` |
 | **Pré-processamento barato + raciocínio caro** | Camada local (“modelo pequeno”) + slot para LLM grande |
 
 ### Onde *não* é a melhor ferramenta (ainda)
@@ -348,7 +349,8 @@ Coloque os arquivos em `pipeline/inputs/`:
 | `figma.json` | Não | Inputs, botões/actions, colunas de lista |
 | `regras.yaml` | Não | Happy path, bloqueios, tabela de decisão |
 | `engenharia.yaml` | Não | Stack, padrões, arquitetura, NFR baseline (retry, logs…) |
-| `*.txt`, `*.md` | Não | Specs/notas longas (comprimidas) |
+| `mapa-servicos.yaml` | Não | Keywords/marcadores → serviço + repos (microsserviços) |
+| `*.txt`, `*.md` | Não | Specs/notas longas (comprimidas; podem ter `## Serviço:`) |
 | `*.docx` | Não | Word moderno (`python-docx`) |
 | `*.doc` | Não | Word legado (`textutil` no macOS ou `antiword`) |
 
@@ -679,6 +681,36 @@ devin -- "Implemente docs/prompt-less/PRD.md e historia.md. Respeite NFR-R/O/S. 
 Instalação do CLI (se ainda não tiver): `curl -fsSL https://cli.devin.ai/install.sh | bash`  
 Handoff cloud, se a tarefa crescer: `/handoff` na sessão Devin ([docs](https://cognitionai.mintlify.app/work-with-devin/devin-cli)).
 
+### 11. Microsserviços — como a pipeline descobre o serviço
+
+Com um txt longo **sem** mapa, ela **não** sabe o MS. Com `inputs/mapa-servicos.yaml`:
+
+1. **Marcadores** no texto: `## Serviço: ms-cliente`, `[[service:ms-pagamento]]`, `<!-- service: ms-cliente -->`
+2. **Keywords** do mapa nos chunks sem marcador (score)
+3. Emite **um pacote por serviço** em `outputs/contextos/<id>/`
+
+```bash
+# Um serviço
+.venv/bin/python -m src.run historia --context ms-cliente
+
+# Todos os serviços com texto classificado
+.venv/bin/python -m src.run historia --all-contexts
+# → outputs/contextos/ms-cliente/{historia.md,PRD.md}
+# → outputs/contextos/ms-pagamento/{historia.md,PRD.md}
+
+# Ignorar mapa (legado: um artefato só)
+.venv/bin/python -m src.run historia --no-split
+```
+
+Amostra: `inputs/amostra_microservicos.txt` + `inputs/mapa-servicos.yaml`.
+
+Devin por repo dono:
+
+```bash
+./scripts/devin-from-promptless.sh ../bff-cliente --context ms-cliente --dry-prep
+./scripts/devin-from-promptless.sh ../ms-pagamento --context ms-pagamento --dry-prep
+```
+
 ---
 
 ## Estrutura do repositório
@@ -698,16 +730,17 @@ pipeline/
 │   ├── openapi.skeleton.yaml
 │   ├── mermaid.skeleton.md
 │   ├── historia.skeleton.md
-│   └── prd.skeleton.md       # PRD → SDD (frontmatter + RF/AC/NFR)
-├── inputs/                   # figma, regras, engenharia.yaml, docs
+│   └── prd.skeleton.md       # PRD → SDD (frontmatter + RF/AC/NFR + ownership)
+├── inputs/                   # figma, regras, engenharia, mapa-servicos, docs
 ├── state/                    # estado externo (sem histórico/docs brutos)
-├── outputs/                  # artefatos + PRD.md + llm_package_*.json
+├── outputs/                  # artefatos raiz + contextos/<serviço>/
 └── src/
-    ├── run.py                # orquestra etapas; also_emit (historia→prd)
+    ├── run.py                # --context / --all-contexts / --no-split
     ├── ingest.py             # carrega figma/regras/engenharia/template
     ├── docs_ingest.py        # extrai texto de txt/md/docx/doc
     ├── preprocess.py         # desidrata UI/regras/engenharia (pré-LLM)
     ├── engenharia.py         # baseline stack + NFR (retry, logs)
+    ├── servicos.py           # mapa + marcadores + keywords → split MS
     ├── state_store.py        # persiste estado mínimo em JSON
     ├── doc_compress.py       # compressão hierárquica + SIGNAL_RE
     ├── rag_compress.py       # retrieve estrutural + merge UI/regras/docs
