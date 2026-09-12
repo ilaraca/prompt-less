@@ -14,12 +14,19 @@ OUTPUTS = {
 }
 
 
-def emit(tipo: str, content: str, *, context: str | None = None) -> Path:
+def emit(
+    tipo: str,
+    content: str,
+    *,
+    context: str | None = None,
+    root: Path | None = None,
+) -> Path:
     name = OUTPUTS[tipo]
+    base = root or ROOT
     if context:
-        path = ROOT / "outputs" / "contextos" / context / name
+        path = base / "outputs" / "contextos" / context / name
     else:
-        path = ROOT / "outputs" / name
+        path = base / "outputs" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path

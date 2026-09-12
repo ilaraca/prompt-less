@@ -57,6 +57,7 @@ def _build_one(
     *,
     context: str | None = None,
     servico: dict[str, Any] | None = None,
+    output_root: Path | None = None,
 ) -> tuple[Path, Path, dict]:
     template = ARTIFACT_TEMPLATES[tipo].read_text(encoding="utf-8")
     # state enriquecido com ownership (sem texto)
@@ -79,10 +80,11 @@ def _build_one(
     )
     package = build_llm_package(context_pkg)
     pkg_name = f"llm_package_{tipo}.json" if not context else f"llm_package_{tipo}.json"
+    base = output_root or ROOT
     if context:
-        pkg_path = ROOT / "outputs" / "contextos" / context / pkg_name
+        pkg_path = base / "outputs" / "contextos" / context / pkg_name
     else:
-        pkg_path = ROOT / "outputs" / pkg_name
+        pkg_path = base / "outputs" / pkg_name
     pkg_path.parent.mkdir(parents=True, exist_ok=True)
     pkg_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -99,7 +101,7 @@ def _build_one(
     else:
         raise NotImplementedError("Mode --live: plugar client OpenAI/Claude no reason.py")
 
-    out = emit(tipo, artifact, context=context)
+    out = emit(tipo, artifact, context=context, root=output_root)
     return out, pkg_path, context_pkg
 
 
@@ -139,17 +141,21 @@ def _run_single(
     consolidated_chars: int = 800,
     chunk_summary_chars: int = 220,
     max_ctx: int = 2000,
+    output_root: Path | None = None,
+    state_path: Path | None = None,
 ) -> dict:
     regras = slim.get("regras") or {}
     if servico:
         regras = _filter_regras_for_service(regras, servico)
     slim_ctx = {**slim, "documents": raw_docs, "regras": regras}
+    state_kwargs = {"path": state_path} if state_path is not None else {}
     state = write_state(
         {
             **slim_ctx,
             "status": "preprocessing_done",
             "previous_actions": ["ingest", "preprocess", "servicos_split"],
-        }
+        },
+        **state_kwargs,
     )
     rag = compress_rag(
         slim_ctx,
@@ -166,6 +172,7 @@ def _run_single(
         dry_run,
         context=context,
         servico=servico,
+        output_root=output_root,
     )
     outputs = {tipo: str(out)}
     packages = {tipo: str(pkg_path)}
@@ -179,6 +186,7 @@ def _run_single(
             dry_run,
             context=context,
             servico=servico,
+            output_root=output_root,
         )
         outputs[extra] = str(extra_out)
         packages[extra] = str(extra_pkg)
@@ -202,6 +210,9 @@ def run(
     context: str | None = None,
     all_contexts: bool = False,
     no_split: bool = False,
+    inputs_dir: Path | None = None,
+    output_root: Path | None = None,
+    state_path: Path | None = None,
 ) -> dict:
     cfg = load_cfg()
     budget = cfg.get("budget") or {}
@@ -210,10 +221,19 @@ def run(
     lines_per_chunk = int(budget.get("doc_lines_per_chunk", 40))
     chunk_summary_chars = int(budget.get("rag_chunk_max_tokens", 120)) * 2
 
-    raw = load_inputs(tipo)
+    raw = load_inputs(tipo, inputs_dir=inputs_dir)
     slim = preprocess(raw)
-    mapa = None if no_split else load_mapa()
+    mapa_path = (inputs_dir / "mapa-servicos.yaml") if inputs_dir else None
+    mapa = None if no_split else load_mapa(mapa_path)
     documents = slim.get("documents") or []
+    single_kwargs = dict(
+        lines_per_chunk=lines_per_chunk,
+        consolidated_chars=consolidated_chars,
+        chunk_summary_chars=chunk_summary_chars,
+        max_ctx=max_ctx,
+        output_root=output_root,
+        state_path=state_path,
+    )
 
     # Sem mapa ou --no-split → comportamento legado (um artefato)
     if mapa is None or no_split:
@@ -223,12 +243,12 @@ def run(
             documents,
             cfg,
             dry_run,
-            lines_per_chunk=lines_per_chunk,
-            consolidated_chars=consolidated_chars,
-            chunk_summary_chars=chunk_summary_chars,
-            max_ctx=max_ctx,
+            **single_kwargs,
         )
-        write_state({**slim, "status": "emitted", "previous_actions": ["emit"]})
+        write_state(
+            {**slim, "status": "emitted", "previous_actions": ["emit"]},
+            **({"path": state_path} if state_path is not None else {}),
+        )
         return {
             **result,
             "split": False,
@@ -268,10 +288,7 @@ def run(
             documents,
             cfg,
             dry_run,
-            lines_per_chunk=lines_per_chunk,
-            consolidated_chars=consolidated_chars,
-            chunk_summary_chars=chunk_summary_chars,
-            max_ctx=max_ctx,
+            **single_kwargs,
         )
         return {
             **result,
@@ -312,10 +329,7 @@ def run(
             dry_run,
             context=sid,
             servico=svc,
-            lines_per_chunk=lines_per_chunk,
-            consolidated_chars=consolidated_chars,
-            chunk_summary_chars=chunk_summary_chars,
-            max_ctx=max_ctx,
+            **single_kwargs,
         )
         by_context.append(one)
         all_outputs[sid] = one["outputs"]
@@ -326,7 +340,8 @@ def run(
             "status": "emitted",
             "previous_actions": ["servicos_split", "emit"],
             "contexts": targets,
-        }
+        },
+        **({"path": state_path} if state_path is not None else {}),
     )
 
     return {
