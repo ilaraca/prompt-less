@@ -49,7 +49,6 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
     claim_ids = {c.id for c in spec.claims}
     rf_ids = spec.requirement_ids()
     error_ids = {e.id for e in spec.errors}
-    nfr_ids = {n.id for n in spec.nfrs}
     op_ids: set[str] = set()
 
     def _check_source_claims(subject_id: str, sources: list[str]) -> None:
@@ -62,6 +61,64 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                     message=f"{subject_id} referencia claims inexistentes: {sorted(unknown)}",
                     subject_id=subject_id,
                     source_claims=sorted(unknown),
+                )
+            )
+
+    def _check_claim_sources(claim) -> None:
+        origin = claim.origin.value if hasattr(claim.origin, "value") else str(claim.origin)
+        if not claim.sources:
+            # declared/observed exigem fonte; inferred/default/proposed sem fonte também falham
+            issues.append(
+                ValidationIssue(
+                    code="CLAIM_WITHOUT_SOURCE",
+                    severity="error",
+                    message=f"Claim {claim.id} não possui SourceRef",
+                    subject_id=claim.id,
+                )
+            )
+            return
+        for src in claim.sources:
+            if not (src.document or "").strip():
+                issues.append(
+                    ValidationIssue(
+                        code="CLAIM_SOURCE_INVALID",
+                        severity="error",
+                        message=f"Claim {claim.id} possui SourceRef sem document",
+                        subject_id=claim.id,
+                    )
+                )
+            if (
+                src.start_line is not None
+                and src.end_line is not None
+                and src.start_line > src.end_line
+            ):
+                issues.append(
+                    ValidationIssue(
+                        code="CLAIM_SOURCE_INVALID",
+                        severity="error",
+                        message=(
+                            f"Claim {claim.id} start_line ({src.start_line}) "
+                            f"> end_line ({src.end_line})"
+                        ),
+                        subject_id=claim.id,
+                    )
+                )
+        if origin == "declared" and not claim.sources:
+            issues.append(
+                ValidationIssue(
+                    code="CLAIM_WITHOUT_SOURCE",
+                    severity="error",
+                    message=f"Claim declared {claim.id} exige SourceRef",
+                    subject_id=claim.id,
+                )
+            )
+        if origin == "observed" and not claim.sources:
+            issues.append(
+                ValidationIssue(
+                    code="CLAIM_WITHOUT_SOURCE",
+                    severity="error",
+                    message=f"Claim observed {claim.id} exige evidência/fonte",
+                    subject_id=claim.id,
                 )
             )
 
@@ -120,7 +177,7 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                 )
             )
 
-    # claims duplicados
+    # claims: duplicados, confidence, SourceRef obrigatório
     seen_claims: set[str] = set()
     for c in spec.claims:
         if c.id in seen_claims:
@@ -142,6 +199,7 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                     subject_id=c.id,
                 )
             )
+        _check_claim_sources(c)
 
     # NFRs duplicados
     seen_nfr: set[str] = set()
@@ -197,8 +255,6 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
             )
         )
 
-    # silencia unused var warning conceptually
-    _ = nfr_ids
     return issues
 
 

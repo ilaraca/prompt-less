@@ -114,7 +114,6 @@ def test_confidence_zero_preserved():
 
 
 def test_unknown_source_claim_blocked():
-    from src.domain.claim import Claim, ClaimOrigin
     from src.domain.spec import CanonicalSpec, Requirement
     from src.validators import validate_spec
 
@@ -135,3 +134,35 @@ def test_unknown_source_claim_blocked():
     result = validate_spec(spec)
     assert result.has_errors
     assert any(i.code == "UNKNOWN_SOURCE_CLAIM" for i in result.errors)
+
+
+def test_claim_without_source_blocked():
+    from src.domain.claim import Claim, ClaimOrigin
+    from src.domain.spec import CanonicalSpec, Requirement
+    from src.validators import validate_spec
+
+    spec = CanonicalSpec(
+        version="1.0",
+        service_id="default",
+        repositories={},
+        claims=[
+            Claim(
+                id="CLM-001",
+                text="Cliente deve estar autenticado",
+                origin=ClaimOrigin.DECLARED,
+                confidence=1.0,
+                sources=[],
+            )
+        ],
+        requirements=[
+            Requirement(id="RF-001", text="auth", source_claims=["CLM-001"])
+        ],
+        acceptance_criteria=[],
+        operations=[],
+        errors=[],
+        nfrs=[],
+        open_questions=[],
+    )
+    result = validate_spec(spec)
+    assert result.has_errors
+    assert any(i.code == "CLAIM_WITHOUT_SOURCE" for i in result.errors)

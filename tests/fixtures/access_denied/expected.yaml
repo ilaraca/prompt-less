@@ -6,6 +6,8 @@ services:
 http_statuses:
   - 401
   - 403
+http_status_mode: subset
+max_unreviewed_inferences: 0
 ownership:
   ms-cliente:
     - bff-cliente

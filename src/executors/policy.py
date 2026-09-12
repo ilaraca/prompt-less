@@ -4,7 +4,7 @@ from __future__ import annotations
 import fnmatch
 import re
 import shlex
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
@@ -22,19 +22,56 @@ def load_profiles(path: Path | None = None) -> dict[str, Any]:
     return data.get("profiles") or {}
 
 
+def normalize_repo_path(raw: str) -> str | None:
+    """
+    Aceita apenas paths relativos canônicos dentro do repo.
+
+    Rejeita absolutos, drive letters, segmentos vazios/`.`/`..` e traversal.
+    """
+    if raw is None:
+        return None
+    value = str(raw).strip().replace("\\", "/")
+    if not value:
+        return None
+    # absolutos POSIX ou UNC
+    if value.startswith("/") or value.startswith("//"):
+        return None
+
+    path = PurePosixPath(value)
+    if path.is_absolute():
+        return None
+
+    parts = path.parts
+    if not parts:
+        return None
+    # Windows drive (C:) ou volume
+    if parts[0].endswith(":"):
+        return None
+    if any(part in {"", ".", ".."} for part in parts):
+        return None
+    # defesa extra: string ainda contém traversal após normalização parcial
+    if ".." in value.split("/"):
+        return None
+
+    return path.as_posix()
+
+
 def _match_any(path: str, patterns: list[str]) -> bool:
-    norm = path.replace("\\", "/")
-    return any(fnmatch.fnmatch(norm, pat) for pat in patterns)
+    return any(fnmatch.fnmatch(path, pat) for pat in patterns)
 
 
 def check_write_allowed(path: str, profile: dict[str, Any]) -> bool:
+    normalized = normalize_repo_path(path)
+    if normalized is None:
+        return False
+
     deny = list(profile.get("write_deny") or [])
     allow = list(profile.get("write_allow") or [])
-    if _match_any(path, deny):
+    if _match_any(normalized, deny):
         return False
     if not allow:
         return True
-    return _match_any(path, allow)
+    return _match_any(normalized, allow)
 
 
 def parse_command(command: str | dict[str, Any]) -> list[str] | None:
