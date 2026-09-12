@@ -32,17 +32,67 @@ class AcceptanceCriterion:
 
 
 @dataclass
+class ResolvedInt:
+    """Valor numérico com origem explícita (não confundir default com fato)."""
+
+    value: int | None
+    origin: str = "default"  # default | declared | inferred | observed
+    confidence: float = 0.4
+    requires_review: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> "ResolvedInt":
+        if isinstance(raw, ResolvedInt):
+            return raw
+        if isinstance(raw, dict):
+            return cls(
+                value=raw.get("value"),
+                origin=str(raw.get("origin") or "default"),
+                confidence=float(
+                    0.4 if raw.get("confidence") is None else raw["confidence"]
+                ),
+                requires_review=bool(raw.get("requires_review", True)),
+            )
+        if raw is None:
+            return cls(value=None, origin="default", confidence=0.4, requires_review=True)
+        return cls(
+            value=int(raw),
+            origin="declared",
+            confidence=1.0,
+            requires_review=False,
+        )
+
+
+@dataclass
 class Operation:
     id: str
     name: str
     owner: str | None = None
     method: str | None = None
     path: str | None = None
-    success_status: int | None = 200
+    success_status: ResolvedInt | int | None = None
     error_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        status = self.success_status
+        if isinstance(status, ResolvedInt):
+            data["success_status"] = status.to_dict()
+        elif status is None:
+            data["success_status"] = ResolvedInt(
+                value=None, origin="default", confidence=0.4, requires_review=True
+            ).to_dict()
+        else:
+            data["success_status"] = ResolvedInt(
+                value=int(status),
+                origin="declared",
+                confidence=1.0,
+                requires_review=False,
+            ).to_dict()
+        return data
 
 
 @dataclass

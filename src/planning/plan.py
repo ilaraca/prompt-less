@@ -86,6 +86,8 @@ def build_implementation_plan(
         "service_id": service_id,
         "service_name": service_name or service_id,
         "contract_version": contract_version,
+        "origin": "heuristic",
+        "requires_review": True,
         "tasks": [t.to_dict() for t in tasks],
         "waves": waves,
         "parallelism": {
@@ -94,6 +96,8 @@ def build_implementation_plan(
         },
         "rollout": {
             "strategy": "expand-contract",
+            "origin": "heuristic",
+            "requires_review": True,
             "order": [
                 "api backward-compatible",
                 "bff/gtw",
@@ -102,6 +106,10 @@ def build_implementation_plan(
             ],
             "layers_present": [L for L in LAYER_ORDER if L in by_layer],
         },
+        "note": (
+            "Topologia por camada é fallback heurístico, não evidência arquitetural. "
+            "Substituir por dependencies descobertas (openapi-client, etc.) quando disponíveis."
+        ),
     }
 
 

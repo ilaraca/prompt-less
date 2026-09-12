@@ -62,6 +62,8 @@ def test_plan_dependencies_and_contracts():
     assert api["id"] in bff["depends_on"]
     assert bff["id"] in mfe["depends_on"]
     assert plan["rollout"]["strategy"] == "expand-contract"
+    assert plan["origin"] == "heuristic"
+    assert plan["requires_review"] is True
     # ondas: api | bff | mfe
     assert plan["waves"][0] == [api["id"]]
     assert bff["id"] in plan["waves"][1]

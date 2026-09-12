@@ -8,7 +8,7 @@ from src.close_loop import close_loop
 from src.domain.spec import AcceptanceCriterion, CanonicalSpec, Requirement
 from src.executors import DevinAdapter, build_repair_request, verify_execution
 from src.executors.base import ExecutionResult
-from src.executors.policy import check_write_allowed, load_profiles
+from src.executors.policy import check_command_allowed, check_write_allowed, load_profiles
 from src.spec.builder import build_canonical_spec
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -38,6 +38,34 @@ def test_policy_denies_secret_and_prod():
     assert check_write_allowed("src/Foo.java", bff)
     assert not check_write_allowed("infra/prod/deploy.yaml", bff)
     assert not check_write_allowed("keys/app.pem", bff)
+
+
+def test_policy_rejects_shell_composition():
+    profiles = load_profiles()
+    bff = profiles["bff"]
+    assert check_command_allowed("./mvnw test", bff)
+    assert not check_command_allowed("./mvnw test && terraform apply", bff)
+    assert not check_command_allowed("pytest; kubectl delete pods --all", bff)
+    assert not check_command_allowed("npm test || rm -rf /", bff)
+    assert check_command_allowed(
+        {"executable": "./mvnw", "args": ["test"]}, bff
+    )
+
+
+def test_verify_fail_closed_unknown_layer():
+    spec = _mini_spec()
+    result = ExecutionResult(
+        run_id="r",
+        agent="devin",
+        repository="processador-pagamentos",
+        changed_files=["src/Main.java"],
+        commands_executed=["./mvnw test"],
+        tests=[{"name": "t", "passed": True}],
+        approved=True,
+    )
+    verify = verify_execution(result, spec, layer=None)
+    assert verify.status == "failed"
+    assert any(i.code == "UNKNOWN_EXECUTION_LAYER" for i in verify.issues)
 
 
 def test_verify_passes_good_execution():
@@ -70,6 +98,27 @@ def test_verify_fails_out_of_scope_and_unmapped():
     assert "RF_NOT_MAPPED" in codes
 
 
+def test_verify_no_tests_is_error_for_code_change():
+    spec = _mini_spec()
+    result = ExecutionResult(
+        run_id="r",
+        agent="devin",
+        repository="bff-cliente",
+        layer="bff",
+        changed_files=["src/main/java/Foo.java"],
+        commands_executed=["./mvnw test"],
+        tests=[],
+        requirement_traceability={
+            spec.requirements[0].id: ["src/main/java/Foo.java"],
+            spec.acceptance_criteria[0].id: ["src/main/java/Foo.java"],
+        },
+        approved=True,
+    )
+    verify = verify_execution(result, spec, layer="bff")
+    assert verify.status == "failed"
+    assert any(i.code == "NO_TESTS_REPORTED" and i.severity == "error" for i in verify.issues)
+
+
 def test_needs_approval_gate():
     spec = _mini_spec()
     data = json.loads((EXEC / "execution_needs_approval.json").read_text(encoding="utf-8"))
@@ -94,6 +143,10 @@ def test_repair_request_requires_approval():
     assert repair is not None
     assert repair["status"] == "repair_requested"
     assert repair["requires_approval"] is True
+    assert "infra/prod/deploy.yaml" in repair["required_reverts"]
+    assert ".github/workflows/deploy.yml" in repair["required_reverts"]
+    assert "infra/prod/deploy.yaml" not in repair["editable_surface"]
+    assert "RF-001" not in repair["editable_surface"]
     exhausted = build_repair_request(verify, result, attempt=3)
     assert exhausted["status"] == "exhausted"
 

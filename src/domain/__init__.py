@@ -4,7 +4,7 @@ from __future__ import annotations
 from src.domain.claim import Claim, ClaimOrigin
 from src.domain.chunk import ChunkSummary, DocumentChunk
 from src.domain.source_ref import SourceRef
-from src.domain.spec import AcceptanceCriterion, CanonicalSpec, Requirement
+from src.domain.spec import AcceptanceCriterion, CanonicalSpec, Requirement, ResolvedInt
 
 __all__ = [
     "AcceptanceCriterion",
@@ -14,5 +14,6 @@ __all__ = [
     "ChunkSummary",
     "DocumentChunk",
     "Requirement",
+    "ResolvedInt",
     "SourceRef",
 ]

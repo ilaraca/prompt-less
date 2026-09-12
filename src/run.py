@@ -225,7 +225,12 @@ def _run_single(
         val_path = None
 
     if validation.has_errors:
-        raise PipelineBlocked(validation, spec)
+        raise PipelineBlocked(
+            validation,
+            spec,
+            discarded=list(rag.get("discarded") or []),
+            context=context,
+        )
 
     out, pkg_path, context_pkg = _build_one(
         tipo,
@@ -365,23 +370,29 @@ def run(
         }
 
     def _blocked_payload(exc: PipelineBlocked, *, context: str | None = None) -> dict:
+        ctx = context or exc.context
         store.events.emit(
             "validation.failed",
             errors=len(exc.validation.errors),
-            context=context,
+            context=ctx,
         )
         report = run_ctx.validations_dir / (
-            f"{context}/spec-validation.json" if context else "spec-validation.json"
+            f"{ctx}/spec-validation.json" if ctx else "spec-validation.json"
         )
+        claims = (
+            [claim.to_dict() for claim in exc.spec.claims] if exc.spec else []
+        )
+        discarded = list(exc.discarded or [])
         return {
-            "context": context,
+            "context": ctx,
             "status": "blocked",
             "reason": "spec_validation_failed",
             "validation": exc.validation.to_dict(),
             "report": str(report) if report.exists() else None,
             "questions": [i.message for i in exc.validation.errors],
-            "claims": [],
-            "discarded": [],
+            "claims": claims,
+            "discarded": discarded,
+            "canonical_spec_service": exc.spec.service_id if exc.spec else None,
             "outputs": {},
             "output": None,
         }

@@ -13,8 +13,19 @@ from src.domain.spec import (
     OpenQuestion,
     Operation,
     Requirement,
+    ResolvedInt,
     SpecError,
 )
+
+
+def _parse_confidence(raw: Any, *, default: float) -> float:
+    """Preserva 0.0 explícito; só aplica default quando ausente."""
+    if raw is None:
+        return default
+    value = float(raw)
+    if value < 0.0 or value > 1.0:
+        raise ValueError(f"confidence fora de [0,1]: {value}")
+    return value
 
 
 def _claims_from_dicts(raw: list[dict[str, Any]]) -> list[Claim]:
@@ -40,7 +51,7 @@ def _claims_from_dicts(raw: list[dict[str, Any]]) -> list[Claim]:
                 id=str(c.get("id") or f"CLM-{len(out)+1:04d}"),
                 text=str(c.get("text") or ""),
                 origin=origin_e,
-                confidence=float(c.get("confidence") or 0.5),
+                confidence=_parse_confidence(c.get("confidence"), default=0.5),
                 sources=sources,
                 service_id=c.get("service_id"),
                 requires_review=bool(c.get("requires_review")),
@@ -114,12 +125,32 @@ def build_canonical_spec(
         status = b.get("status")
         try:
             status_i = int(status)
+            status_declared = True
         except (TypeError, ValueError):
-            status_i = 422
+            status_i = None
+            status_declared = False
+            open_questions.append(
+                OpenQuestion(
+                    id=f"Q-{qn:03d}",
+                    text=(
+                        f"Trigger '{trigger}' sem HTTP status válido "
+                        f"(recebido: {status!r}) — qual status prevalece?"
+                    ),
+                    blocking=True,
+                    source_claims=[],
+                )
+            )
+            qn += 1
+
         rf_id = f"RF-{i:03d}"
         ac_id = f"AC-{i:03d}"
         err_id = f"ERR-{i:03d}"
-        text = f"Validar: {trigger} → HTTP {status_i}"
+        if status_declared:
+            text = f"Validar: {trigger} → HTTP {status_i}"
+            then = f"retornar HTTP {status_i}"
+        else:
+            text = f"Validar: {trigger} → HTTP status a confirmar"
+            then = "retornar HTTP status a confirmar"
         src = _match_claim_ids(f"{trigger} {status_i}", claim_objs)
         if not src:
             synth = Claim(
@@ -140,19 +171,20 @@ def build_canonical_spec(
                 requirement_id=rf_id,
                 given="condição de bloqueio",
                 when=trigger,
-                then=f"retornar HTTP {status_i}",
+                then=then,
                 source_claims=src,
             )
         )
-        errors.append(
-            SpecError(
-                id=err_id,
-                trigger=trigger,
-                status=status_i,
-                code=b.get("code"),
-                source_claims=src,
+        if status_declared and status_i is not None:
+            errors.append(
+                SpecError(
+                    id=err_id,
+                    trigger=trigger,
+                    status=status_i,
+                    code=b.get("code"),
+                    source_claims=src,
+                )
             )
-        )
 
     # happy path / decisões → RF extras
     base = len(requirements)
@@ -194,7 +226,7 @@ def build_canonical_spec(
         requirements.append(
             Requirement(
                 id="RF-001",
-                text="Permitir submissão com dados válidos (HTTP 200)",
+                text="Permitir submissão com dados válidos (HTTP status a confirmar)",
                 source_claims=[c.id for c in claim_objs[:1]],
             )
         )
@@ -204,13 +236,14 @@ def build_canonical_spec(
                 requirement_id="RF-001",
                 given="dados válidos",
                 when="submeter",
-                then="sucesso 200",
+                then="sucesso com status HTTP a confirmar",
                 source_claims=[c.id for c in claim_objs[:1]],
             )
         )
 
     operations: list[Operation] = []
     for i, a in enumerate(ui.get("actions") or [], start=1):
+        # Não inferir 200/201 sem evidência — default explícito exige review
         operations.append(
             Operation(
                 id=f"OP-{i:03d}",
@@ -218,7 +251,12 @@ def build_canonical_spec(
                 owner=service_id,
                 method=a.get("method"),
                 path=a.get("path"),
-                success_status=200,
+                success_status=ResolvedInt(
+                    value=None,
+                    origin="default",
+                    confidence=0.4,
+                    requires_review=True,
+                ),
                 error_ids=[e.id for e in errors],
             )
         )
