@@ -50,12 +50,12 @@ def test_two_runs_do_not_overwrite_state(tmp_path: Path):
     s2 = json.loads((d2 / "state.json").read_text(encoding="utf-8"))
     assert s1.get("status") == "emitted"
     assert s2.get("status") == "emitted"
-    # timestamps/arquivos distintos
-    assert (d1 / "manifest.json").read_text() != (d2 / "manifest.json").read_text() or True
     m1 = json.loads((d1 / "manifest.json").read_text(encoding="utf-8"))
     m2 = json.loads((d2 / "manifest.json").read_text(encoding="utf-8"))
     assert m1["run_id"] == "run-aaaa-0001"
     assert m2["run_id"] == "run-bbbb-0002"
+    assert m1["run_id"] != m2["run_id"]
+    assert (d1 / "manifest.json").read_text() != (d2 / "manifest.json").read_text()
     assert m1["status"] == "completed"
     assert m2["status"] == "completed"
 

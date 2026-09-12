@@ -16,8 +16,12 @@ def knowledge_dir(root: Path) -> Path:
 def load_history(root: Path) -> dict[str, Any]:
     path = knowledge_dir(root) / "proposals-history.json"
     if not path.exists():
-        return {"accepted": [], "rejected": []}
-    return json.loads(path.read_text(encoding="utf-8"))
+        return {"accepted": [], "rejected": [], "approved_for_experiment": []}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.setdefault("accepted", [])  # legado
+    data.setdefault("rejected", [])
+    data.setdefault("approved_for_experiment", [])
+    return data
 
 
 def save_history(root: Path, history: dict[str, Any]) -> Path:
@@ -32,14 +36,26 @@ def decide_proposals(
     *,
     root: Path,
 ) -> dict[str, Any]:
+    """
+    Gate de propostas.
+
+    Enquanto não houver workspace candidato separado, o estado positivo é
+    `approved_for_experiment` (não `accepted`) — a proposta entra no knowledge
+    store para experimento, sem afirmar melhoria comprovada.
+    """
     history = load_history(root)
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    accepted: list[dict[str, Any]] = []
+    approved: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
 
     if comparison.get("decision") == "reject" or comparison.get("regression"):
         for p in proposals:
-            item = {**p, "status": "rejected", "decided_at": now, "reason": comparison.get("reasons")}
+            item = {
+                **p,
+                "status": "rejected",
+                "decided_at": now,
+                "reason": comparison.get("reasons"),
+            }
             rejected.append(item)
             history["rejected"].append(item)
     else:
@@ -55,13 +71,19 @@ def decide_proposals(
                 rejected.append(item)
                 history["rejected"].append(item)
             else:
-                item = {**p, "status": "accepted", "decided_at": now}
-                accepted.append(item)
-                history["accepted"].append(item)
+                item = {
+                    **p,
+                    "status": "approved_for_experiment",
+                    "decided_at": now,
+                }
+                approved.append(item)
+                history["approved_for_experiment"].append(item)
 
     path = save_history(root, history)
     return {
-        "accepted": accepted,
+        # chave legada para callers; semanticamente = approved_for_experiment
+        "accepted": approved,
+        "approved_for_experiment": approved,
         "rejected": rejected,
         "history_path": str(path),
         "comparison": comparison,

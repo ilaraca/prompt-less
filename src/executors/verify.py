@@ -47,15 +47,40 @@ def verify_execution(
     layer: str | None = None,
     profiles: dict[str, Any] | None = None,
     max_unresolved: int = 0,
+    tests_required: bool | None = None,
 ) -> VerifyResult:
     issues: list[VerifyIssue] = []
     layer_name = layer or result.layer or _infer_layer(result.repository)
     profiles = profiles or load_profiles()
-    profile = profiles.get(layer_name or "") or {}
+
+    # Fail-closed: camada desconhecida ou profile ausente
+    if not layer_name:
+        issues.append(
+            VerifyIssue(
+                code="UNKNOWN_EXECUTION_LAYER",
+                severity="error",
+                message=f"Não foi possível determinar a camada de {result.repository}",
+                subject_id=result.repository,
+            )
+        )
+        return VerifyResult(status="failed", issues=issues)
+
+    if layer_name not in profiles:
+        issues.append(
+            VerifyIssue(
+                code="UNKNOWN_EXECUTION_LAYER",
+                severity="error",
+                message=f"Profile inexistente para camada `{layer_name}` ({result.repository})",
+                subject_id=layer_name,
+            )
+        )
+        return VerifyResult(status="failed", issues=issues)
+
+    profile = profiles[layer_name]
 
     # arquivos fora da policy
     for path in result.changed_files:
-        if profile and not check_write_allowed(path, profile):
+        if not check_write_allowed(path, profile):
             issues.append(
                 VerifyIssue(
                     code="FILE_OUT_OF_SCOPE",
@@ -67,22 +92,24 @@ def verify_execution(
 
     # comandos negados
     for cmd in result.commands_executed:
-        if profile and not check_command_allowed(cmd, profile):
+        if not check_command_allowed(cmd, profile):
             issues.append(
                 VerifyIssue(
                     code="COMMAND_DENIED",
                     severity="error",
                     message=f"Comando negado pela policy: {cmd}",
-                    subject_id=cmd,
+                    subject_id=str(cmd),
                 )
             )
 
-    # testes
+    # testes — mudanças de código exigem evidência (fail-closed)
+    code_change = _is_code_change(result.changed_files)
+    require_tests = tests_required if tests_required is not None else code_change
     if not result.tests:
         issues.append(
             VerifyIssue(
                 code="NO_TESTS_REPORTED",
-                severity="warning",
+                severity="error" if require_tests else "warning",
                 message="Executor não reportou testes",
             )
         )
@@ -153,6 +180,22 @@ def verify_execution(
         status = "passed"
 
     return VerifyResult(status=status, issues=issues, coverage=coverage)
+
+
+def _is_code_change(changed_files: list[str]) -> bool:
+    """True se há alteração além de documentação pura."""
+    if not changed_files:
+        return False
+    doc_suffixes = (".md", ".txt", ".rst", ".adoc")
+    doc_prefixes = ("docs/", "README", "CHANGELOG", "LICENSE")
+    for path in changed_files:
+        norm = path.replace("\\", "/")
+        if any(norm.startswith(p) or norm.upper().startswith(p.upper()) for p in doc_prefixes):
+            continue
+        if norm.lower().endswith(doc_suffixes):
+            continue
+        return True
+    return False
 
 
 def _infer_layer(repository: str) -> str | None:

@@ -27,10 +27,20 @@ from src.domain.spec import (  # noqa: E402
     OpenQuestion,
     Operation,
     Requirement,
+    ResolvedInt,
     SpecError,
 )
 from src.executors import DevinAdapter, build_repair_request, verify_execution  # noqa: E402
 from src.executors.base import ExecutionResult  # noqa: E402
+
+
+def _parse_confidence(raw, *, default: float = 1.0) -> float:
+    if raw is None:
+        return default
+    value = float(raw)
+    if value < 0.0 or value > 1.0:
+        raise ValueError(f"confidence fora de [0,1]: {value}")
+    return value
 
 
 def _load_spec(path: Path) -> CanonicalSpec:
@@ -43,13 +53,19 @@ def _load_spec(path: Path) -> CanonicalSpec:
                 id=c["id"],
                 text=c.get("text") or "",
                 origin=ClaimOrigin(c.get("origin") or "declared"),
-                confidence=float(c.get("confidence") or 1.0),
+                confidence=_parse_confidence(c.get("confidence"), default=1.0),
                 sources=[
                     SourceRef(**{k: v for k, v in s.items() if k in SourceRef.__dataclass_fields__})
                     for s in (c.get("sources") or [])
                 ],
             )
         )
+    operations = []
+    for o in raw.get("operations") or []:
+        op_data = dict(o)
+        if "success_status" in op_data:
+            op_data["success_status"] = ResolvedInt.from_raw(op_data["success_status"])
+        operations.append(Operation(**op_data))
     return CanonicalSpec(
         version=str(raw.get("spec_version") or "1.0"),
         service_id=str((svc.get("id") or "default")),
@@ -60,7 +76,7 @@ def _load_spec(path: Path) -> CanonicalSpec:
         acceptance_criteria=[
             AcceptanceCriterion(**a) for a in (raw.get("acceptance_criteria") or [])
         ],
-        operations=[Operation(**o) for o in (raw.get("operations") or [])],
+        operations=operations,
         errors=[SpecError(**e) for e in (raw.get("errors") or [])],
         nfrs=[Requirement(**n) for n in (raw.get("nfrs") or [])],
         open_questions=[OpenQuestion(**q) for q in (raw.get("open_questions") or [])],

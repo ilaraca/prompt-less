@@ -35,7 +35,8 @@ def improve_from_verify(
     proposals = build_proposals(diagnosis)
 
     # baseline vs candidate: hoje o harness não muta código; candidate = mesma eval
-    # (demonstra gate). Propostas accepted só afetam knowledge store.
+    # (demonstra gate). Propostas low-risk vão para approved_for_experiment no
+    # knowledge store — não afirmam melhoria aplicada.
     baseline = run_eval_suite(output_root=eval_root / "baseline")
     candidate = run_eval_suite(output_root=eval_root / "candidate")
     comparison = compare_evals(baseline, candidate)

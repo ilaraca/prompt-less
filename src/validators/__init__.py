@@ -46,7 +46,25 @@ class ValidationResult:
 
 def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
+    claim_ids = {c.id for c in spec.claims}
     rf_ids = spec.requirement_ids()
+    error_ids = {e.id for e in spec.errors}
+    nfr_ids = {n.id for n in spec.nfrs}
+    op_ids: set[str] = set()
+
+    def _check_source_claims(subject_id: str, sources: list[str]) -> None:
+        unknown = set(sources) - claim_ids
+        if unknown:
+            issues.append(
+                ValidationIssue(
+                    code="UNKNOWN_SOURCE_CLAIM",
+                    severity="error",
+                    message=f"{subject_id} referencia claims inexistentes: {sorted(unknown)}",
+                    subject_id=subject_id,
+                    source_claims=sorted(unknown),
+                )
+            )
+
     for rf in spec.requirements:
         if not rf.source_claims and rf.status != "baseline":
             issues.append(
@@ -57,6 +75,8 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                     subject_id=rf.id,
                 )
             )
+        _check_source_claims(rf.id, list(rf.source_claims))
+
     for ac in spec.acceptance_criteria:
         if ac.requirement_id not in rf_ids:
             issues.append(
@@ -67,6 +87,76 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                     subject_id=ac.id,
                 )
             )
+        _check_source_claims(ac.id, list(ac.source_claims))
+
+    for err in spec.errors:
+        _check_source_claims(err.id, list(err.source_claims))
+
+    for q in spec.open_questions:
+        _check_source_claims(q.id, list(q.source_claims))
+
+    for nfr in spec.nfrs:
+        _check_source_claims(nfr.id, list(nfr.source_claims))
+
+    for op in spec.operations:
+        if op.id in op_ids:
+            issues.append(
+                ValidationIssue(
+                    code="DUPLICATE_ID",
+                    severity="error",
+                    message=f"ID duplicado: {op.id}",
+                    subject_id=op.id,
+                )
+            )
+        op_ids.add(op.id)
+        unknown_errs = set(op.error_ids) - error_ids
+        if unknown_errs:
+            issues.append(
+                ValidationIssue(
+                    code="UNKNOWN_ERROR_ID",
+                    severity="error",
+                    message=f"{op.id} referencia errors inexistentes: {sorted(unknown_errs)}",
+                    subject_id=op.id,
+                )
+            )
+
+    # claims duplicados
+    seen_claims: set[str] = set()
+    for c in spec.claims:
+        if c.id in seen_claims:
+            issues.append(
+                ValidationIssue(
+                    code="DUPLICATE_ID",
+                    severity="error",
+                    message=f"Claim ID duplicado: {c.id}",
+                    subject_id=c.id,
+                )
+            )
+        seen_claims.add(c.id)
+        if not (0.0 <= float(c.confidence) <= 1.0):
+            issues.append(
+                ValidationIssue(
+                    code="INVALID_CONFIDENCE",
+                    severity="error",
+                    message=f"Claim {c.id} confidence fora de [0,1]: {c.confidence}",
+                    subject_id=c.id,
+                )
+            )
+
+    # NFRs duplicados
+    seen_nfr: set[str] = set()
+    for nfr in spec.nfrs:
+        if nfr.id in seen_nfr:
+            issues.append(
+                ValidationIssue(
+                    code="DUPLICATE_ID",
+                    severity="error",
+                    message=f"NFR ID duplicado: {nfr.id}",
+                    subject_id=nfr.id,
+                )
+            )
+        seen_nfr.add(nfr.id)
+
     seen: set[str] = set()
     for obj_id in (
         [r.id for r in spec.requirements]
@@ -83,6 +173,32 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                 )
             )
         seen.add(obj_id)
+
+    # claims órfãos (existem mas ninguém referencia)
+    referenced: set[str] = set()
+    for rf in spec.requirements:
+        referenced.update(rf.source_claims)
+    for ac in spec.acceptance_criteria:
+        referenced.update(ac.source_claims)
+    for err in spec.errors:
+        referenced.update(err.source_claims)
+    for q in spec.open_questions:
+        referenced.update(q.source_claims)
+    for nfr in spec.nfrs:
+        referenced.update(nfr.source_claims)
+    orphans = claim_ids - referenced
+    for oid in sorted(orphans):
+        issues.append(
+            ValidationIssue(
+                code="ORPHAN_CLAIM",
+                severity="warning",
+                message=f"Claim sem uso: {oid}",
+                subject_id=oid,
+            )
+        )
+
+    # silencia unused var warning conceptually
+    _ = nfr_ids
     return issues
 
 
@@ -141,7 +257,16 @@ def validate_spec(spec: CanonicalSpec) -> ValidationResult:
 class PipelineBlocked(Exception):
     """Spec inválido — renderização bloqueada."""
 
-    def __init__(self, validation: ValidationResult, spec: CanonicalSpec | None = None):
+    def __init__(
+        self,
+        validation: ValidationResult,
+        spec: CanonicalSpec | None = None,
+        *,
+        discarded: list[dict[str, Any]] | None = None,
+        context: str | None = None,
+    ):
         self.validation = validation
         self.spec = spec
-        super().__init__(f"pipeline blocked: {validation.errors} errors")
+        self.discarded = list(discarded or [])
+        self.context = context
+        super().__init__(f"pipeline blocked: {len(validation.errors)} errors")
