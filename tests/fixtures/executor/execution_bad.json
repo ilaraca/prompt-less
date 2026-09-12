@@ -1,0 +1,18 @@
+{
+  "run_id": "run-bad-001",
+  "agent": "devin",
+  "repository": "bff-cliente",
+  "layer": "bff",
+  "changed_files": [
+    "src/main/java/ClienteService.java",
+    "infra/prod/deploy.yaml",
+    ".github/workflows/deploy.yml"
+  ],
+  "commands_executed": ["terraform apply"],
+  "tests": [
+    { "name": "ClienteServiceTest", "passed": false }
+  ],
+  "unresolved_items": ["auth edge case"],
+  "requirement_traceability": {},
+  "approved": true
+}

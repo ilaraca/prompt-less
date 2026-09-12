@@ -1,0 +1,15 @@
+{
+  "run_id": "run-pending-001",
+  "agent": "devin",
+  "repository": "bff-cliente",
+  "layer": "bff",
+  "changed_files": ["src/main/java/ClienteService.java", "tests/T.java"],
+  "commands_executed": ["./mvnw test"],
+  "tests": [{ "name": "T", "passed": true }],
+  "unresolved_items": [],
+  "requirement_traceability": {
+    "RF-001": ["src/main/java/ClienteService.java"],
+    "AC-001": ["tests/T.java"]
+  },
+  "approved": false
+}
