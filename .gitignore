@@ -1,6 +1,7 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 state/workflow.json
 state/repo_index.json
 outputs/*
