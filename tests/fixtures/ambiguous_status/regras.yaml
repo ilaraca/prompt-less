@@ -1,0 +1,12 @@
+# Ambiguidade intencional: mesmo gatilho com dois status HTTP.
+fluxo: Cadastro de Cliente
+bloqueios:
+  - trigger: CPF inválido
+    status: 400
+    code: CPF_INVALIDO
+  - trigger: CPF inválido
+    status: 422
+    code: CPF_INVALIDO_ALT
+decisoes:
+  - quando: payload válido
+    entao: retornar 200

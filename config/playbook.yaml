@@ -1,0 +1,50 @@
+version: 1
+# Ações limitadas e auditáveis — nunca mutação ampla sem eval.
+playbooks:
+  clarify_http_status:
+    description: Exigir resolução de status HTTP ambíguo antes do render
+    proposal_type: validator_rule
+    change:
+      key: validators.ambiguity.blocking
+      value: true
+    risk: low
+
+  reinforce_requirement_mapping:
+    description: Falhar verify se RF não mapeado (já default); sugerir checklist Devin
+    proposal_type: executor_prompt_hint
+    change:
+      key: executor.require_rf_mapping
+      value: true
+    risk: low
+
+  enforce_layer_policy:
+    description: Manter deny de infra/prod e secrets
+    proposal_type: policy_confirm
+    change:
+      key: permission_profiles.enforce_deny
+      value: true
+    risk: low
+
+  fix_failing_tests:
+    description: Pedir reparo limitado aos testes reportados
+    proposal_type: repair_request
+    change:
+      key: repair.focus
+      value: tests
+    risk: medium
+
+  human_gate:
+    description: Não auto-aprovar; registrar pendência
+    proposal_type: governance
+    change:
+      key: approval.auto
+      value: false
+    risk: low
+
+  capture_more_evidence:
+    description: Exigir ExecutionResult completo na próxima run
+    proposal_type: observability
+    change:
+      key: executor.require_full_result
+      value: true
+    risk: low

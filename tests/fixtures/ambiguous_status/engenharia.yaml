@@ -1,0 +1,33 @@
+version: 1
+stack:
+  bff: [Java 17, Spring Boot 3]
+  mfe: [TypeScript, React]
+padroes: [hexagonal, openapi-first]
+arquitetura:
+  fluxo: MFE -> BFF -> API Domínio
+  contrato: openapi
+resiliencia:
+  timeout_ms: 2000
+  retry:
+    max_attempts: 2
+    backoff: exponential
+observabilidade:
+  logs:
+    formato: structured_json
+    campos_minimos: [timestamp, level, service, correlation_id, message]
+    sem_pii: true
+seguranca:
+  validar_input: true
+documentacao:
+  readme:
+    obrigatorio: true
+    secoes_minimas: [proposito, como-rodar-local]
+  changelog:
+    obrigatorio: true
+    formato: keep-a-changelog
+    path: CHANGELOG.md
+  api_docs:
+    obrigatorio: true
+    por_linguagem:
+      java: javadoc
+      typescript: tsdoc

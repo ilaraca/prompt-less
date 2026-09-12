@@ -1,0 +1,19 @@
+case_id: access_denied
+tipo: historia
+split: true
+services:
+  - ms-cliente
+http_statuses:
+  - 401
+  - 403
+ownership:
+  ms-cliente:
+    - bff-cliente
+    - ms-cliente
+artifacts:
+  - historia
+  - prd
+max_est_tokens: 2000
+signals:
+  - autenticação
+  - permissão

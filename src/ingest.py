@@ -21,13 +21,14 @@ ARTIFACT_TEMPLATES = {
 }
 
 
-def load_inputs(tipo: str) -> dict[str, Any]:
+def load_inputs(tipo: str, inputs_dir: Path | None = None) -> dict[str, Any]:
     if tipo not in ARTIFACT_TEMPLATES:
         raise ValueError(f"tipo inválido: {tipo}")
 
-    figma_path = INPUTS / "figma.json"
-    regras_path = INPUTS / "regras.yaml"
-    engenharia_path = INPUTS / "engenharia.yaml"
+    base = inputs_dir or INPUTS
+    figma_path = base / "figma.json"
+    regras_path = base / "regras.yaml"
+    engenharia_path = base / "engenharia.yaml"
     template_path = ARTIFACT_TEMPLATES[tipo]
 
     figma = json.loads(figma_path.read_text(encoding="utf-8")) if figma_path.exists() else {}
@@ -36,7 +37,7 @@ def load_inputs(tipo: str) -> dict[str, Any]:
         yaml.safe_load(engenharia_path.read_text(encoding="utf-8")) if engenharia_path.exists() else {}
     ) or {}
     template = template_path.read_text(encoding="utf-8")
-    documents = load_documents(INPUTS)
+    documents = load_documents(base)
 
     return {
         "tipo": tipo,

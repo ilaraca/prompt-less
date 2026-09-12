@@ -1,0 +1,44 @@
+version: 1
+# Padrões de falha conhecidos → owner provável + ação recomendada
+patterns:
+  - id: FP-AMBIGUOUS_STATUS
+    codes: [AMBIGUOUS_HTTP_STATUS]
+    terminal_cause: spec_ambiguity
+    probable_owner: canonical_spec
+    recommended_action: request_business_decision
+    playbook: clarify_http_status
+
+  - id: FP-RF_NOT_MAPPED
+    codes: [RF_NOT_MAPPED, AC_NOT_MAPPED]
+    terminal_cause: incomplete_traceability
+    probable_owner: executor
+    recommended_action: request_repair
+    playbook: reinforce_requirement_mapping
+
+  - id: FP-FILE_OUT_OF_SCOPE
+    codes: [FILE_OUT_OF_SCOPE, COMMAND_DENIED]
+    terminal_cause: policy_violation
+    probable_owner: permission_profiles
+    recommended_action: tighten_or_explain_scope
+    playbook: enforce_layer_policy
+
+  - id: FP-TEST_FAILED
+    codes: [TEST_FAILED]
+    terminal_cause: test_failure
+    probable_owner: implementation
+    recommended_action: request_repair
+    playbook: fix_failing_tests
+
+  - id: FP-APPROVAL
+    codes: [HUMAN_APPROVAL_REQUIRED]
+    terminal_cause: awaiting_human
+    probable_owner: harness_governance
+    recommended_action: wait_for_approval
+    playbook: human_gate
+
+  - id: FP-UNKNOWN
+    codes: []
+    terminal_cause: unknown
+    probable_owner: harness
+    recommended_action: investigate
+    playbook: capture_more_evidence

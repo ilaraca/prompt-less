@@ -27,7 +27,9 @@ from src.ingest import ARTIFACT_TEMPLATES, load_inputs  # noqa: E402
 from src.preprocess import preprocess  # noqa: E402
 from src.rag_compress import compress_rag  # noqa: E402
 from src.reason import build_llm_package, dry_run_scaffold  # noqa: E402
+from src.renderers import render_historia, render_prd  # noqa: E402
 from src.repo_index import load_index, service_evidence  # noqa: E402
+from src.runtime import RunContext, RunStore  # noqa: E402
 from src.servicos import (  # noqa: E402
     docs_for_service,
     get_service,
@@ -35,7 +37,9 @@ from src.servicos import (  # noqa: E402
     load_mapa,
     partition_documents,
 )
+from src.spec.builder import build_canonical_spec  # noqa: E402
 from src.state_store import write_state  # noqa: E402
+from src.validators import PipelineBlocked, validate_spec  # noqa: E402
 
 
 def load_cfg() -> dict:
@@ -57,9 +61,11 @@ def _build_one(
     *,
     context: str | None = None,
     servico: dict[str, Any] | None = None,
+    output_root: Path | None = None,
+    artifacts_root: Path | None = None,
+    canonical_spec: Any = None,
 ) -> tuple[Path, Path, dict]:
     template = ARTIFACT_TEMPLATES[tipo].read_text(encoding="utf-8")
-    # state enriquecido com ownership (sem texto)
     state_out = {
         **state,
         "servico": {
@@ -78,28 +84,53 @@ def _build_one(
         budget_tokens=max_ctx,
     )
     package = build_llm_package(context_pkg)
-    pkg_name = f"llm_package_{tipo}.json" if not context else f"llm_package_{tipo}.json"
-    if context:
-        pkg_path = ROOT / "outputs" / "contextos" / context / pkg_name
+    pkg_name = f"llm_package_{tipo}.json"
+
+    if artifacts_root is not None:
+        emit_root = artifacts_root.parent
+        emit_subdir = "artifacts"
+        if context:
+            pkg_path = artifacts_root / "contextos" / context / pkg_name
+        else:
+            pkg_path = artifacts_root / pkg_name
     else:
-        pkg_path = ROOT / "outputs" / pkg_name
+        emit_root = output_root
+        emit_subdir = "outputs"
+        base = output_root or ROOT
+        if context:
+            pkg_path = base / "outputs" / "contextos" / context / pkg_name
+        else:
+            pkg_path = base / "outputs" / pkg_name
+
     pkg_path.parent.mkdir(parents=True, exist_ok=True)
     pkg_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if dry_run:
-        artifact = dry_run_scaffold(
-            tipo,
-            slim["ui"],
-            slim["regras"],
-            template,
-            consolidated=rag.get("consolidated") or "",
-            engenharia=slim.get("engenharia") or {},
-            servico=servico,
-        )
+        if tipo == "historia" and canonical_spec is not None:
+            artifact = render_historia(
+                canonical_spec, template, engenharia=slim.get("engenharia") or {}
+            )
+        elif tipo == "prd" and canonical_spec is not None:
+            artifact = render_prd(
+                canonical_spec,
+                template,
+                engenharia=slim.get("engenharia") or {},
+                consolidated=rag.get("consolidated") or "",
+            )
+        else:
+            artifact = dry_run_scaffold(
+                tipo,
+                slim["ui"],
+                slim["regras"],
+                template,
+                consolidated=rag.get("consolidated") or "",
+                engenharia=slim.get("engenharia") or {},
+                servico=servico,
+            )
     else:
         raise NotImplementedError("Mode --live: plugar client OpenAI/Claude no reason.py")
 
-    out = emit(tipo, artifact, context=context)
+    out = emit(tipo, artifact, context=context, root=emit_root, subdir=emit_subdir)
     return out, pkg_path, context_pkg
 
 
@@ -115,7 +146,6 @@ def _filter_regras_for_service(regras: dict, svc: dict) -> dict:
         blob = " ".join(str(v) for v in (b.values() if isinstance(b, dict) else [b])).lower()
         if any(k in blob for k in kws):
             blocks.append(b)
-    # se nada casou, mantém todos (melhor falso positivo que história vazia)
     out["bloqueios"] = blocks or list(regras.get("bloqueios") or [])
     decs = []
     for d in regras.get("decisoes") or []:
@@ -139,17 +169,22 @@ def _run_single(
     consolidated_chars: int = 800,
     chunk_summary_chars: int = 220,
     max_ctx: int = 2000,
+    output_root: Path | None = None,
+    state_path: Path | None = None,
+    artifacts_root: Path | None = None,
 ) -> dict:
     regras = slim.get("regras") or {}
     if servico:
         regras = _filter_regras_for_service(regras, servico)
     slim_ctx = {**slim, "documents": raw_docs, "regras": regras}
+    state_kwargs = {"path": state_path} if state_path is not None else {}
     state = write_state(
         {
             **slim_ctx,
             "status": "preprocessing_done",
             "previous_actions": ["ingest", "preprocess", "servicos_split"],
-        }
+        },
+        **state_kwargs,
     )
     rag = compress_rag(
         slim_ctx,
@@ -157,6 +192,41 @@ def _run_single(
         lines_per_chunk=lines_per_chunk,
         chunk_summary_chars=chunk_summary_chars,
     )
+
+    spec = build_canonical_spec(
+        ui=slim_ctx.get("ui") or {},
+        regras=regras,
+        engenharia=slim_ctx.get("engenharia") or {},
+        claims=list(rag.get("claims") or []),
+        servico=servico,
+    )
+    validation = validate_spec(spec)
+
+    # persiste IR + validação antes de qualquer render
+    if artifacts_root is not None:
+        spec_dir = artifacts_root / "contextos" / context if context else artifacts_root
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        spec_path = spec_dir / "canonical-spec.yaml"
+        spec_path.write_text(
+            yaml.safe_dump(spec.to_dict(), allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        val_dir = artifacts_root.parent / "validations"
+        if context:
+            val_dir = val_dir / context
+        val_dir.mkdir(parents=True, exist_ok=True)
+        val_path = val_dir / "spec-validation.json"
+        val_path.write_text(
+            json.dumps(validation.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    else:
+        spec_path = None
+        val_path = None
+
+    if validation.has_errors:
+        raise PipelineBlocked(validation, spec)
+
     out, pkg_path, context_pkg = _build_one(
         tipo,
         slim_ctx,
@@ -166,6 +236,9 @@ def _run_single(
         dry_run,
         context=context,
         servico=servico,
+        output_root=output_root,
+        artifacts_root=artifacts_root,
+        canonical_spec=spec,
     )
     outputs = {tipo: str(out)}
     packages = {tipo: str(pkg_path)}
@@ -179,12 +252,16 @@ def _run_single(
             dry_run,
             context=context,
             servico=servico,
+            output_root=output_root,
+            artifacts_root=artifacts_root,
+            canonical_spec=spec,
         )
         outputs[extra] = str(extra_out)
         packages[extra] = str(extra_pkg)
+    if spec_path is not None:
+        outputs["canonical_spec"] = str(spec_path)
     return {
         "context": context,
-        # o índice fica fora do retorno (e do prompt): só alimenta o scaffold
         "servico": {k: v for k, v in (servico or {}).items() if k != "indice"} or None,
         "indice_usado": bool((servico or {}).get("indice")),
         "output": str(out),
@@ -192,6 +269,11 @@ def _run_single(
         "llm_packages": packages,
         "est_tokens": context_pkg["est_tokens"],
         "rag": context_pkg["rag_stats"],
+        "claims": list(rag.get("claims") or []),
+        "discarded": list(rag.get("discarded") or []),
+        "canonical_spec": str(spec_path) if spec_path else None,
+        "validation": validation.to_dict(),
+        "validation_report": str(val_path) if val_path else None,
     }
 
 
@@ -202,6 +284,10 @@ def run(
     context: str | None = None,
     all_contexts: bool = False,
     no_split: bool = False,
+    inputs_dir: Path | None = None,
+    output_root: Path | None = None,
+    state_path: Path | None = None,
+    run_id: str | None = None,
 ) -> dict:
     cfg = load_cfg()
     budget = cfg.get("budget") or {}
@@ -209,147 +295,254 @@ def run(
     consolidated_chars = int(budget.get("consolidated_summary_max_tokens", 200)) * 4
     lines_per_chunk = int(budget.get("doc_lines_per_chunk", 40))
     chunk_summary_chars = int(budget.get("rag_chunk_max_tokens", 120)) * 2
+    pipeline_version = str(cfg.get("version") or "1.0")
 
-    raw = load_inputs(tipo)
+    compat_root = output_root or ROOT
+    run_ctx = RunContext.create(
+        root=compat_root,
+        objective=tipo,
+        pipeline_version=pipeline_version,
+        run_id=run_id,
+    )
+    store = RunStore(run_ctx)
+    store.bootstrap()
+    store.events.emit("stage_started", stage="ingest")
+
+    effective_state = run_ctx.state_path
+    legacy_state = state_path
+
+    raw = load_inputs(tipo, inputs_dir=inputs_dir)
     slim = preprocess(raw)
-    mapa = None if no_split else load_mapa()
+    store.events.emit("stage_completed", stage="ingest")
+    store.events.emit("stage_completed", stage="preprocess")
+    store.write_manifest({"current_stage": "reason", "service_id": context})
+
+    mapa_path = (inputs_dir / "mapa-servicos.yaml") if inputs_dir else None
+    mapa = None if no_split else load_mapa(mapa_path)
     documents = slim.get("documents") or []
-
-    # Sem mapa ou --no-split → comportamento legado (um artefato)
-    if mapa is None or no_split:
-        result = _run_single(
-            tipo,
-            slim,
-            documents,
-            cfg,
-            dry_run,
-            lines_per_chunk=lines_per_chunk,
-            consolidated_chars=consolidated_chars,
-            chunk_summary_chars=chunk_summary_chars,
-            max_ctx=max_ctx,
-        )
-        write_state({**slim, "status": "emitted", "previous_actions": ["emit"]})
-        return {
-            **result,
-            "split": False,
-            "docs_ingested": [
-                {
-                    "name": d.get("name"),
-                    "lines": d.get("lines"),
-                    "est_tokens_raw": d.get("est_tokens_raw"),
-                }
-                for d in (raw.get("documents") or [])
-            ],
-        }
-
-    # Com mapa: --context, --all-contexts, ou all automático para historia/prd
-    ids = list_service_ids(mapa)
-    if context:
-        if context not in ids and context != "_unassigned":
-            raise SystemExit(
-                f"contexto desconhecido: {context}. Disponíveis: {', '.join(ids)}"
-            )
-        targets = [context]
-    elif all_contexts or tipo in {"historia", "prd"}:
-        # default com mapa: gera um pacote por serviço que tiver texto
-        partitioned = partition_documents(
-            documents, mapa, lines_per_chunk=lines_per_chunk
-        )
-        targets = [sid for sid in ids if sid in partitioned]
-        if "_unassigned" in partitioned:
-            targets.append("_unassigned")
-        if not targets:
-            targets = ids  # ainda emite ownership mesmo sem texto
-    else:
-        # openapi/mermaid sem flag → legado single (docs completos)
-        result = _run_single(
-            tipo,
-            slim,
-            documents,
-            cfg,
-            dry_run,
-            lines_per_chunk=lines_per_chunk,
-            consolidated_chars=consolidated_chars,
-            chunk_summary_chars=chunk_summary_chars,
-            max_ctx=max_ctx,
-        )
-        return {
-            **result,
-            "split": False,
-            "mapa": True,
-            "hint": "Use --context ID ou --all-contexts para fatiar por microsserviço",
-            "docs_ingested": [
-                {"name": d.get("name"), "lines": d.get("lines")}
-                for d in (raw.get("documents") or [])
-            ],
-        }
-
-    by_context = []
-    all_outputs: dict[str, Any] = {}
-    index = load_index()
-    for sid in targets:
-        svc = (
-            get_service(mapa, sid)
-            if sid != "_unassigned"
-            else {
-                "id": "_unassigned",
-                "nome": "Não classificado",
-                "repos": [],
-                "keywords": [],
-            }
-        )
-        evidencia = service_evidence(index, sid)
-        if evidencia:
-            svc["indice"] = {k: v for k, v in evidencia.items() if k != "repos"}
-        docs = docs_for_service(
-            documents, mapa, sid, lines_per_chunk=lines_per_chunk
-        )
-        one = _run_single(
-            tipo,
-            slim,
-            docs,
-            cfg,
-            dry_run,
-            context=sid,
-            servico=svc,
-            lines_per_chunk=lines_per_chunk,
-            consolidated_chars=consolidated_chars,
-            chunk_summary_chars=chunk_summary_chars,
-            max_ctx=max_ctx,
-        )
-        by_context.append(one)
-        all_outputs[sid] = one["outputs"]
-
-    write_state(
-        {
-            **slim,
-            "status": "emitted",
-            "previous_actions": ["servicos_split", "emit"],
-            "contexts": targets,
-        }
+    single_kwargs = dict(
+        lines_per_chunk=lines_per_chunk,
+        consolidated_chars=consolidated_chars,
+        chunk_summary_chars=chunk_summary_chars,
+        max_ctx=max_ctx,
+        output_root=compat_root,
+        state_path=effective_state,
+        artifacts_root=run_ctx.artifacts_dir,
     )
 
-    return {
-        "split": True,
-        "contexts": targets,
-        "by_context": by_context,
-        "outputs": all_outputs,
-        "output": by_context[0]["output"] if by_context else None,
-        "docs_ingested": [
-            {"name": d.get("name"), "lines": d.get("lines"), "est_tokens_raw": d.get("est_tokens_raw")}
-            for d in (raw.get("documents") or [])
-        ],
-        "partition_preview": {
-            sid: {
-                "lines": meta["lines"],
-                "sources": meta["sources"],
-                "repos": meta["meta"].get("repos"),
-            }
-            for sid, meta in partition_documents(
+    def _mirror_state(data: dict) -> None:
+        write_state(data, path=effective_state)
+        if legacy_state is not None and Path(legacy_state) != effective_state:
+            write_state(data, path=legacy_state)
+        if output_root is None and legacy_state is None:
+            write_state(data)
+
+    def _finalize(result: dict, *, status: str = "completed") -> dict:
+        claims: list[dict[str, Any]] = list(result.get("claims") or [])
+        discarded: list[dict[str, Any]] = list(result.get("discarded") or [])
+        if result.get("by_context"):
+            for ctx_result in result["by_context"]:
+                claims.extend(ctx_result.get("claims") or [])
+                discarded.extend(ctx_result.get("discarded") or [])
+        seen: set[str] = set()
+        unique_claims: list[dict[str, Any]] = []
+        for c in claims:
+            cid = str(c.get("id") or "")
+            if cid and cid not in seen:
+                seen.add(cid)
+                unique_claims.append(c)
+        prov_path = store.write_provenance(claims=unique_claims, discarded=discarded)
+        store.mirror_artifacts_to_outputs(compat_root)
+        store.finish(status, result)
+        return {
+            **result,
+            "run_id": run_ctx.run_id,
+            "status": status,
+            "run_dir": str(run_ctx.run_dir),
+            "claims_count": len(unique_claims),
+            "discarded_count": len(discarded),
+            "provenance": str(prov_path),
+        }
+
+    def _blocked_payload(exc: PipelineBlocked, *, context: str | None = None) -> dict:
+        store.events.emit(
+            "validation.failed",
+            errors=len(exc.validation.errors),
+            context=context,
+        )
+        report = run_ctx.validations_dir / (
+            f"{context}/spec-validation.json" if context else "spec-validation.json"
+        )
+        return {
+            "context": context,
+            "status": "blocked",
+            "reason": "spec_validation_failed",
+            "validation": exc.validation.to_dict(),
+            "report": str(report) if report.exists() else None,
+            "questions": [i.message for i in exc.validation.errors],
+            "claims": [],
+            "discarded": [],
+            "outputs": {},
+            "output": None,
+        }
+
+    try:
+        if mapa is None or no_split:
+            store.events.emit("stage_started", stage="emit")
+            try:
+                result = _run_single(tipo, slim, documents, cfg, dry_run, **single_kwargs)
+            except PipelineBlocked as exc:
+                return _finalize(
+                    {
+                        **_blocked_payload(exc),
+                        "split": False,
+                        "docs_ingested": [
+                            {
+                                "name": d.get("name"),
+                                "lines": d.get("lines"),
+                                "est_tokens_raw": d.get("est_tokens_raw"),
+                            }
+                            for d in (raw.get("documents") or [])
+                        ],
+                    },
+                    status="blocked",
+                )
+            _mirror_state({**slim, "status": "emitted", "previous_actions": ["emit"]})
+            return _finalize(
+                {
+                    **result,
+                    "split": False,
+                    "docs_ingested": [
+                        {
+                            "name": d.get("name"),
+                            "lines": d.get("lines"),
+                            "est_tokens_raw": d.get("est_tokens_raw"),
+                        }
+                        for d in (raw.get("documents") or [])
+                    ],
+                }
+            )
+
+        ids = list_service_ids(mapa)
+        if context:
+            if context not in ids and context != "_unassigned":
+                raise SystemExit(
+                    f"contexto desconhecido: {context}. Disponíveis: {', '.join(ids)}"
+                )
+            targets = [context]
+        elif all_contexts or tipo in {"historia", "prd"}:
+            partitioned = partition_documents(
                 documents, mapa, lines_per_chunk=lines_per_chunk
-            ).items()
-        },
-    }
+            )
+            targets = [sid for sid in ids if sid in partitioned]
+            if "_unassigned" in partitioned:
+                targets.append("_unassigned")
+            if not targets:
+                targets = ids
+        else:
+            store.events.emit("stage_started", stage="emit")
+            try:
+                result = _run_single(tipo, slim, documents, cfg, dry_run, **single_kwargs)
+            except PipelineBlocked as exc:
+                return _finalize(
+                    {**_blocked_payload(exc), "split": False, "mapa": True},
+                    status="blocked",
+                )
+            return _finalize(
+                {
+                    **result,
+                    "split": False,
+                    "mapa": True,
+                    "hint": "Use --context ID ou --all-contexts para fatiar por microsserviço",
+                    "docs_ingested": [
+                        {"name": d.get("name"), "lines": d.get("lines")}
+                        for d in (raw.get("documents") or [])
+                    ],
+                }
+            )
+
+        by_context = []
+        all_outputs: dict[str, Any] = {}
+        index = load_index()
+        any_blocked = False
+        store.events.emit("stage_started", stage="emit", targets=targets)
+        for sid in targets:
+            svc = (
+                get_service(mapa, sid)
+                if sid != "_unassigned"
+                else {
+                    "id": "_unassigned",
+                    "nome": "Não classificado",
+                    "repos": [],
+                    "keywords": [],
+                }
+            )
+            evidencia = service_evidence(index, sid)
+            if evidencia:
+                svc["indice"] = {k: v for k, v in evidencia.items() if k != "repos"}
+            docs = docs_for_service(
+                documents, mapa, sid, lines_per_chunk=lines_per_chunk
+            )
+            try:
+                one = _run_single(
+                    tipo,
+                    slim,
+                    docs,
+                    cfg,
+                    dry_run,
+                    context=sid,
+                    servico=svc,
+                    **single_kwargs,
+                )
+            except PipelineBlocked as exc:
+                any_blocked = True
+                one = _blocked_payload(exc, context=sid)
+            by_context.append(one)
+            all_outputs[sid] = one.get("outputs") or {}
+
+        _mirror_state(
+            {
+                **slim,
+                "status": "blocked" if any_blocked else "emitted",
+                "previous_actions": ["servicos_split", "emit"],
+                "contexts": targets,
+            }
+        )
+
+        return _finalize(
+            {
+                "split": True,
+                "contexts": targets,
+                "by_context": by_context,
+                "outputs": all_outputs,
+                "output": by_context[0].get("output") if by_context else None,
+                "docs_ingested": [
+                    {
+                        "name": d.get("name"),
+                        "lines": d.get("lines"),
+                        "est_tokens_raw": d.get("est_tokens_raw"),
+                    }
+                    for d in (raw.get("documents") or [])
+                ],
+                "partition_preview": {
+                    sid: {
+                        "lines": meta["lines"],
+                        "sources": meta["sources"],
+                        "repos": meta["meta"].get("repos"),
+                    }
+                    for sid, meta in partition_documents(
+                        documents, mapa, lines_per_chunk=lines_per_chunk
+                    ).items()
+                },
+            },
+            status="blocked" if any_blocked else "completed",
+        )
+    except PipelineBlocked as exc:
+        return _finalize(_blocked_payload(exc), status="blocked")
+    except Exception as exc:
+        store.events.emit("run_failed", error=str(exc))
+        store.finish("failed")
+        raise
 
 
 def main() -> None:

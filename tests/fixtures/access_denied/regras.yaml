@@ -1,0 +1,11 @@
+fluxo: Consulta de Cliente
+bloqueios:
+  - trigger: sem autenticação
+    status: 401
+    code: UNAUTHENTICATED
+  - trigger: sem permissão admin
+    status: 403
+    code: FORBIDDEN
+decisoes:
+  - quando: token válido e papel admin
+    entao: retornar 200

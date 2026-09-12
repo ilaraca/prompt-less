@@ -4,6 +4,8 @@ from __future__ import annotations
 from typing import Any
 
 from src.doc_compress import compress_documents
+from src.domain.claim import Claim, ClaimOrigin
+from src.domain.source_ref import SourceRef
 from src.engenharia import rag_snippet
 
 
@@ -82,6 +84,22 @@ def compress_rag(
     parts = [p for p in (struct_part, docs_part.get("consolidated") or "") if p]
     consolidated = consolidate(parts, max_chars=consolidated_chars)
 
+    # claims estruturados das regras (declared)
+    struct_claims: list[dict] = []
+    n = 1
+    for i, b in enumerate((ctx.get("regras") or {}).get("bloqueios") or []):
+        text = f"block status={b.get('status')} trigger={b.get('trigger')}"
+        struct_claims.append(
+            Claim(
+                id=f"CLM-R{n:03d}",
+                text=text,
+                origin=ClaimOrigin.DECLARED,
+                confidence=1.0,
+                sources=[SourceRef(document="regras.yaml", section=f"bloqueios[{i}]")],
+            ).to_dict()
+        )
+        n += 1
+
     raw_tokens = (sum(len(c["text"]) for c in struct_chunks) // 4) + int(
         docs_part.get("est_tokens_raw") or 0
     )
@@ -90,6 +108,8 @@ def compress_rag(
         "summaries": struct_summaries + (docs_part.get("chunk_summaries") or []),
         "consolidated": consolidated,
         "documents": docs_part,
+        "claims": struct_claims + list(docs_part.get("claims") or []),
+        "discarded": list(docs_part.get("discarded") or []),
         "est_tokens_raw": raw_tokens,
         "est_tokens_compressed": max(1, len(consolidated) // 4) if consolidated else 0,
     }

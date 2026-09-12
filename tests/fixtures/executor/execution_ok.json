@@ -1,0 +1,23 @@
+{
+  "run_id": "run-ok-001",
+  "agent": "devin",
+  "repository": "bff-cliente",
+  "layer": "bff",
+  "base_commit": "aaa",
+  "result_commit": "bbb",
+  "changed_files": [
+    "src/main/java/ClienteService.java",
+    "tests/ClienteServiceTest.java",
+    "README.md"
+  ],
+  "commands_executed": ["./mvnw test"],
+  "tests": [
+    { "name": "ClienteServiceTest", "passed": true }
+  ],
+  "unresolved_items": [],
+  "requirement_traceability": {
+    "RF-001": ["src/main/java/ClienteService.java"],
+    "AC-001": ["tests/ClienteServiceTest.java"]
+  },
+  "approved": true
+}

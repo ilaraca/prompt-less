@@ -1,0 +1,6 @@
+## Serviço: ms-cliente
+REGRA acesso — sem autenticação retornar HTTP 401
+REGRA acesso — sem permissão admin retornar HTTP 403
+endpoint GET /clientes/{cpf}
+auth obrigatoria no BFF cliente
+permissao admin senao HTTP 403
