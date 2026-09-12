@@ -1,0 +1,26 @@
+case_id: two_services
+tipo: historia
+split: true
+services:
+  - ms-cliente
+  - ms-pagamento
+http_statuses:
+  - 200
+  - 400
+  - 401
+  - 422
+ownership:
+  ms-cliente:
+    - mfe-onboarding
+    - bff-cliente
+    - ms-cliente
+  ms-pagamento:
+    - bff-pagamentos
+    - ms-pagamento
+artifacts:
+  - historia
+  - prd
+max_est_tokens: 2000
+signals:
+  - /clientes
+  - /pagamentos

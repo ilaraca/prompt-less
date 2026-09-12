@@ -1,0 +1,30 @@
+version: 1
+unassigned:
+  strategy: bucket
+servicos:
+  ms-cliente:
+    nome: Cadastro de Cliente
+    repos:
+      - mfe-onboarding
+      - bff-cliente
+      - ms-cliente
+    keywords:
+      - cliente
+      - cpf
+      - /clientes
+      - cadastro
+    aliases:
+      - cliente
+  ms-pagamento:
+    nome: Pagamentos
+    repos:
+      - bff-pagamentos
+      - ms-pagamento
+    keywords:
+      - pagamento
+      - pix
+      - /pagamentos
+      - saldo
+    aliases:
+      - pagamento
+      - pagamentos

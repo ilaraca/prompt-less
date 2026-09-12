@@ -1,0 +1,17 @@
+version: 1
+unassigned:
+  strategy: bucket
+servicos:
+  ms-cliente:
+    nome: Cadastro de Cliente
+    repos:
+      - bff-cliente
+      - ms-cliente
+    keywords:
+      - cliente
+      - cpf
+      - /clientes
+      - auth
+      - permiss
+    aliases:
+      - cliente

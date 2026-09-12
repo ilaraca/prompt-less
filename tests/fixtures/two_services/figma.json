@@ -1,0 +1,11 @@
+{
+  "inputs": [
+    { "name": "nome", "type": "string", "required": true },
+    { "name": "valor", "type": "number", "required": true }
+  ],
+  "buttons": [
+    { "id": "cadastrar", "method": "POST", "path": "/clientes" },
+    { "id": "pagar", "method": "POST", "path": "/pagamentos" }
+  ],
+  "columns": ["id", "status"]
+}

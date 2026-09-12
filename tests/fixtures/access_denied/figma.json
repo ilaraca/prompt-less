@@ -1,0 +1,9 @@
+{
+  "inputs": [
+    { "name": "cpf", "type": "string", "required": true }
+  ],
+  "buttons": [
+    { "id": "consultar", "method": "GET", "path": "/clientes/{cpf}" }
+  ],
+  "columns": ["id", "status"]
+}

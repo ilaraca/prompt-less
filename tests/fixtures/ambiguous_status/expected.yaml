@@ -1,0 +1,20 @@
+# Baseline: pipeline atual ainda NÃO bloqueia ambiguidade — só documenta presença dos dois status.
+case_id: ambiguous_status
+tipo: historia
+split: true
+services:
+  - ms-cliente
+http_statuses:
+  - 400
+  - 422
+ownership:
+  ms-cliente:
+    - bff-cliente
+    - ms-cliente
+artifacts:
+  - historia
+  - prd
+max_est_tokens: 2000
+allow_ambiguity: true
+signals:
+  - CPF inválido

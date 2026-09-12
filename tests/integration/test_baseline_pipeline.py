@@ -1,0 +1,129 @@
+"""Integração baseline: serviços, HTTP, ownership, artefatos, budget."""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+from tests.conftest import CASES
+
+HTTP_RE = re.compile(r"\b(200|201|400|401|403|404|422)\b")
+
+
+def _artifact_blobs(result: dict, out_root: Path) -> str:
+    texts: list[str] = []
+    if result.get("split") and result.get("by_context"):
+        for ctx in result["by_context"]:
+            for path in (ctx.get("outputs") or {}).values():
+                p = Path(path)
+                if p.exists():
+                    texts.append(p.read_text(encoding="utf-8"))
+    else:
+        for path in (result.get("outputs") or {}).values():
+            p = Path(path)
+            if p.exists():
+                texts.append(p.read_text(encoding="utf-8"))
+    # também varre a árvore emitida (garantia)
+    for p in out_root.rglob("*"):
+        if p.suffix in {".md", ".yaml", ".mmd"} and p.is_file():
+            texts.append(p.read_text(encoding="utf-8"))
+    return "\n".join(texts)
+
+
+def _statuses_in(text: str) -> set[str]:
+    return set(HTTP_RE.findall(text))
+
+
+def _est_tokens(result: dict) -> list[int]:
+    if result.get("split") and result.get("by_context"):
+        return [int(c.get("est_tokens") or 0) for c in result["by_context"]]
+    return [int(result.get("est_tokens") or 0)]
+
+
+@pytest.mark.parametrize("case_id", CASES)
+def test_baseline_pipeline_properties(case_id: str, run_case, load_expected):
+    expected = load_expected(case_id)
+    result, out_root = run_case(case_id, tipo=expected.get("tipo", "historia"))
+
+    # --- serviços ---
+    want_services = set(expected.get("services") or [])
+    if expected.get("split"):
+        assert result.get("split") is True
+        got = set(result.get("contexts") or [])
+        assert want_services.issubset(got), f"serviços faltando: {want_services - got}"
+    else:
+        assert result.get("split") is False
+
+    # --- ownership ---
+    ownership = expected.get("ownership") or {}
+    if result.get("by_context"):
+        by_id = {
+            (c.get("servico") or {}).get("id"): c
+            for c in result["by_context"]
+            if (c.get("servico") or {}).get("id")
+        }
+        for sid, repos in ownership.items():
+            assert sid in by_id, f"contexto ausente: {sid}"
+            got_repos = set((by_id[sid].get("servico") or {}).get("repos") or [])
+            assert set(repos).issubset(got_repos), f"ownership {sid}: {set(repos) - got_repos}"
+
+    # --- artefatos ---
+    want_artifacts = set(expected.get("artifacts") or [])
+    if result.get("by_context"):
+        for ctx in result["by_context"]:
+            if (ctx.get("servico") or {}).get("id") == "_unassigned":
+                continue
+            produced = set((ctx.get("outputs") or {}).keys())
+            assert want_artifacts.issubset(produced), f"artefatos {ctx.get('context')}: {want_artifacts - produced}"
+            for path in (ctx.get("outputs") or {}).values():
+                assert Path(path).is_file()
+    else:
+        produced = set((result.get("outputs") or {}).keys())
+        assert want_artifacts.issubset(produced)
+
+    # --- HTTP / sinais ---
+    blob = _artifact_blobs(result, out_root)
+    # regras.yaml + scaffold: status entram via bloqueios no artefato
+    got_http = _statuses_in(blob)
+    for code in expected.get("http_statuses") or []:
+        assert str(code) in got_http, f"{case_id}: status {code} não encontrado nos artefatos"
+
+    for signal in expected.get("signals") or []:
+        assert signal.lower() in blob.lower() or signal in blob, (
+            f"{case_id}: sinal ausente: {signal}"
+        )
+
+    # --- budget ---
+    max_tokens = int(expected.get("max_est_tokens") or 2000)
+    for n in _est_tokens(result):
+        assert n <= max_tokens, f"{case_id}: est_tokens {n} > budget {max_tokens}"
+        assert n > 0
+
+    # --- state sem texto bruto ---
+    state_file = out_root / "state" / "workflow.json"
+    assert state_file.is_file()
+    state_txt = state_file.read_text(encoding="utf-8")
+    assert "ruido telemetria" not in state_txt.lower()
+
+
+def test_two_services_partition(run_case, load_expected):
+    expected = load_expected("two_services")
+    result, _ = run_case("two_services")
+    preview = result.get("partition_preview") or {}
+    assert "ms-cliente" in preview
+    assert "ms-pagamento" in preview
+    assert preview["ms-cliente"]["lines"] > 0
+    assert preview["ms-pagamento"]["lines"] > 0
+    assert set(expected["ownership"]["ms-cliente"]).issubset(
+        set(preview["ms-cliente"].get("repos") or [])
+    )
+
+
+def test_ambiguous_status_keeps_both_codes(run_case, load_expected):
+    """Documenta comportamento atual: ambiguidade 400/422 não bloqueia a execução."""
+    expected = load_expected("ambiguous_status")
+    assert expected.get("allow_ambiguity") is True
+    result, out_root = run_case("ambiguous_status")
+    blob = _artifact_blobs(result, out_root)
+    assert "400" in blob and "422" in blob

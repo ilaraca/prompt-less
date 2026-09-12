@@ -1,0 +1,5 @@
+## Serviço: ms-cliente
+REGRA ambígua — CPF inválido pode retornar HTTP 400
+REGRA ambígua — CPF inválido também descrito como HTTP 422
+endpoint POST /clientes
+Dado cadastro Quando CPF inválido Então status indefinido entre 400 e 422

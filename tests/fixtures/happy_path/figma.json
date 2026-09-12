@@ -1,0 +1,11 @@
+{
+  "inputs": [
+    { "name": "nome", "type": "string", "required": true },
+    { "name": "email", "type": "string", "required": true },
+    { "name": "cpf", "type": "string", "required": true }
+  ],
+  "buttons": [
+    { "id": "salvar", "method": "POST", "path": "/clientes" }
+  ],
+  "columns": ["id", "nome", "status"]
+}

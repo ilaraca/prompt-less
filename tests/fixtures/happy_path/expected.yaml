@@ -1,0 +1,21 @@
+# Expectativas anotadas (baseline harness PR1)
+case_id: happy_path
+tipo: historia
+split: true
+services:
+  - ms-cliente
+http_statuses:
+  - 200
+  - 400
+ownership:
+  ms-cliente:
+    - mfe-onboarding
+    - bff-cliente
+    - ms-cliente
+artifacts:
+  - historia
+  - prd
+max_est_tokens: 2000
+signals:
+  - /clientes
+  - CPF
