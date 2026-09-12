@@ -214,6 +214,8 @@ def _run_single(
         "llm_packages": packages,
         "est_tokens": context_pkg["est_tokens"],
         "rag": context_pkg["rag_stats"],
+        "claims": list(rag.get("claims") or []),
+        "discarded": list(rag.get("discarded") or []),
     }
 
 
@@ -278,6 +280,21 @@ def run(
             write_state(data)
 
     def _finalize(result: dict) -> dict:
+        claims: list[dict[str, Any]] = list(result.get("claims") or [])
+        discarded: list[dict[str, Any]] = list(result.get("discarded") or [])
+        if result.get("by_context"):
+            for ctx_result in result["by_context"]:
+                claims.extend(ctx_result.get("claims") or [])
+                discarded.extend(ctx_result.get("discarded") or [])
+        # dedupe claims by id
+        seen: set[str] = set()
+        unique_claims: list[dict[str, Any]] = []
+        for c in claims:
+            cid = str(c.get("id") or "")
+            if cid and cid not in seen:
+                seen.add(cid)
+                unique_claims.append(c)
+        prov_path = store.write_provenance(claims=unique_claims, discarded=discarded)
         store.mirror_artifacts_to_outputs(compat_root)
         store.finish("completed", result)
         return {
@@ -285,6 +302,9 @@ def run(
             "run_id": run_ctx.run_id,
             "status": "completed",
             "run_dir": str(run_ctx.run_dir),
+            "claims_count": len(unique_claims),
+            "discarded_count": len(discarded),
+            "provenance": str(prov_path),
         }
 
     try:

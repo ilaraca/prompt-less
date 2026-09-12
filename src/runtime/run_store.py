@@ -45,6 +45,30 @@ class RunStore:
         existing.update(data)
         path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def write_provenance(
+        self,
+        *,
+        claims: list[dict[str, Any]],
+        discarded: list[dict[str, Any]],
+    ) -> Path:
+        """Persiste claims e relatório de descarte em validations/."""
+        report = {
+            "run_id": self.ctx.run_id,
+            "claims_count": len(claims),
+            "discarded_count": len(discarded),
+            "claims": claims,
+            "discarded": discarded,
+        }
+        path = self.ctx.validations_dir / "provenance.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.events.emit(
+            "provenance_recorded",
+            claims=len(claims),
+            discarded=len(discarded),
+        )
+        return path
+
     def finish(self, status: str, result: dict[str, Any] | None = None) -> None:
         self.write_manifest(
             {
