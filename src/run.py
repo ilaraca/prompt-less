@@ -28,6 +28,7 @@ from src.preprocess import preprocess  # noqa: E402
 from src.rag_compress import compress_rag  # noqa: E402
 from src.reason import build_llm_package, dry_run_scaffold  # noqa: E402
 from src.repo_index import load_index, service_evidence  # noqa: E402
+from src.runtime import RunContext, RunStore  # noqa: E402
 from src.servicos import (  # noqa: E402
     docs_for_service,
     get_service,
@@ -58,9 +59,9 @@ def _build_one(
     context: str | None = None,
     servico: dict[str, Any] | None = None,
     output_root: Path | None = None,
+    artifacts_root: Path | None = None,
 ) -> tuple[Path, Path, dict]:
     template = ARTIFACT_TEMPLATES[tipo].read_text(encoding="utf-8")
-    # state enriquecido com ownership (sem texto)
     state_out = {
         **state,
         "servico": {
@@ -79,12 +80,24 @@ def _build_one(
         budget_tokens=max_ctx,
     )
     package = build_llm_package(context_pkg)
-    pkg_name = f"llm_package_{tipo}.json" if not context else f"llm_package_{tipo}.json"
-    base = output_root or ROOT
-    if context:
-        pkg_path = base / "outputs" / "contextos" / context / pkg_name
+    pkg_name = f"llm_package_{tipo}.json"
+
+    if artifacts_root is not None:
+        emit_root = artifacts_root.parent
+        emit_subdir = "artifacts"
+        if context:
+            pkg_path = artifacts_root / "contextos" / context / pkg_name
+        else:
+            pkg_path = artifacts_root / pkg_name
     else:
-        pkg_path = base / "outputs" / pkg_name
+        emit_root = output_root
+        emit_subdir = "outputs"
+        base = output_root or ROOT
+        if context:
+            pkg_path = base / "outputs" / "contextos" / context / pkg_name
+        else:
+            pkg_path = base / "outputs" / pkg_name
+
     pkg_path.parent.mkdir(parents=True, exist_ok=True)
     pkg_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -101,7 +114,7 @@ def _build_one(
     else:
         raise NotImplementedError("Mode --live: plugar client OpenAI/Claude no reason.py")
 
-    out = emit(tipo, artifact, context=context, root=output_root)
+    out = emit(tipo, artifact, context=context, root=emit_root, subdir=emit_subdir)
     return out, pkg_path, context_pkg
 
 
@@ -117,7 +130,6 @@ def _filter_regras_for_service(regras: dict, svc: dict) -> dict:
         blob = " ".join(str(v) for v in (b.values() if isinstance(b, dict) else [b])).lower()
         if any(k in blob for k in kws):
             blocks.append(b)
-    # se nada casou, mantém todos (melhor falso positivo que história vazia)
     out["bloqueios"] = blocks or list(regras.get("bloqueios") or [])
     decs = []
     for d in regras.get("decisoes") or []:
@@ -143,6 +155,7 @@ def _run_single(
     max_ctx: int = 2000,
     output_root: Path | None = None,
     state_path: Path | None = None,
+    artifacts_root: Path | None = None,
 ) -> dict:
     regras = slim.get("regras") or {}
     if servico:
@@ -173,6 +186,7 @@ def _run_single(
         context=context,
         servico=servico,
         output_root=output_root,
+        artifacts_root=artifacts_root,
     )
     outputs = {tipo: str(out)}
     packages = {tipo: str(pkg_path)}
@@ -187,12 +201,12 @@ def _run_single(
             context=context,
             servico=servico,
             output_root=output_root,
+            artifacts_root=artifacts_root,
         )
         outputs[extra] = str(extra_out)
         packages[extra] = str(extra_pkg)
     return {
         "context": context,
-        # o índice fica fora do retorno (e do prompt): só alimenta o scaffold
         "servico": {k: v for k, v in (servico or {}).items() if k != "indice"} or None,
         "indice_usado": bool((servico or {}).get("indice")),
         "output": str(out),
@@ -213,6 +227,7 @@ def run(
     inputs_dir: Path | None = None,
     output_root: Path | None = None,
     state_path: Path | None = None,
+    run_id: str | None = None,
 ) -> dict:
     cfg = load_cfg()
     budget = cfg.get("budget") or {}
@@ -220,9 +235,28 @@ def run(
     consolidated_chars = int(budget.get("consolidated_summary_max_tokens", 200)) * 4
     lines_per_chunk = int(budget.get("doc_lines_per_chunk", 40))
     chunk_summary_chars = int(budget.get("rag_chunk_max_tokens", 120)) * 2
+    pipeline_version = str(cfg.get("version") or "1.0")
+
+    compat_root = output_root or ROOT
+    run_ctx = RunContext.create(
+        root=compat_root,
+        objective=tipo,
+        pipeline_version=pipeline_version,
+        run_id=run_id,
+    )
+    store = RunStore(run_ctx)
+    store.bootstrap()
+    store.events.emit("stage_started", stage="ingest")
+
+    effective_state = run_ctx.state_path
+    legacy_state = state_path
 
     raw = load_inputs(tipo, inputs_dir=inputs_dir)
     slim = preprocess(raw)
+    store.events.emit("stage_completed", stage="ingest")
+    store.events.emit("stage_completed", stage="preprocess")
+    store.write_manifest({"current_stage": "reason", "service_id": context})
+
     mapa_path = (inputs_dir / "mapa-servicos.yaml") if inputs_dir else None
     mapa = None if no_split else load_mapa(mapa_path)
     documents = slim.get("documents") or []
@@ -231,140 +265,154 @@ def run(
         consolidated_chars=consolidated_chars,
         chunk_summary_chars=chunk_summary_chars,
         max_ctx=max_ctx,
-        output_root=output_root,
-        state_path=state_path,
+        output_root=compat_root,
+        state_path=effective_state,
+        artifacts_root=run_ctx.artifacts_dir,
     )
 
-    # Sem mapa ou --no-split → comportamento legado (um artefato)
-    if mapa is None or no_split:
-        result = _run_single(
-            tipo,
-            slim,
-            documents,
-            cfg,
-            dry_run,
-            **single_kwargs,
-        )
-        write_state(
-            {**slim, "status": "emitted", "previous_actions": ["emit"]},
-            **({"path": state_path} if state_path is not None else {}),
-        )
+    def _mirror_state(data: dict) -> None:
+        write_state(data, path=effective_state)
+        if legacy_state is not None and Path(legacy_state) != effective_state:
+            write_state(data, path=legacy_state)
+        if output_root is None and legacy_state is None:
+            write_state(data)
+
+    def _finalize(result: dict) -> dict:
+        store.mirror_artifacts_to_outputs(compat_root)
+        store.finish("completed", result)
         return {
             **result,
-            "split": False,
-            "docs_ingested": [
+            "run_id": run_ctx.run_id,
+            "status": "completed",
+            "run_dir": str(run_ctx.run_dir),
+        }
+
+    try:
+        if mapa is None or no_split:
+            store.events.emit("stage_started", stage="emit")
+            result = _run_single(tipo, slim, documents, cfg, dry_run, **single_kwargs)
+            _mirror_state({**slim, "status": "emitted", "previous_actions": ["emit"]})
+            return _finalize(
                 {
-                    "name": d.get("name"),
-                    "lines": d.get("lines"),
-                    "est_tokens_raw": d.get("est_tokens_raw"),
+                    **result,
+                    "split": False,
+                    "docs_ingested": [
+                        {
+                            "name": d.get("name"),
+                            "lines": d.get("lines"),
+                            "est_tokens_raw": d.get("est_tokens_raw"),
+                        }
+                        for d in (raw.get("documents") or [])
+                    ],
                 }
-                for d in (raw.get("documents") or [])
-            ],
-        }
-
-    # Com mapa: --context, --all-contexts, ou all automático para historia/prd
-    ids = list_service_ids(mapa)
-    if context:
-        if context not in ids and context != "_unassigned":
-            raise SystemExit(
-                f"contexto desconhecido: {context}. Disponíveis: {', '.join(ids)}"
             )
-        targets = [context]
-    elif all_contexts or tipo in {"historia", "prd"}:
-        # default com mapa: gera um pacote por serviço que tiver texto
-        partitioned = partition_documents(
-            documents, mapa, lines_per_chunk=lines_per_chunk
-        )
-        targets = [sid for sid in ids if sid in partitioned]
-        if "_unassigned" in partitioned:
-            targets.append("_unassigned")
-        if not targets:
-            targets = ids  # ainda emite ownership mesmo sem texto
-    else:
-        # openapi/mermaid sem flag → legado single (docs completos)
-        result = _run_single(
-            tipo,
-            slim,
-            documents,
-            cfg,
-            dry_run,
-            **single_kwargs,
-        )
-        return {
-            **result,
-            "split": False,
-            "mapa": True,
-            "hint": "Use --context ID ou --all-contexts para fatiar por microsserviço",
-            "docs_ingested": [
-                {"name": d.get("name"), "lines": d.get("lines")}
-                for d in (raw.get("documents") or [])
-            ],
-        }
 
-    by_context = []
-    all_outputs: dict[str, Any] = {}
-    index = load_index()
-    for sid in targets:
-        svc = (
-            get_service(mapa, sid)
-            if sid != "_unassigned"
-            else {
-                "id": "_unassigned",
-                "nome": "Não classificado",
-                "repos": [],
-                "keywords": [],
-            }
-        )
-        evidencia = service_evidence(index, sid)
-        if evidencia:
-            svc["indice"] = {k: v for k, v in evidencia.items() if k != "repos"}
-        docs = docs_for_service(
-            documents, mapa, sid, lines_per_chunk=lines_per_chunk
-        )
-        one = _run_single(
-            tipo,
-            slim,
-            docs,
-            cfg,
-            dry_run,
-            context=sid,
-            servico=svc,
-            **single_kwargs,
-        )
-        by_context.append(one)
-        all_outputs[sid] = one["outputs"]
-
-    write_state(
-        {
-            **slim,
-            "status": "emitted",
-            "previous_actions": ["servicos_split", "emit"],
-            "contexts": targets,
-        },
-        **({"path": state_path} if state_path is not None else {}),
-    )
-
-    return {
-        "split": True,
-        "contexts": targets,
-        "by_context": by_context,
-        "outputs": all_outputs,
-        "output": by_context[0]["output"] if by_context else None,
-        "docs_ingested": [
-            {"name": d.get("name"), "lines": d.get("lines"), "est_tokens_raw": d.get("est_tokens_raw")}
-            for d in (raw.get("documents") or [])
-        ],
-        "partition_preview": {
-            sid: {
-                "lines": meta["lines"],
-                "sources": meta["sources"],
-                "repos": meta["meta"].get("repos"),
-            }
-            for sid, meta in partition_documents(
+        ids = list_service_ids(mapa)
+        if context:
+            if context not in ids and context != "_unassigned":
+                raise SystemExit(
+                    f"contexto desconhecido: {context}. Disponíveis: {', '.join(ids)}"
+                )
+            targets = [context]
+        elif all_contexts or tipo in {"historia", "prd"}:
+            partitioned = partition_documents(
                 documents, mapa, lines_per_chunk=lines_per_chunk
-            ).items()
-        },
-    }
+            )
+            targets = [sid for sid in ids if sid in partitioned]
+            if "_unassigned" in partitioned:
+                targets.append("_unassigned")
+            if not targets:
+                targets = ids
+        else:
+            store.events.emit("stage_started", stage="emit")
+            result = _run_single(tipo, slim, documents, cfg, dry_run, **single_kwargs)
+            return _finalize(
+                {
+                    **result,
+                    "split": False,
+                    "mapa": True,
+                    "hint": "Use --context ID ou --all-contexts para fatiar por microsserviço",
+                    "docs_ingested": [
+                        {"name": d.get("name"), "lines": d.get("lines")}
+                        for d in (raw.get("documents") or [])
+                    ],
+                }
+            )
+
+        by_context = []
+        all_outputs: dict[str, Any] = {}
+        index = load_index()
+        store.events.emit("stage_started", stage="emit", targets=targets)
+        for sid in targets:
+            svc = (
+                get_service(mapa, sid)
+                if sid != "_unassigned"
+                else {
+                    "id": "_unassigned",
+                    "nome": "Não classificado",
+                    "repos": [],
+                    "keywords": [],
+                }
+            )
+            evidencia = service_evidence(index, sid)
+            if evidencia:
+                svc["indice"] = {k: v for k, v in evidencia.items() if k != "repos"}
+            docs = docs_for_service(
+                documents, mapa, sid, lines_per_chunk=lines_per_chunk
+            )
+            one = _run_single(
+                tipo,
+                slim,
+                docs,
+                cfg,
+                dry_run,
+                context=sid,
+                servico=svc,
+                **single_kwargs,
+            )
+            by_context.append(one)
+            all_outputs[sid] = one["outputs"]
+
+        _mirror_state(
+            {
+                **slim,
+                "status": "emitted",
+                "previous_actions": ["servicos_split", "emit"],
+                "contexts": targets,
+            }
+        )
+
+        return _finalize(
+            {
+                "split": True,
+                "contexts": targets,
+                "by_context": by_context,
+                "outputs": all_outputs,
+                "output": by_context[0]["output"] if by_context else None,
+                "docs_ingested": [
+                    {
+                        "name": d.get("name"),
+                        "lines": d.get("lines"),
+                        "est_tokens_raw": d.get("est_tokens_raw"),
+                    }
+                    for d in (raw.get("documents") or [])
+                ],
+                "partition_preview": {
+                    sid: {
+                        "lines": meta["lines"],
+                        "sources": meta["sources"],
+                        "repos": meta["meta"].get("repos"),
+                    }
+                    for sid, meta in partition_documents(
+                        documents, mapa, lines_per_chunk=lines_per_chunk
+                    ).items()
+                },
+            }
+        )
+    except Exception as exc:
+        store.events.emit("run_failed", error=str(exc))
+        store.finish("failed")
+        raise
 
 
 def main() -> None:

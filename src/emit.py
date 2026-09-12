@@ -20,13 +20,14 @@ def emit(
     *,
     context: str | None = None,
     root: Path | None = None,
+    subdir: str = "outputs",
 ) -> Path:
     name = OUTPUTS[tipo]
     base = root or ROOT
     if context:
-        path = base / "outputs" / "contextos" / context / name
+        path = base / subdir / "contextos" / context / name
     else:
-        path = base / "outputs" / name
+        path = base / subdir / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
