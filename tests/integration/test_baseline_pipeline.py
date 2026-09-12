@@ -19,14 +19,23 @@ def _artifact_blobs(result: dict, out_root: Path) -> str:
                 p = Path(path)
                 if p.exists():
                     texts.append(p.read_text(encoding="utf-8"))
+            # spec / validation mesmo quando blocked
+            for key in ("canonical_spec", "validation_report", "report"):
+                p = Path(ctx.get(key) or "")
+                if p.is_file():
+                    texts.append(p.read_text(encoding="utf-8"))
+            val = ctx.get("validation") or {}
+            texts.append(str(val))
+            texts.extend(ctx.get("questions") or [])
     else:
         for path in (result.get("outputs") or {}).values():
             p = Path(path)
             if p.exists():
                 texts.append(p.read_text(encoding="utf-8"))
-    # também varre a árvore emitida (garantia)
+        texts.append(str(result.get("validation") or {}))
+        texts.extend(result.get("questions") or [])
     for p in out_root.rglob("*"):
-        if p.suffix in {".md", ".yaml", ".mmd"} and p.is_file():
+        if p.suffix in {".md", ".yaml", ".mmd", ".json"} and p.is_file():
             texts.append(p.read_text(encoding="utf-8"))
     return "\n".join(texts)
 
@@ -37,8 +46,9 @@ def _statuses_in(text: str) -> set[str]:
 
 def _est_tokens(result: dict) -> list[int]:
     if result.get("split") and result.get("by_context"):
-        return [int(c.get("est_tokens") or 0) for c in result["by_context"]]
-    return [int(result.get("est_tokens") or 0)]
+        return [int(c.get("est_tokens") or 0) for c in result["by_context"] if c.get("est_tokens")]
+    n = int(result.get("est_tokens") or 0)
+    return [n] if n else []
 
 
 @pytest.mark.parametrize("case_id", CASES)
@@ -46,7 +56,13 @@ def test_baseline_pipeline_properties(case_id: str, run_case, load_expected):
     expected = load_expected(case_id)
     result, out_root = run_case(case_id, tipo=expected.get("tipo", "historia"))
 
-    # --- serviços ---
+    if expected.get("expect_blocked"):
+        assert result.get("status") == "blocked"
+        blob = _artifact_blobs(result, out_root)
+        for code in expected.get("http_statuses") or []:
+            assert str(code) in blob
+        return
+
     want_services = set(expected.get("services") or [])
     if expected.get("split"):
         assert result.get("split") is True
@@ -55,7 +71,6 @@ def test_baseline_pipeline_properties(case_id: str, run_case, load_expected):
     else:
         assert result.get("split") is False
 
-    # --- ownership ---
     ownership = expected.get("ownership") or {}
     if result.get("by_context"):
         by_id = {
@@ -68,23 +83,26 @@ def test_baseline_pipeline_properties(case_id: str, run_case, load_expected):
             got_repos = set((by_id[sid].get("servico") or {}).get("repos") or [])
             assert set(repos).issubset(got_repos), f"ownership {sid}: {set(repos) - got_repos}"
 
-    # --- artefatos ---
     want_artifacts = set(expected.get("artifacts") or [])
     if result.get("by_context"):
         for ctx in result["by_context"]:
             if (ctx.get("servico") or {}).get("id") == "_unassigned":
                 continue
+            if ctx.get("status") == "blocked":
+                continue
             produced = set((ctx.get("outputs") or {}).keys())
-            assert want_artifacts.issubset(produced), f"artefatos {ctx.get('context')}: {want_artifacts - produced}"
-            for path in (ctx.get("outputs") or {}).values():
+            assert want_artifacts.issubset(produced), (
+                f"artefatos {ctx.get('context')}: {want_artifacts - produced}"
+            )
+            for key, path in (ctx.get("outputs") or {}).items():
+                if key == "canonical_spec":
+                    continue
                 assert Path(path).is_file()
     else:
         produced = set((result.get("outputs") or {}).keys())
         assert want_artifacts.issubset(produced)
 
-    # --- HTTP / sinais ---
     blob = _artifact_blobs(result, out_root)
-    # regras.yaml + scaffold: status entram via bloqueios no artefato
     got_http = _statuses_in(blob)
     for code in expected.get("http_statuses") or []:
         assert str(code) in got_http, f"{case_id}: status {code} não encontrado nos artefatos"
@@ -94,17 +112,14 @@ def test_baseline_pipeline_properties(case_id: str, run_case, load_expected):
             f"{case_id}: sinal ausente: {signal}"
         )
 
-    # --- budget ---
     max_tokens = int(expected.get("max_est_tokens") or 2000)
     for n in _est_tokens(result):
         assert n <= max_tokens, f"{case_id}: est_tokens {n} > budget {max_tokens}"
         assert n > 0
 
-    # --- state sem texto bruto ---
     state_file = out_root / "state" / "workflow.json"
     assert state_file.is_file()
-    state_txt = state_file.read_text(encoding="utf-8")
-    assert "ruido telemetria" not in state_txt.lower()
+    assert "ruido telemetria" not in state_file.read_text(encoding="utf-8").lower()
 
 
 def test_two_services_partition(run_case, load_expected):
@@ -120,10 +135,14 @@ def test_two_services_partition(run_case, load_expected):
     )
 
 
-def test_ambiguous_status_keeps_both_codes(run_case, load_expected):
-    """Documenta comportamento atual: ambiguidade 400/422 não bloqueia a execução."""
+def test_ambiguous_status_blocks_render(run_case, load_expected):
+    """Ambiguidade crítica 400/422 bloqueia renderização (quality gate)."""
     expected = load_expected("ambiguous_status")
-    assert expected.get("allow_ambiguity") is True
+    assert expected.get("expect_blocked") is True
     result, out_root = run_case("ambiguous_status")
+    assert result.get("status") == "blocked"
     blob = _artifact_blobs(result, out_root)
     assert "400" in blob and "422" in blob
+    # não deve ter emitido história renderizada para o serviço ambíguo
+    historias = list(out_root.rglob("historia.md"))
+    assert not historias
