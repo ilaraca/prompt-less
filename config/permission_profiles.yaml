@@ -1,0 +1,52 @@
+version: 1
+# Profiles de permissão por camada (policy executável).
+profiles:
+  bff:
+    write_allow:
+      - "src/**"
+      - "tests/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+    write_deny:
+      - ".github/workflows/**"
+      - "infra/prod/**"
+      - "**/*.pem"
+      - "**/*secret*"
+    commands_allow:
+      - "./mvnw test"
+      - "./mvnw verify"
+      - "git diff"
+      - "pytest"
+    commands_deny:
+      - "terraform apply"
+      - "kubectl delete"
+  api:
+    write_allow:
+      - "src/**"
+      - "tests/**"
+      - "README.md"
+      - "CHANGELOG.md"
+    write_deny:
+      - "**/*.pem"
+      - "**/*secret*"
+    commands_allow:
+      - "./mvnw test"
+      - "pytest"
+    commands_deny:
+      - "terraform apply"
+  mfe:
+    write_allow:
+      - "src/**"
+      - "tests/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+    write_deny:
+      - "**/*.pem"
+      - "**/*secret*"
+    commands_allow:
+      - "npm test"
+      - "pnpm test"
+    commands_deny:
+      - "terraform apply"
