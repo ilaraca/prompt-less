@@ -36,8 +36,19 @@ def test_policy_denies_secret_and_prod():
     profiles = load_profiles()
     bff = profiles["bff"]
     assert check_write_allowed("src/Foo.java", bff)
+    assert check_write_allowed("./src/Foo.java", bff)
     assert not check_write_allowed("infra/prod/deploy.yaml", bff)
     assert not check_write_allowed("keys/app.pem", bff)
+
+
+def test_policy_rejects_path_traversal():
+    profile = load_profiles()["bff"]
+    assert not check_write_allowed("src/../infra/prod/deploy.yaml", profile)
+    assert not check_write_allowed("src//../infra/prod/deploy.yaml", profile)
+    assert not check_write_allowed("src/../../.github/workflows/ci.yml", profile)
+    assert not check_write_allowed("/tmp/Foo.java", profile)
+    assert not check_write_allowed(r"C:\repo\src\..\infra\prod\deploy.yaml", profile)
+    assert check_write_allowed("src/main/java/Foo.java", profile)
 
 
 def test_policy_rejects_shell_composition():

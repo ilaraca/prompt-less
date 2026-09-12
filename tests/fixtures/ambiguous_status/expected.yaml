@@ -7,6 +7,8 @@ services:
 http_statuses:
   - 400
   - 422
+http_status_mode: subset
+max_unreviewed_inferences: 0
 ownership:
   ms-cliente:
     - bff-cliente
