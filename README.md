@@ -1,10 +1,10 @@
 # Prompt-less
 
-> Gera OpenAPI, fluxo Mermaid, história técnica (funcional + NFR) e PRD a partir de Figma, regras, engenharia e docs — com contexto comprimido e custo de tokens sob controle.
+> Gera OpenAPI, fluxo Mermaid, história técnica (funcional + NFR) e PRD a partir de Figma, regras, engenharia e docs — com contexto comprimido, custo de tokens sob controle e **engineering harness** (runtime, provenance, Canonical Spec, verify e melhoria controlada).
 
-**Repositório:** [github.com/ilaraca/prompt-less](https://github.com/ilaraca/prompt-less)
+**Repositório:** [github.com/ilaraca/prompt-less](https://github.com/ilaraca/prompt-less) · **Changelog:** [CHANGELOG.md](./CHANGELOG.md)
 
-Pipeline de tech lead que transforma insumos desidratados (UI, regras, `engenharia.yaml`, TXT/DOCX) em artefatos: contrato de API, diagrama de sequência, história BFF/MFE (BDD + DoD técnico) e **PRD.md** (insumo para SDD). Em vez de mandar tudo ao LLM, filtra o sinal, comprime o contexto e só então gera.
+Pipeline de tech lead que transforma insumos desidratados (UI, regras, `engenharia.yaml`, TXT/DOCX) em artefatos: contrato de API, diagrama de sequência, história BFF/MFE (BDD + DoD técnico) e **PRD.md** (insumo para SDD). Em vez de mandar tudo ao LLM, filtra o sinal, comprime o contexto e só então gera. Cada execução isola estado em `runs/<run_id>/`, emite um **Canonical Spec** verificável e registra claims com proveniência.
 
 Inspirada nas práticas descritas por Yuval Ben-itzhak (*How I reduced LLM token costs by ~90%*): o custo real não está no prompt “bonito”, e sim na **explosão de contexto** (system repetido, tools verbosas, histórico, RAG bruto, logs).
 
@@ -19,7 +19,8 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 - prefixo de system/tools **estável e cacheável** (OpenAI / Claude);
 - budget explícito de tokens (alvo ~650; teto ~2000);
 - **PRD.md** gerado junto com a história, como insumo canônico para **SDD**;
-- baseline de engenharia (**stack + NFR v1**: timeout/retry + logs + README/changelog/Javadoc) via `inputs/engenharia.yaml`.
+- baseline de engenharia (**stack + NFR v1**: timeout/retry + logs + README/changelog/Javadoc) via `inputs/engenharia.yaml`;
+- **harness**: runtime por `run_id`, provenance/claims, Canonical Spec + quality gate, ciclo verify/repair, plano multi-repo e melhoria com evals (sem apply automático).
 
 **Princípio:** nunca enviar dados brutos ao modelo se puderem ser filtrados ou comprimidos antes.
 
@@ -41,12 +42,16 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 | **Handoff para Devin CLI** | `outputs/` / `docs/prompt-less/` como contexto curto para implementação |
 | **Microsserviços / multi-repo** | `scan-repos.sh` lê a pasta de repos → mapa → marcadores → `outputs/contextos/<id>/` |
 | **Pré-processamento barato + raciocínio caro** | Camada local (“modelo pequeno”) + slot para LLM grande |
+| **Gate antes de implementar** | Canonical Spec bloqueia ambiguidade (ex.: HTTP indefinido) com `PipelineBlocked` |
+| **Verify pós-executor** | `close_loop` confere ExecutionResult vs spec + policy de camada |
+| **Plano coordenado multi-repo** | `plan_repos` gera ondas/contratos a partir do mapa de serviços |
+| **Melhoria sem regressão silenciosa** | `improve` + evals; propostas só `approved_for_experiment` |
 
 ### Onde *não* é a melhor ferramenta (ainda)
 
 | Cenário | Motivo |
 |--------|--------|
-| Geração 100% automática em produção sem revisão humana | Dry-run preenche esqueleto; `--live` (API) ainda é slot a plugar |
+| Geração 100% automática em produção sem revisão humana | Dry-run preenche esqueleto; `--live` (API) ainda é slot a plugar; Devin E2E e apply+rollback são série 2 |
 | Documentos sem sinais lexicais de negócio | Resumo extrativo prioriza termos (regra, HTTP, endpoint…); texto só narrativo pode ser filtrado demais |
 | Extração fiel linha a linha de PDFs jurídicos/contratos | Foco é **sinal para artefato técnico**, não arquivo íntegro |
 | `.doc` legado fora do macOS sem `antiword` | Conversão depende de `textutil` (macOS) ou `antiword` |
@@ -71,11 +76,14 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
  [preprocess] ───────────── desidrata UI/regras/engenharia; docs com metadados+texto
         │
         ▼
- [state_write] ──────────── arquivo: estado SEM texto bruto
+ [state_write] ──────────── runs/<run_id>/ + state SEM texto bruto
         │
         ├──────────────────► docs: chunk → resumo (sinais) → consolidado
         │
  [rag_compress] ─────────── UI/regras/engenharia + docs → consolidated ≤ budget
+        │                   (+ claims / discarded → provenance.json)
+        ▼
+ [canonical_spec] ───────── IR verificável + quality gate (bloqueia se erros)
         │
         ▼
  [context_build] ────────── system estável (cache) + dynamic enxuto
@@ -84,7 +92,13 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
    [reason] ─────────────── pacote OpenAI/Claude  |  dry-run scaffold
         │
         ▼
-    [emit] ──────────────── outputs/openapi.yaml | sequence.mmd | historia.md | PRD.md
+    [emit] ──────────────── artifacts/ + espelho outputs/
+                            openapi | sequence.mmd | historia.md | PRD.md | canonical-spec.yaml
+
+        (pós-execução, opcional)
+ [close_loop] ───────────── ExecutionResult × spec × policy → verify / repair
+ [plan_repos] ───────────── mapa-servicos → implementation_plan (ondas)
+ [improve] ──────────────── diagnose → propostas → evals → approved_for_experiment
 ```
 
 ### Técnicas de economia de tokens (mapeamento do artigo)
@@ -274,12 +288,12 @@ state/workflow.json ◄── só metadados                               contex
 
 | Comando | Template | Saída |
 |---------|----------|--------|
-| `openapi` | `templates/openapi.skeleton.yaml` | `outputs/openapi.yaml` |
+| `openapi` | `templates/openapi.skeleton.yaml` | `outputs/openapi.yaml` (+ `canonical-spec.yaml` na run) |
 | `mermaid` | `templates/mermaid.skeleton.md` | `outputs/sequence.mmd` |
 | `historia` | `templates/historia.skeleton.md` | `outputs/historia.md` **+** `outputs/PRD.md` |
 | `prd` | `templates/prd.skeleton.md` | `outputs/PRD.md` |
 
-`historia` emite também o **PRD** (`also_emit` em `config/pipeline.yaml`): a história é o recorte de implementação (**BDD funcional + DoD NFR**); o PRD é o documento canônico para um **SDD** futuro (arquitetura, contrato, tasks, NFR-R/O/S/D).
+Toda run também grava **`canonical-spec.yaml`** e validações em `runs/<run_id>/` (espelhadas conforme o layout da execução). `historia` emite também o **PRD** (`also_emit` em `config/pipeline.yaml`): a história é o recorte de implementação (**BDD funcional + DoD NFR**); o PRD é o documento canônico para um **SDD** futuro (arquitetura, contrato, tasks, NFR-R/O/S/D).
 
 Além do artefato, a pipeline grava o **pacote LLM** (contexto já comprimido):
 
@@ -494,7 +508,14 @@ Gera scaffold do artefato + pacote LLM comprimido:
 
 `--live` está reservado para plugar clientes OpenAI/Claude em `src/reason.py` usando o JSON já montado em `outputs/llm_package_*.json`. Hoje levanta `NotImplementedError` de propósito.
 
----
+### Testes e CI
+
+```bash
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pytest -v --tb=short
+```
+
+Workflow GitHub Actions (`.github/workflows/ci.yml`): `compileall` + validação de `permission_profiles.yaml` + pytest + smoke `plan_repos --help`.
 
 ## Exemplos de uso
 
@@ -875,47 +896,145 @@ O efeito prático é a história deixar de descrever tudo como novo: o que já e
 
 ---
 
+## Engineering Harness
+
+Além da geração de artefatos, a série 1 adicionou um **harness** auditável: cada run é isolada, o IR é validado antes do emit, e há CLIs para verify pós-executor, plano multi-repo e melhoria com gate de evals. Detalhe de releases: [CHANGELOG.md](./CHANGELOG.md).
+
+### Runtime (`runs/<run_id>/`)
+
+Cada `python -m src.run …` cria um diretório isolado e espelha artefatos em `outputs/` (compatível com scripts Devin).
+
+| Caminho | Conteúdo |
+|---------|----------|
+| `runs/<id>/manifest.json` | status, objective, timestamps |
+| `runs/<id>/events.jsonl` | trilha append-only de eventos |
+| `runs/<id>/artifacts/` | artefatos da run (incl. `canonical-spec.yaml`) |
+| `runs/<id>/contexts/` | pacotes por serviço (`--all-contexts`) |
+| `runs/<id>/validations/` | `provenance.json`, `spec-validation.json` |
+| `runs/<id>/state.json` | estado da execução (sem texto bruto) |
+
+### Provenance e claims
+
+Na compressão RAG, trechos viram **claims** com `SourceRef` (arquivo/linha/origem). Claims sem fonte válida falham o gate (`CLAIM_WITHOUT_SOURCE` / `CLAIM_SOURCE_INVALID`). Descarte é reportado em `validations/provenance.json`. Runs bloqueadas pelo quality gate **preservam** `claims` e `discarded` no payload JSON.
+
+### Canonical Spec + quality gate
+
+Antes de renderizar história/PRD, a pipeline monta o IR (`src/spec/builder.py`) e valida (`src/validators/`):
+
+- ambiguidade de status HTTP → `PipelineBlocked` (não default silencioso para 422)
+- defaults/inferências explícitos (`origin`, `confidence`, `requires_review`)
+- `unexpected_inferences` conta ResolvedValues `default|inferred` sem review
+- traceability de claim IDs (órfãos = warning)
+
+Artefato: `canonical-spec.yaml` ao lado dos demais outputs da run.
+
+### Ciclo executor (`close_loop`)
+
+Fecha o loop **spec × ExecutionResult × policy de camada**:
+
+```bash
+.venv/bin/python -m src.close_loop \
+  --spec runs/<id>/artifacts/canonical-spec.yaml \
+  --result tests/fixtures/executor/execution_ok.json \
+  --out /tmp/verify
+
+# marcar aprovação / tentativa de reparo
+.venv/bin/python -m src.close_loop --spec ... --result ... --approve
+.venv/bin/python -m src.close_loop --spec ... --result ... --attempt 1 --layer bff
+```
+
+Policy (`config/permission_profiles.yaml` + `src/executors/policy.py`):
+
+- writes/comandos allow/deny por camada (`bff`, `api`, `mfe`, …)
+- comandos parseados como argv (`shlex`); `&&` / `;` / `||` negam
+- paths normalizados (`normalize_repo_path`) — rejeita absoluto e `..`
+- verify fail-closed para layer desconhecido; `NO_TESTS_REPORTED` é error em code change
+- `FILE_OUT_OF_SCOPE` → `required_reverts` (não amplia `editable_surface`)
+
+O adapter Devin (`src/executors/devin.py`) é stub até o ticket E2E da série 2.
+
+### Plano multi-repo (`plan_repos`)
+
+```bash
+.venv/bin/python -m src.plan_repos
+.venv/bin/python -m src.plan_repos --service gestao-de-ofertas --out runs/plan/
+# → implementation_plan.yaml + .json (ondas, contratos, origin: heuristic, requires_review)
+```
+
+### Autoaperfeiçoamento (`improve`)
+
+```bash
+.venv/bin/python -m src.improve --verify-report /tmp/verify/verify-report.json
+.venv/bin/python -m src.improve --out state/knowledge   # demo sem report (falha AMBIGUOUS_HTTP)
+```
+
+Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`playbook.yaml`) → eval suite → decisão. Status positivo = **`approved_for_experiment`** — não aplica mudança de código (apply + rollback = série 2).
+
+### Evals e testes
+
+```bash
+.venv/bin/pytest -v --tb=short
+# esperado: 47 passed
+```
+
+Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`. CI em `.github/workflows/ci.yml` (compileall + YAML de profiles + pytest + smoke `plan_repos`).
+
+---
+
 ## Estrutura do repositório
 
 ```
 pipeline/
 ├── README.md
+├── CHANGELOG.md
 ├── requirements.txt
+├── pytest.ini
+├── .github/workflows/ci.yml
 ├── scripts/
 │   ├── scan-repos.sh              # pasta de repos → mapa-servicos.yaml (de/para)
 │   └── devin-from-promptless.sh   # scan + index + marcar + artefatos → Devin CLI
 ├── config/
-│   ├── pipeline.yaml         # budget, stages, caching, mapeamento de artefatos
-│   └── tools.compact.yaml    # definições de tools sem prosa (economia de tokens)
+│   ├── pipeline.yaml              # budget, stages, caching, mapeamento de artefatos
+│   ├── tools.compact.yaml         # tools sem prosa
+│   ├── permission_profiles.yaml   # policy por camada (write/command allow-deny)
+│   ├── playbook.yaml              # propostas de melhoria limitadas
+│   └── failure-patterns.yaml      # classificação de falhas no improve
 ├── prompts/
-│   └── system.compact.txt    # system estável → candidato a prompt cache
+│   └── system.compact.txt
 ├── templates/
 │   ├── openapi.skeleton.yaml
 │   ├── mermaid.skeleton.md
 │   ├── historia.skeleton.md
-│   └── prd.skeleton.md       # PRD → SDD (frontmatter + RF/AC/NFR + ownership)
-├── inputs/                   # figma, regras, engenharia, mapa-servicos, docs
-├── state/                    # estado externo + repo_index.json (fora do prompt)
-├── outputs/                  # artefatos raiz + contextos/<serviço>/
+│   └── prd.skeleton.md
+├── inputs/                        # figma, regras, engenharia, mapa-servicos, docs
+├── state/                         # workflow legado + repo_index + knowledge/
+├── runs/                          # execuções isoladas por run_id
+├── outputs/                       # espelho compatível (Devin/scripts)
+├── docs/
+│   └── rag-e-cli.md
+├── tests/
+│   ├── fixtures/                  # evals + executor samples
+│   └── integration/
 └── src/
-    ├── run.py                # --context / --all-contexts / --no-split
-    ├── ingest.py             # carrega figma/regras/engenharia/template
-    ├── docs_ingest.py        # extrai texto de txt/md/docx/doc
-    ├── preprocess.py         # desidrata UI/regras/engenharia (pré-LLM)
-    ├── engenharia.py         # baseline stack + NFR (retry, logs)
-    ├── servicos.py           # mapa + marcadores + keywords → split MS
-    ├── repo_index.py         # índice léxico do código (rotas, entidades, status)
-    ├── marcar.py             # de/para com IDF + margem → [[service:id]] nos docs
-    ├── state_store.py        # persiste estado mínimo em JSON
-    ├── doc_compress.py       # compressão hierárquica + SIGNAL_RE
-    ├── rag_compress.py       # retrieve estrutural + merge UI/regras/docs
-    ├── context_builder.py    # system + dynamic ≤ budget
-    ├── economia.py           # calculadora de tokens/custo (baseline naive vs prompt-less)
-    ├── reason.py             # pacote OpenAI/Claude + dry-run (inclui PRD)
-    └── emit.py               # mapeia tipo → arquivo em outputs/
+    ├── run.py                     # pipeline + Canonical Spec + runtime
+    ├── close_loop.py              # verify / approve / repair
+    ├── plan_repos.py              # implementation_plan multi-repo
+    ├── improve.py                 # diagnose → propose → eval → gate
+    ├── ingest.py / docs_ingest.py / preprocess.py / engenharia.py
+    ├── servicos.py / marcar.py / repo_index.py
+    ├── state_store.py / doc_compress.py / rag_compress.py
+    ├── context_builder.py / reason.py / emit.py / economia.py
+    ├── domain/                    # Claim, SourceRef, DocumentChunk, CanonicalSpec
+    ├── runtime/                   # RunContext, RunStore, EventStore
+    ├── spec/                      # builder do IR
+    ├── validators/                # quality gate
+    ├── renderers/                 # história/PRD a partir do IR
+    ├── executors/                 # policy, verify, loop, Devin adapter
+    ├── planning/                  # grafo, camadas, plan
+    └── learning/                  # evals, proposals, accept, failure_patterns
 ```
 
-Leitura recomendada do código, nesta ordem: `run.py` → `rag_compress.py` → `doc_compress.py` → `context_builder.py`.
+Leitura recomendada: `run.py` → `spec/builder.py` → `validators/` → `executors/verify.py` → `learning/evals.py`. Para o caminho clássico de tokens: `rag_compress.py` → `doc_compress.py` → `context_builder.py`.
 
 ---
 
@@ -950,9 +1069,10 @@ Ajuste o budget conforme o provedor (janela, preço de cache) e o risco de “co
 
 ## Dependências
 
-- Python 3.9+
+- Python 3.9+ (CI usa 3.11)
 - `PyYAML`
 - `python-docx` (`.docx`)
+- `pytest` (suíte de integração / evals)
 - macOS: `textutil` nativo para `.doc` legado  
   Linux: `antiword` (opcional) para `.doc`
 
@@ -1045,19 +1165,24 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 **Limitações**
 
 - Modo `--live` (chamada real OpenAI/Claude) ainda não implementado
+- Adapter Devin no `close_loop` é stub (E2E real = série 2)
+- `improve` não aplica propostas nem faz rollback — só `approved_for_experiment`
+- IR ainda não regenera OpenAPI/Mermaid a partir do Canonical Spec
 - Resumo de docs é **extrativo por regex**, não LLM small (bom custo; pode perder nuance)
 - Estimativa de tokens é heurística (`len/4`), não tokenizer oficial
-- State backend `redis` está previsto no YAML, implementação atual é **arquivo**
+- State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
 
-**Próximos passos sugeridos**
+**Próximos passos (série 2 — ver CHANGELOG [Unreleased])**
 
-1. Plugar OpenAI Responses / Claude Messages no `reason.py` usando `llm_package_*.json`
-2. Trocar extrativo por modelo small só quando o score de sinais for baixo
-3. Persistência Redis + TTL alinhado ao cache Claude (5m / 1h)
-4. Telemetria de custo real (tokens billable + cache hits) — a calculadora `src/economia.py` já projeta; plugar billing real no `--live`
-5. Consumidor SDD que leia `outputs/PRD.md` (frontmatter `sdd.expected` / `nfr_ids`) e gere architecture/tasks com RF + NFR
-6. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing, authn/authz) sem inchir o prompt
-7. CI que rode Prompt-less e anexe `docs/prompt-less/` ao PR para o Devin CLI / Cloud
+1. IR → OpenAPI / Mermaid a partir do Canonical Spec
+2. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`)
+3. Devin CLI real no `close_loop`
+4. Orquestração declarativa via stages em `pipeline.yaml`
+5. Tokenizer oficial + Redis opcional
+6. Execução concorrente por ondas + apply/rollback de propostas
+7. Hardening profundo (debugger, injection, recovery, golden recall)
+8. Consumidor SDD que leia `outputs/PRD.md` e gere architecture/tasks com RF + NFR
+9. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
 
 ---
 
@@ -1065,4 +1190,4 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 
 > Sistemas LLM em produção funcionam melhor quando o modelo vê a **informação certa**, não a **maior quantidade** de informação.
 
-O **Prompt-less** aplica isso ao domínio de artefatos de tech lead: Figma, regras, engenharia e documentos longos viram um contexto pequeno, estável e auditável — pronto para gerar OpenAPI, Mermaid, histórias (**funcional + NFR**) e **PRD para SDD** com custo previsível.
+O **Prompt-less** aplica isso ao domínio de artefatos de tech lead: Figma, regras, engenharia e documentos longos viram um contexto pequeno, estável e auditável — pronto para gerar OpenAPI, Mermaid, histórias (**funcional + NFR**) e **PRD para SDD** com custo previsível, com harness (runtime, provenance, Canonical Spec, verify) entre o sinal comprimido e a implementação.
