@@ -219,7 +219,7 @@ Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 35-independent-test-evidence | **In progress** | filha | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
+| 35-independent-test-evidence | **Feedback** | filha, HEAD `36bcbc3` | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
 | 36-repair-policy | **Feedback** | filha | `.worktrees/36-repair-policy` · `feature/repair-policy` |
 | 37-executor-enforcement | **Feedback** | filha, HEAD `e4d458b` | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
 | 39-case-regression-gates | **Feedback** | filha, HEAD `e453a3d` | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
@@ -248,7 +248,7 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 | 32-eval-typed-http | P0.1 | HTTP tipado por serviço e operação | **Done** | — |
 | 33-required-review-gate | P0.2 | Revisão obrigatória bloqueante e auditável | **Done** | — |
 | 34-cli-failure-exit | P0.3 | Exit code de falha e bloqueio de consumo | **Done** | — |
-| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **In progress** | 30, 31, 32, 33, 34 |
+| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **Feedback** | 30, 31, 32, 33, 34 |
 | 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Feedback** | 30, 31, 32, 33, 34 |
 | 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Feedback** | 30, 31, 32, 33, 34 |
 | 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | Todo | 35, 36, 37 |
@@ -387,13 +387,28 @@ aceite obrigatório com evidência de comportamento adequada.
 
 **Aceite:**
 
-- [ ] Relato `passed=True` sozinho nunca cria evidência suficiente.
-- [ ] Log ausente, incompleto, adulterado ou de outra run reprova.
-- [ ] AC obrigatório sem comprovação bloqueia; arquivo existente não basta.
-- [ ] Uma falha conhecida é detectada e uma correção real passa na reexecução.
-- [ ] E2E real fica registrado separadamente de stubs e testes ignorados.
+- [x] Relato `passed=True` sozinho nunca cria evidência suficiente.
+- [x] Log ausente, incompleto, adulterado ou de outra run reprova.
+- [x] AC obrigatório sem comprovação bloqueia; arquivo existente não basta.
+- [x] Uma falha conhecida é detectada e uma correção real passa na reexecução.
+- [x] E2E real fica registrado separadamente de stubs e testes ignorados.
 
 **Código:** `src/executors/devin.py`, `evidence.py`, `verify.py`.
+
+## Implementation note
+
+- `_materialize_test_evidence` reexecuta sugestões do sidecar via runner do
+  harness; `passed=True` do agente nunca vira `exit_code=0` sem execução.
+  JSONL grava argv/stdout/stderr/exit + binding (`run_id`, repo, commits,
+  `spec_hash`) e `executed_by=harness`.
+- Verify exige harness + binding; códigos novos:
+  `TEST_EVIDENCE_TAMPERED` / `TEST_EVIDENCE_BINDING` /
+  `AC_WITHOUT_BEHAVIORAL_EVIDENCE`. `evidence_hashes.test_kinds` separa
+  e2e / unit / stub_or_skip.
+- README + CHANGELOG atualizados.
+- HEAD filha: `36bcbc3` · branch `feature/independent-test-evidence`.
+- Verificar: `PYTHONPATH=. python -m pytest tests/integration/test_independent_test_evidence.py tests/integration/test_evidence_verify.py -q`
+  e `PYTHONPATH=. python scripts/quality_gates.py` (no pai/`onda-merge` antes do merge).
 
 ### 36 — Política completa no reparo
 
