@@ -45,7 +45,7 @@ Do `20`:
 ## Implementation note
 
 Worktree `.worktrees/10-devin-e2e`, branch `feature/devin-e2e`,
-HEAD `dca477f` (base `cbbad02`). Sem push / sem PR contra `main`.
+HEAD `60e9579` (base `cbbad02`). Sem push / sem PR contra `main`.
 README + CHANGELOG atualizados.
 
 `DevinAdapter.execute` invoca `devin --print --prompt-file …` (runner

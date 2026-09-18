@@ -161,7 +161,7 @@ Riscos residuais aceitos do `10` (não reabrir worktree filha):
 
 | Ticket | HEAD | Residuais aceitos |
 |---|---|---|
-| `10-devin-e2e` | `dca477f` | Comandos internos da sessão Devin não vão sozinhos ao JSONL (sidecar `execution-result.json` necessário); `DEVIN_E2E=1` exige CLI autenticado (CI skipa); auto-commit só no checkout isolado (sem push/PR) |
+| `10-devin-e2e` | `60e9579` | Comandos internos da sessão Devin não vão sozinhos ao JSONL (sidecar `execution-result.json` necessário); `DEVIN_E2E=1` exige CLI autenticado (CI skipa); auto-commit só no checkout isolado (sem push/PR) |
 
 Riscos residuais aceitos (não reabrir worktree filha):
 
@@ -172,13 +172,13 @@ Riscos residuais aceitos (não reabrir worktree filha):
 | `26-hybrid-document-retrieval` | `5f5c447` | 2ª camada = sinônimos locais + TF (não embeddings); `doc_preface` CLI não é estágio da pipeline |
 | `28-engineering-baseline-v2` | `5a2ddb2` | Sinais NFR no índice por substring (gaps `heuristic`); alertas/ADRs/bulkhead fora do catálogo v2; sem despacho a executor |
 
-**Onda D** aprovada e **Done** em 2026-09-18 — HEAD `dca477f` em
+**Onda D** aprovada e **Done** em 2026-09-18 — HEAD `60e9579` em
 `feature/devin-e2e`. `12b` parqueado. Frontier seguinte: `13-parallel-exec`
 (CAS/lock no file backend; sem Redis).
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 10-devin-e2e | **Done** | filha, HEAD `dca477f` | `.worktrees/10-devin-e2e` · `feature/devin-e2e` |
+| 10-devin-e2e | **Done** | filha, HEAD `60e9579` | `.worktrees/10-devin-e2e` · `feature/devin-e2e` |
 | 09-live-llm | **Done** | filha, HEAD `af3e67b` | `.worktrees/09-live-llm` · `feature/live-llm` |
 | 14-apply-rollback | **Done** | filha, HEAD `f9f2950` | `.worktrees/14-apply-rollback` · `feature/apply-rollback` |
 | 26-hybrid-document-retrieval | **Done** | filha, HEAD `5f5c447` | `.worktrees/26-hybrid-document-retrieval` · `feature/hybrid-document-retrieval` |
