@@ -199,10 +199,10 @@ Riscos residuais aceitos do `13` (não reabrir worktree filha):
 | 12b-state-backend-redis | Todo ⏸ | parqueado | futuro |
 | (pai) onda-frontier | — | integra filhas; único PR contra `main` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
-### Onda F — Série 4 P0 (em curso)
+### Onda F — Série 4 P0 (**integrada** no pai)
 
-Pai rebaseado em `origin/main` (`a0010dc`) em 2026-09-18. Filhas abaixo
-**não** abrem PR contra `main`; integrar no `onda-merge`.
+P0 30–34 **Done** e merjados em `onda-merge` @ `87487fd` (2026-09-18). Filhas
+permanecem no HEAD do slice; não reabrir worktrees.
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
@@ -211,7 +211,20 @@ Pai rebaseado em `origin/main` (`a0010dc`) em 2026-09-18. Filhas abaixo
 | 32-eval-typed-http | **Done** | filha, HEAD `59b7e87` | `.worktrees/32-eval-typed-http` · `feature/eval-typed-http` |
 | 33-required-review-gate | **Done** | filha, HEAD `fd89588` | `.worktrees/33-required-review-gate` · `feature/required-review-gate` |
 | 34-cli-failure-exit | **Done** | filha, HEAD `addea9a` | `.worktrees/34-cli-failure-exit` · `feature/cli-failure-exit` |
-| (pai) onda-frontier | — | integra filhas; único PR contra `main` | `.worktrees/onda-merge` · `feature/onda-frontier` |
+| (pai) onda-frontier | — | P0 integrado @ `87487fd` | `.worktrees/onda-merge` · `feature/onda-frontier` |
+
+### Onda F — Série 4 P1 / regressão (em curso)
+
+Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
+
+| Ticket | Kanban | Papel | Onde está o código |
+|---|---|---|---|
+| 35-independent-test-evidence | **In progress** | filha | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
+| 36-repair-policy | **In progress** | filha | `.worktrees/36-repair-policy` · `feature/repair-policy` |
+| 37-executor-enforcement | **In progress** | filha | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
+| 39-case-regression-gates | **In progress** | filha | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
+| (pai) onda-frontier | — | integra filhas | `.worktrees/onda-merge` · `feature/onda-frontier` |
+
 
 ## Série 4 — Conformidade com o roadmap (frontier ativa)
 
@@ -235,11 +248,11 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 | 32-eval-typed-http | P0.1 | HTTP tipado por serviço e operação | **Done** | — |
 | 33-required-review-gate | P0.2 | Revisão obrigatória bloqueante e auditável | **Done** | — |
 | 34-cli-failure-exit | P0.3 | Exit code de falha e bloqueio de consumo | **Done** | — |
-| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | Todo | 30, 31, 32, 33, 34 |
-| 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | Todo | 30, 31, 32, 33, 34 |
-| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | Todo | 30, 31, 32, 33, 34 |
+| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **In progress** | 30, 31, 32, 33, 34 |
+| 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **In progress** | 30, 31, 32, 33, 34 |
+| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **In progress** | 30, 31, 32, 33, 34 |
 | 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | Todo | 35, 36, 37 |
-| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | Todo | 30, 31, 32 |
+| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **In progress** | 30, 31, 32 |
 
 ### Ordem de implementação e fechamento
 
