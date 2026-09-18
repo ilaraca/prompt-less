@@ -7,6 +7,18 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Added
+
+- **Regressões por caso e experimento controlado** (`39-case-regression-gates`):
+  `compare_evals` marca pass→fail em qualquer caso (mesmo com `pass_rate`
+  agregado igual), bloqueia conjuntos incomparáveis e exige tolerância não
+  crítica explícita (`justification` → `tolerances_applied`). Dimensões
+  `required_gates` True→False também regressam. Promoção ignora jitter de
+  latência. `improve` registra experimento (referência, candidato, diff,
+  condições, `reserved_cases`; hold-out default `eval_adversarial`) e o
+  candidato não pode mutar `failure-patterns` / `playbook` /
+  `permission_profiles`.
+
 ### Changed
 
 - **Gates obrigatórios de avaliação** (`30-eval-required-gates`): `score_case()`

@@ -1299,7 +1299,26 @@ Status:
 | `accepted` | melhoria comprovada **no candidato** (não é apply em produção) |
 | `rejected` | regressão crítica, não aplicada, risco medium+, ou workspaces iguais |
 
-Uma proposta **não aplicada** nunca entra em `accepted` nem `approved_for_experiment`. Regressão em qualquer caso `critical: true` rejeita o candidato mesmo se o pass rate agregado subir. O gate HTTP das evals compara **contratos tipados por operação** (`http_operations` na fixture: serviço, método, rota, `success_status` resolvido e erros vinculados) — números em RF/AC/perguntas **não** provam o contrato; sucesso ausente/pendente (`requires_review`) não recebe valor presumido. Sem `http_operations`, o fallback `http_statuses` também só lê o tipado. Modo `exact` (default em `critical`) vs `subset` (`http_status_mode`) aplica-se aos erros da operação. O histórico (`state/knowledge/proposals-history.json`) guarda diff e métricas comparadas. Apply em produção continua no ticket `14`.
+Uma proposta **não aplicada** nunca entra em `accepted` nem `approved_for_experiment`.
+**Regressão por caso (`39`):** qualquer caso aprovado→reprovado marca `regression`
+(mesmo com `pass_rate` agregado igual) — não há compensação silenciosa entre casos.
+Regressão em caso `critical: true` ou dimensão `required_gates` True→False bloqueia.
+Tolerância não crítica só vale com `justification` explícita registrada em
+`tolerances_applied`. Conjuntos de casos distintos (caso removido / extra) →
+`comparable=false` e `decision=reject`. Promoção a `accepted` exige benefício
+demonstrável (`claim_recall` / `traceability_rate` / `pass_rate` /
+`unexpected_inferences` / `avg_est_tokens`); **jitter de latência não conta**.
+Experimento (`improve`) grava referência, candidato, diff, condições e
+`reserved_cases` (hold-out default: `eval_adversarial`). O candidato **não**
+pode alterar `failure-patterns`, `playbook` nem `permission_profiles` (superfície
+do avaliador). O gate HTTP das evals compara **contratos tipados por operação**
+(`http_operations` na fixture: serviço, método, rota, `success_status` resolvido
+e erros vinculados) — números em RF/AC/perguntas **não** provam o contrato;
+sucesso ausente/pendente (`requires_review`) não recebe valor presumido. Sem
+`http_operations`, o fallback `http_statuses` também só lê o tipado. Modo `exact`
+(default em `critical`) vs `subset` (`http_status_mode`) aplica-se aos erros da
+operação. O histórico (`state/knowledge/proposals-history.json`) guarda diff,
+métricas e `case_gates`. Apply em produção continua no ticket `14`.
 
 Limites deste slice (não reabrir; o `14` consome o overlay):
 
@@ -1313,7 +1332,7 @@ Limites deste slice (não reabrir; o `14` consome o overlay):
 PYTHONPATH=. .venv/bin/python scripts/quality_gates.py
 ```
 
-Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services, **eval_adversarial**, **eval_multi_context**), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada (`ingestion` / `canonical_spec` / `artifacts` / `provenance` / `selection`) é **diagnóstico**; a aprovação usa `required_gates` em AND — seleção da run, spec, artefatos esperados, rastreabilidade, serviço e pendências bloqueantes **não se compensam**. O gate HTTP usa `http_operations` (serviço + método + rota + sucesso tipado + erros da op). Casos `expect_blocked` podem declarar `expected_reason` e `expected_block_codes` (ex.: `ambiguous_status` exige `AMBIGUOUS_HTTP_STATUS`). Métricas: claim recall, traceability, inferências inesperadas, custo e latência. Casos `critical` têm gate individual na comparação baseline × candidate. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
+Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services, **eval_adversarial**, **eval_multi_context**), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada (`ingestion` / `canonical_spec` / `artifacts` / `provenance` / `selection`) é **diagnóstico**; a aprovação usa `required_gates` em AND — seleção da run, spec, artefatos esperados, rastreabilidade, serviço e pendências bloqueantes **não se compensam**. O gate HTTP usa `http_operations` (serviço + método + rota + sucesso tipado + erros da op). Casos `expect_blocked` podem declarar `expected_reason` e `expected_block_codes` (ex.: `ambiguous_status` exige `AMBIGUOUS_HTTP_STATUS`). Métricas: claim recall, traceability, inferências inesperadas, custo e latência. Comparação baseline × candidate (`compare_evals`) marca regressão **por caso e por dimensão**; casos ausentes não são ignorados. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
 
 **Seleção por execução (`31`):** `_load_specs` / `_load_final_artifacts` não fazem mais `rglob` no `output_root`. A eval exige `run_id` (via `result["run_id"]` ou parâmetro) e lê apenas arquivos registrados em `runs/<run_id>/manifest.json` → `integrity.files`, verificando status terminal e sha256 (e a cadeia HMAC quando a chave está presente). O espelho de compatibilidade `outputs/` **não** entra na seleção automática — uma run antiga correta no mesmo root (ou no espelho) não faz a run atual passar. Run `blocked` pode ser scoreada como bloqueio esperado (`expect_blocked`), mas `artifacts_released` / `layer_scores.artifacts.released_for_implementation` ficam `false` (história/PRD não liberados para implementação). API: `select_run_evidence(root=…, run_id=…)`. Presence de artefatos obrigatórios (`30`) também consulta só o manifesto da run.
 
