@@ -226,6 +226,15 @@ Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
 | (pai) onda-frontier | — | P1 integrado @ `b8f9b7d` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
 
+### Onda F — 38 context budget (em curso)
+
+Base: pai .
+
+| Ticket | Kanban | Papel | Onde está o código |
+|---|---|---|---|
+| 38-critical-context-budget | **In progress** | filha |  ·  |
+| (pai) onda-frontier | — | integra |  ·  |
+
 ## Série 4 — Conformidade com o roadmap (frontier ativa)
 
 Incluída a pedido de Ilara em 2026-09-18, após comparação com
@@ -251,7 +260,7 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 | 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **Done** | 30, 31, 32, 33, 34 |
 | 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Done** | 30, 31, 32, 33, 34 |
 | 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Done** | 30, 31, 32, 33, 34 |
-| 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | Todo | 35, 36, 37 |
+| 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | **In progress** | 35, 36, 37 |
 | 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **Done** | 30, 31, 32 |
 
 ### Ordem de implementação e fechamento
