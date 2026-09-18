@@ -34,6 +34,14 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   `EnforcementContract` (evidência em `enforcement-contract.json`) ou bloqueia
   (`DispatchBlocked`). Worktree/`shell=False` documentados como ≠ sandbox.
   Testes: `tests/integration/test_executor_enforcement.py`.
+- **Contenção de writes nos processos filhos** (`37` ajuste pós-reabertura):
+  `apply_write` sozinho não basta — `EnforcedRunner` injeta sitecustomize que
+  nega `open`/`Path.write_*` fora de `repo_root`, define `TMPDIR` dentro do
+  repo e, quando a sonda OS passa, envolve o filho com `sandbox-exec` (macOS)
+  ou `bwrap` (Linux). Capacidade `writes` só é declarada se a contenção for
+  verificada; senão `DispatchBlocked`. `EnforcedRunner` é callable
+  (`runner(argv, profile=…)`) e o adapter Devin **não** o substitui por
+  `run_argv` na invocação do CLI.
 
 ### Changed
 

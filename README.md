@@ -1251,9 +1251,17 @@ Policy (`config/permission_profiles.yaml` + `src/executors/policy.py`):
   (`deny`|`allow`), `credentials` (`scrub`|`passthrough`), `required_capabilities`
 - execução nova vai por `src.executors.safe_exec.run_argv` — `shell=True` é erro;
   **`run_argv(profile=None)` não é sandbox** (só impede shell)
-- enforcement durante a execução: `src.executors.runner.EnforcedRunner` (writes,
-  comandos, scrub de credenciais, timeout, processos/memória best-effort, rede
-  via sitecustomize + deny de CLIs); log JSONL confiável com `"enforced": true`
+- enforcement durante a execução: `src.executors.runner.EnforcedRunner` (writes
+  do harness **e** dos processos filhos via sitecustomize FS-deny +
+  `sandbox-exec`/`bwrap` quando a sonda OS passa; comandos; scrub de
+  credenciais; timeout; processos/memória best-effort; rede via sitecustomize +
+  deny de CLIs); capacidade `writes` só entra em `probe_local_capabilities` se a
+  contenção for verificada — senão despacho `DispatchBlocked`; log JSONL com
+  `"enforced": true`
+- contrato callable compartilhado com adapters (ticket 35):
+  `EnforcedRunner(argv, profile=…)` equivale a `run_argv` na forma da chamada;
+  `profile=None` = meta-CLI (pula allowlist do binário, **mantém** demais
+  limites). O Devin **não** troca `EnforcedRunner` por `run_argv`
 - despacho Devin exige `EnforcementContract` cujas `guarantees` cubram
   `limits.required_capabilities` (default externo = sem garantias →
   `DispatchBlocked`); evidência em `enforcement-contract.json` /
@@ -1681,13 +1689,17 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   re-RAG. Estimativa pré-chamada nunca é apresentada como fatura
 - Devin E2E (`10`/`35`/`37`): checkout isolado e `shell=False` **não** são
   sandbox. Sem `EnforcementContract` que ateste os `limits.required_capabilities`
-  do profile (ou `EnforcedRunner` local), o despacho é bloqueado. O sidecar só
-  **sugere** comandos de teste; o harness reexecuta e grava evidência
-  independente (`executed_by=harness`). Sem sugestão executável → verify
-  fail-closed (`NO_TESTS_REPORTED` / `TEST_NOT_EVIDENCED`). AC sem prova
-  comportamental bloqueia (`AC_WITHOUT_BEHAVIORAL_EVIDENCE`). Comandos internos
-  do Devin CLI externo só entram no JSONL se o sandbox/sidecar os reportar; o
-  runner local grava argv com `"enforced": true`
+  do profile (ou `EnforcedRunner` local), o despacho é bloqueado. O runner local
+  contém writes de filhos Python (e OS sandbox quando disponível); sem essa
+  capacidade verificada o despacho falha fechado. Invocar Devin com
+  `EnforcedRunner` mantém os limites na chamada do CLI (`profile=None` só
+  isenta a allowlist do binário meta). O sidecar só **sugere** comandos de
+  teste; o harness reexecuta e grava evidência independente
+  (`executed_by=harness`). Sem sugestão executável → verify fail-closed
+  (`NO_TESTS_REPORTED` / `TEST_NOT_EVIDENCED`). AC sem prova comportamental
+  bloqueia (`AC_WITHOUT_BEHAVIORAL_EVIDENCE`). Comandos internos do Devin CLI
+  externo só entram no JSONL se o sandbox/sidecar os reportar; o runner local
+  grava argv com `"enforced": true`
 - `DEVIN_E2E=1` exige CLI Devin autenticado e rede; no CI sem credencial o
   teste live é skip (`10`); live sem contrato usa `--allow-unenforced` só em lab
 - Auto-commit do adapter fica só no checkout isolado — sem push nem abertura

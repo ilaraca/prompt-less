@@ -423,12 +423,14 @@ class DevinAdapter:
         """Invoca o CLI. Metadados vão para ``devin-session.json``, não ao JSONL
         de evidência (o verify aplica policy de camada só aos comandos do log).
 
-        A invocação do binário ``devin`` é meta-harness (não passa pela allowlist
-        de comandos da camada). Limites efetivos dos *internos* do agente vêm do
-        ``EnforcementContract`` validado antes do despacho.
+        A invocação do binário ``devin`` é meta-harness: ``runner(argv,
+        profile=None)`` não aplica a allowlist de camada ao binário, mas se o
+        runner for ``EnforcedRunner`` os limites de FS/rede/credenciais/tempo/
+        recursos **permanecem**. Nunca trocar por ``run_argv``.
         """
         cli = self.cli_bin
-        if require_cli and self.runner is run_argv and shutil.which(cli) is None:
+        uses_real_exec = self.runner is run_argv or isinstance(self.runner, EnforcedRunner)
+        if require_cli and uses_real_exec and shutil.which(cli) is None:
             raise DevinCliError(
                 f"`{cli}` não está no PATH. Instale o Devin CLI ou use --dry-prep."
             )
@@ -440,16 +442,12 @@ class DevinAdapter:
             "capture_output": True,
             "text": True,
         }
-        # Runner local enforced: ainda não aplica profile ao binário do agente;
-        # profile=None no invoke evita negar `devin` (fora do commands_allow).
-        if isinstance(self.runner, EnforcedRunner):
-            # EnforcedRunner.run exige allowlist — use o callable bruto só para CLI.
-            # Comandos internos devem ser coletados pelo runner em outras vias.
-            proc_runner: Runner = run_argv
-        else:
-            proc_runner = self.runner
+        # Sempre usar self.runner (callable). EnforcedRunner com profile=None
+        # pula a allowlist do binário meta-CLI, mas mantém FS/rede/credenciais/
+        # tempo/recursos — nunca substituir por run_argv (remove limites).
+        enforced = isinstance(self.runner, EnforcedRunner)
         try:
-            proc = proc_runner(argv, profile=None, **run_kwargs)
+            proc = self.runner(argv, profile=None, **run_kwargs)
             exit_code = int(getattr(proc, "returncode", 1))
             stdout = getattr(proc, "stdout", "") or ""
             stderr = getattr(proc, "stderr", "") or ""
@@ -462,6 +460,7 @@ class DevinAdapter:
                     "exit_code": 1,
                     "error": str(exc),
                     "profile_applied_to_cli": False,
+                    "enforced_runner": enforced,
                     "layer_profile": bool(profile),
                 }
             )
@@ -480,6 +479,7 @@ class DevinAdapter:
                 "exit_code": exit_code,
                 "log": cli_log.name,
                 "profile_applied_to_cli": False,
+                "enforced_runner": enforced,
                 "layer_profile": bool(profile),
             }
         )
