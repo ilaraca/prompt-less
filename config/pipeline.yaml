@@ -19,30 +19,72 @@ models:
 stages:
   - id: repos_scan
     desc: (opcional) scripts/scan-repos.sh — pasta de repos → mapa-servicos.yaml
+    handler: repos_scan
+    optional: true
   - id: repo_index
     desc: (opcional) src.repo_index — código dos repos → rotas/entidades/status em state/
+    handler: repo_index
+    optional: true
+    depends_on: [repos_scan]
   - id: marcar
     desc: (opcional) src.marcar — vocabulário (mapa + código) com IDF → [[service:id]]
+    handler: marcar
+    optional: true
+    depends_on: [repo_index]
   - id: ingest
     desc: Carrega FIGMA_JSON, REGRAS_YAML, ENGENHARIA, MAPA_SERVICOS, TEMPLATE + docs
-  - id: servicos_split
-    desc: Particiona docs por marcador/keyword do mapa-servicos (microsserviços)
+    handler: ingest
   - id: preprocess
     desc: Modelo pequeno — filtra campos, inferência de tipos, desidrata
+    handler: preprocess
+    depends_on: [ingest]
+  - id: servicos_split
+    desc: Particiona docs por marcador/keyword do mapa-servicos (microsserviços)
+    handler: servicos_split
+    depends_on: [preprocess]
   - id: state_write
     desc: Persiste estado do workflow fora do prompt (sem texto bruto de docs)
+    handler: state_write
+    depends_on: [servicos_split]
+    foreach: context
   - id: doc_compress
     desc: Docs → chunks → resumos → consolidado (compressão hierárquica)
+    handler: doc_compress
+    depends_on: [state_write]
+    foreach: context
   - id: rag_retrieve
     desc: Recupera só chunks relevantes às regras/UI do artefato
+    handler: rag_retrieve
+    depends_on: [doc_compress]
+    foreach: context
   - id: rag_compress
     desc: UI/regras + docs comprimidos → consolidated ≤ budget
+    handler: rag_compress
+    depends_on: [rag_retrieve]
+    foreach: context
+  - id: canonical_spec
+    desc: IR verificável + quality gate (bloqueia se validation.has_errors)
+    handler: canonical_spec
+    depends_on: [rag_compress]
+    foreach: context
+    gates:
+      - when: validation.has_errors
+        then: blocked
   - id: context_build
     desc: Monta contexto hierárquico ≤ budget
+    handler: context_build
+    depends_on: [canonical_spec]
+    foreach: context
   - id: reason
     desc: LLM grande + prompt estável cacheável + tools compactas
+    handler: reason
+    depends_on: [context_build]
+    foreach: context
   - id: emit
     desc: Saída estruturada única (sem prosa)
+    handler: emit
+    depends_on: [reason]
+    foreach: context
 
 artifacts:
   openapi:
