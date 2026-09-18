@@ -413,6 +413,7 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   `completed`/`blocked` continuam finais)
 
 ### Fixed
+- Integração 35/37: `EnforcedRunner(profile=None)` pula allowlist do binário meta-CLI Devin; `.promptless-tmp` entra em `.git/info/exclude` para não falhar verify por worktree sujo.
 
 - Quality-gates deixam de divergir entre a máquina e o GitHub: o workflow chama
   `python scripts/quality_gates.py` (compile, ruff, mypy, YAML, secrets, audit,
