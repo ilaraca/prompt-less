@@ -1,22 +1,28 @@
-case_id: access_denied
+case_id: eval_multi_context
 tipo: historia
 split: true
 critical: true
+fixture_kind: multi_context
 services:
   - ms-cliente
+  - ms-pagamento
 http_statuses:
-  - 401
-  - 403
-http_status_mode: subset
+  - 200
+  - 400
+  - 422
 max_unreviewed_inferences: 0
 ownership:
   ms-cliente:
+    - mfe-onboarding
     - bff-cliente
     - ms-cliente
+  ms-pagamento:
+    - bff-pagamentos
+    - ms-pagamento
 artifacts:
   - historia
   - prd
 max_est_tokens: 2000
 signals:
-  - autenticação
-  - permissão
+  - /clientes
+  - /pagamentos

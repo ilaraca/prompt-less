@@ -1,0 +1,27 @@
+# HTTP crítico: igualdade por default (sem http_status_mode). Extra 5xx falha o gate.
+case_id: eval_adversarial
+tipo: historia
+split: true
+critical: true
+fixture_kind: adversarial
+services:
+  - ms-cliente
+http_statuses:
+  - 200
+  - 400
+max_unreviewed_inferences: 0
+forbidden_inferences:
+  - http 500
+  - default 422
+ownership:
+  ms-cliente:
+    - mfe-onboarding
+    - bff-cliente
+    - ms-cliente
+artifacts:
+  - historia
+  - prd
+max_est_tokens: 2000
+signals:
+  - /clientes
+  - CPF

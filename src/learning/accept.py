@@ -1,10 +1,21 @@
 """Aceite/rejeição de propostas com histórico persistente."""
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from src.runtime.atomic_io import atomic_write_json, read_json
+
+PROVEN_STATUSES = frozenset({"accepted", "approved_for_experiment"})
+HISTORY_KEYS = (
+    "proposed",
+    "applied_to_candidate",
+    "evaluated",
+    "approved_for_experiment",
+    "accepted",
+    "rejected",
+)
 
 
 def knowledge_dir(root: Path) -> Path:
@@ -15,19 +26,32 @@ def knowledge_dir(root: Path) -> Path:
 
 def load_history(root: Path) -> dict[str, Any]:
     path = knowledge_dir(root) / "proposals-history.json"
-    if not path.exists():
-        return {"accepted": [], "rejected": [], "approved_for_experiment": []}
-    data = json.loads(path.read_text(encoding="utf-8"))
-    data.setdefault("accepted", [])  # legado
-    data.setdefault("rejected", [])
-    data.setdefault("approved_for_experiment", [])
+    data = read_json(path)
+    if not isinstance(data, dict):
+        data = {}
+    for key in HISTORY_KEYS:
+        data.setdefault(key, [])
     return data
 
 
 def save_history(root: Path, history: dict[str, Any]) -> Path:
     path = knowledge_dir(root) / "proposals-history.json"
-    path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    for key in HISTORY_KEYS:
+        history.setdefault(key, [])
+    atomic_write_json(path, history)
     return path
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _applied_ids(apply_result: dict[str, Any] | None) -> set[str]:
+    if not apply_result:
+        return set()
+    if apply_result.get("status") != "applied":
+        return set()
+    return {str(i) for i in (apply_result.get("applied_ids") or []) if i}
 
 
 def decide_proposals(
@@ -35,55 +59,103 @@ def decide_proposals(
     comparison: dict[str, Any],
     *,
     root: Path,
+    apply_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
-    Gate de propostas.
+    Gate de propostas no candidato.
 
-    Enquanto não houver workspace candidato separado, o estado positivo é
-    `approved_for_experiment` (não `accepted`) — a proposta entra no knowledge
-    store para experimento, sem afirmar melhoria comprovada.
+    `accepted` = melhoria comprovada no workspace candidato (não é apply em
+    produção). Sem apply no candidato, a proposta nunca entra em
+    `accepted` nem `approved_for_experiment`.
     """
     history = load_history(root)
-    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    now = _now()
+    applied_ids = _applied_ids(apply_result)
+    diff = ""
+    if apply_result:
+        diff = str(apply_result.get("diff") or "")
+    metrics = comparison.get("metrics") or {}
+    workspaces = comparison.get("workspaces") or {}
+
+    proposed: list[dict[str, Any]] = []
+    applied: list[dict[str, Any]] = []
+    evaluated: list[dict[str, Any]] = []
     approved: list[dict[str, Any]] = []
+    accepted: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
 
-    if comparison.get("decision") == "reject" or comparison.get("regression"):
-        for p in proposals:
-            item = {
-                **p,
-                "status": "rejected",
-                "decided_at": now,
-                "reason": comparison.get("reasons"),
-            }
+    reject_cmp = (
+        comparison.get("decision") == "reject"
+        or comparison.get("regression")
+        or comparison.get("critical_regression")
+    )
+    distinct = bool((workspaces.get("distinct") if workspaces else True) is not False)
+    if workspaces and workspaces.get("baseline") and workspaces.get("candidate"):
+        distinct = bool(workspaces.get("distinct"))
+
+    def _record(bucket: str, item: dict[str, Any]) -> None:
+        history[bucket].append(item)
+
+    for raw in proposals:
+        pid = str(raw.get("id") or "")
+        base = {
+            **raw,
+            "decided_at": now,
+            "diff": diff,
+            "metrics": metrics,
+            "workspaces": workspaces,
+        }
+        proposed_item = {**base, "status": "proposed"}
+        proposed.append(proposed_item)
+        _record("proposed", proposed_item)
+
+        was_applied = pid in applied_ids
+        if was_applied:
+            applied_item = {**base, "status": "applied_to_candidate"}
+            applied.append(applied_item)
+            _record("applied_to_candidate", applied_item)
+            eval_item = {**base, "status": "evaluated"}
+            evaluated.append(eval_item)
+            _record("evaluated", eval_item)
+
+        reasons: list[str] = []
+        terminal = "rejected"
+        if not was_applied:
+            reasons = ["proposal_not_applied"]
+        elif not distinct:
+            reasons = ["workspaces_not_distinct"]
+        elif reject_cmp:
+            reasons = list(comparison.get("reasons") or ["eval_regression"])
+        elif (raw.get("risk") or "low") not in {"low"}:
+            reasons = ["human_approval_required_for_risk"]
+        elif comparison.get("improved"):
+            terminal = "accepted"
+        else:
+            terminal = "approved_for_experiment"
+
+        item = {**base, "status": terminal, "reason": reasons}
+        if terminal in PROVEN_STATUSES and not was_applied:
+            item["status"] = "rejected"
+            item["reason"] = ["proposal_not_applied"]
+            terminal = "rejected"
+
+        if terminal == "accepted":
+            accepted.append(item)
+            _record("accepted", item)
+        elif terminal == "approved_for_experiment":
+            approved.append(item)
+            _record("approved_for_experiment", item)
+        else:
             rejected.append(item)
-            history["rejected"].append(item)
-    else:
-        for p in proposals:
-            # risco medium+ exige aprovação humana mesmo sem regressão de eval
-            if (p.get("risk") or "low") not in {"low"}:
-                item = {
-                    **p,
-                    "status": "rejected",
-                    "decided_at": now,
-                    "reason": ["human_approval_required_for_risk"],
-                }
-                rejected.append(item)
-                history["rejected"].append(item)
-            else:
-                item = {
-                    **p,
-                    "status": "approved_for_experiment",
-                    "decided_at": now,
-                }
-                approved.append(item)
-                history["approved_for_experiment"].append(item)
+            _record("rejected", item)
 
     path = save_history(root, history)
     return {
-        # chave legada para callers; semanticamente = approved_for_experiment
-        "accepted": approved,
+        "proposed": proposed,
+        "applied_to_candidate": applied,
+        "evaluated": evaluated,
         "approved_for_experiment": approved,
+        "accepted": accepted,
         "rejected": rejected,
         "history_path": str(path),
         "comparison": comparison,

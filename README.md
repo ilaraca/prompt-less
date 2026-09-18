@@ -46,7 +46,7 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 | **Verify pós-executor** | `close_loop` confere o que ocorreu no Git e nos logs do adapter (não o payload) vs spec + policy |
 | **Promoção com aprovação humana** | `src.approval` vincula ator + spec + relatório + commit; HMAC detecta adulteração |
 | **Plano coordenado multi-repo** | `plan_repos` gera ondas/contratos a partir do mapa de serviços |
-| **Melhoria sem regressão silenciosa** | `improve` + evals; propostas só `approved_for_experiment` |
+| **Melhoria sem regressão silenciosa** | `improve` aplica a proposta só no candidato, compara evals distintas e só então promove status |
 
 ### Onde *não* é a melhor ferramenta (ainda)
 
@@ -100,7 +100,7 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
  [close_loop] ───────────── Git diff × adapter log × spec × policy → verify / repair
  [approval] ─────────────── request-approval → approve|reject → promote (HMAC)
  [plan_repos] ───────────── mapa-servicos → implementation_plan (ondas)
- [improve] ──────────────── diagnose → propostas → evals → approved_for_experiment
+ [improve] ──────────────── diagnose → apply no candidato → evals distintas → accepted / approved_for_experiment / rejected
 ```
 
 ### Técnicas de economia de tokens (mapeamento do artigo)
@@ -1146,9 +1146,29 @@ Fora deste ticket: scan de dependência no CI (`25`), cadeia tamper-evident (`19
 ```bash
 .venv/bin/python -m src.improve --verify-report /tmp/verify/verify-report.json
 .venv/bin/python -m src.improve --out state/knowledge   # demo sem report (falha AMBIGUOUS_HTTP)
+.venv/bin/python -m src.improve --cases happy_path,eval_adversarial --out /tmp/improve
 ```
 
-Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`playbook.yaml`) → eval suite → decisão. Status positivo = **`approved_for_experiment`** — não aplica mudança de código (apply + rollback = série 2).
+Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`playbook.yaml`) → **workspaces distintos** (snapshot de `config/` em `evals/workspaces/{baseline,candidate}`) → a proposta é aplicada **somente no candidato** (overlay atômico) → eval suite nos dois lados → decisão.
+
+Status:
+
+| Status | Significado |
+|--------|-------------|
+| `proposed` | proposta gerada, ainda sem apply |
+| `applied_to_candidate` | overlay gravado só no workspace candidato |
+| `evaluated` | evals baseline × candidate rodaram |
+| `approved_for_experiment` | aplicada, sem regressão crítica; ainda não é melhoria comprovada |
+| `accepted` | melhoria comprovada **no candidato** (não é apply em produção) |
+| `rejected` | regressão crítica, não aplicada, risco medium+, ou workspaces iguais |
+
+Uma proposta **não aplicada** nunca entra em `accepted` nem `approved_for_experiment`. Regressão em qualquer caso `critical: true` rejeita o candidato mesmo se o pass rate agregado subir. HTTP crítico exige igualdade de status, salvo `http_status_mode` explícito na fixture. O histórico (`state/knowledge/proposals-history.json`) guarda diff e métricas comparadas. Apply em produção continua no ticket `14`.
+
+Limites deste slice (não reabrir; o `14` consome o overlay):
+
+- O apply grava `config/proposal-overlay.yaml` só no candidato. `src.run` continua lendo `config/pipeline.yaml` do ROOT — a eval prova isolamento e gates, não o efeito da chave do playbook no IR.
+- `two_services` ainda espera HTTP 401 que o spec não materializa (residual do recorte de regras). O gate multi-contexto que passa é `eval_multi_context` (200/400/422 exact).
+- A suíte default inclui `eval_adversarial` e `eval_multi_context`. `--cases` restringe.
 
 ### Evals e testes
 
@@ -1156,7 +1176,8 @@ Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`
 .venv/bin/pytest -q
 ```
 
-Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
+Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services, **eval_adversarial**, **eval_multi_context**), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`, com métricas de claim recall, traceability, inferências inesperadas, custo e latência. Casos `critical` têm gate individual na comparação baseline × candidate. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
+
 
 ---
 
@@ -1429,10 +1450,11 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   worktree limpo antes do close_loop é o `10`
 - Sem `PROMPTLESS_INTEGRITY_KEY`, `evidence_hashes.hmac` fica nulo (SHA-256
   permanece) — **aceito**; selo tamper-evident da aprovação é o `21`
-- `improve` não aplica propostas nem faz rollback — só `approved_for_experiment`
+- `improve` aplica propostas só no workspace candidato e compara evals distintas; apply + rollback em produção continua no ticket `14`
 - OpenAPI/Mermaid derivam do IR já fatiado por `owner`: `--all-contexts` não
   replica a action de um serviço no contrato de outro; operação sem dono e
   erro órfão ficam `unresolved`
+
 - Status de sucesso só é resolvido com evidência: um 2xx declarado inequívoco
   (uma operação + um 2xx nas decisões) **ou** um 2xx único observado no código
   na rota casada (`origin: observed`); fora disso permanece `unresolved`
@@ -1454,10 +1476,11 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 1. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`) — consome as tools já no pacote
 2. Devin CLI real no `close_loop`
 3. Redis opcional (state backend)
-4. Execução concorrente por ondas + apply/rollback de propostas
+4. Execução concorrente por ondas + apply/rollback de propostas em produção (`14`)
 5. Consumidor SDD que leia `outputs/PRD.md` e gere architecture/tasks com RF + NFR
 6. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
 7. Ligar estágios opcionais de scan/index/marcar no grafo default
+
 
 ---
 

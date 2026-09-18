@@ -19,6 +19,20 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Evals de candidato** (`23-candidate-evals`): `improve` materializa workspaces
+  distintos, aplica a proposta só no candidato e compara evals com gate por
+  caso crítico (não só pass rate agregado)
+- Métricas de eval passam a incluir claim recall, statuses HTTP, traceability,
+  inferências inesperadas, custo (`avg_est_tokens`) e latência
+- Fixtures `eval_adversarial` (HTTP exact) e `eval_multi_context`; testes de
+  concorrência e recovery do apply
+- Histórico de propostas guarda diff e métricas comparadas; o resultado
+  distingue `proposed`, `applied_to_candidate`, `evaluated`,
+  `approved_for_experiment`, `accepted` e `rejected`
+- Limites aceitos neste slice (efeito do overlay no IR fica no `14`):
+  `src.run` ainda lê `pipeline.yaml` do ROOT; o gate multi-contexto que
+  passa é `eval_multi_context` (`two_services` segue com 401 omitido);
+  suíte default maior (`--cases` restringe)
 - **Tokenizer oficial pluggable** (`src/tokenizer.py`): budget e telemetria usam a
   estratégia do `models.provider` / `models.name`; OpenAI via `tiktoken`
   (`method=official`); demais providers ou lib ausente falham aberto para
@@ -61,6 +75,7 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Testes (`tests/integration/test_evidence_verify.py`): payload forjado não
   esconde arquivo fora de escopo; teste só declarado é recusado; hashes
   reproduzíveis a partir do repo e dos logs
+
 - **Evidência de código no Canonical Spec** (`22-code-evidence-spec`): o IR
   passa a modelar `current_state`, `gaps` e `code_evidence`; o `repo_index`
   aponta arquivo, símbolo, linha, rota e confiança, com origem `observed` ou
@@ -149,6 +164,11 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- `improve` deixa de comparar a mesma eval duas vezes: baseline e candidate
+  são workspaces/commits distintos; `accepted` só existe depois do apply no
+  candidato
+- HTTP em caso crítico passa a exigir igualdade de status, salvo regra
+  explícita (`http_status_mode`) na fixture
 - Budget (`context_build`) e telemetria (`est_tokens`, calculadora) passam a
   contar com o tokenizer ativo em vez de `len/4` fixo; recorte de consolidado
   ainda usa tokens×4 só como clip em caracteres
@@ -162,6 +182,7 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - `close_loop` / `verify_execution` exigem checkout Git (`--repo`) e log
   estruturado do adapter; `changed_files` e `commands_executed` do payload
   só servem para detectar divergência, não como evidência
+
 - História e PRD passam a preencher estado atual e gaps a partir do Canonical
   Spec; o placeholder “sem gaps” some quando o índice não foi aplicado
 - `manifest.json`, `state.json`, `provenance.json`, `latest.json`,
@@ -208,7 +229,8 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Devin CLI real no `close_loop`
 - Redis opcional (state backend)
 - Execução concorrente por ondas
-- Apply de propostas + rollback
+- Apply de propostas + rollback em produção (`14`; candidato já é o ticket 23)
+
 
 ## [0.2.0] - 2026-09-12
 
