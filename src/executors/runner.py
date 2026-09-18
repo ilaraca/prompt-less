@@ -680,37 +680,6 @@ class EnforcedRunner:
         )
         return proc
 
-    def __call__(
-        self,
-        argv: list[str],
-        profile: dict[str, Any] | None = None,
-        *,
-        timeout: float | None = None,
-        cwd: Path | str | None = None,
-        env: dict[str, str] | None = None,
-        check: bool = False,
-        capture_output: bool = True,
-        text: bool = True,
-        repo_root: Path | str | None = None,
-        **kwargs: Any,
-    ) -> subprocess.CompletedProcess[Any]:
-        """Mesma forma de ``run_argv`` / callables do adapter.
-
-        ``profile=None`` (meta-CLI Devin) pula a allowlist de camada, mas
-        mantém limites FS/rede/credenciais/tempo/recursos do runner.
-        """
-        del repo_root, kwargs  # binding local; ignore extras do contrato run_argv
-        return self.run(
-            argv,
-            timeout=timeout,
-            cwd=cwd,
-            env=env,
-            check=check,
-            capture_output=capture_output,
-            text=text,
-            skip_command_policy=profile is None,
-        )
-
     def run_authorized_task(
         self,
         *,
