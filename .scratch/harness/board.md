@@ -207,11 +207,14 @@ o Done do `27`.
 
 Um repositório: **`ilaraca/prompt-less`** (`origin`).
 
-- **Código + governança** vivem no mesmo git. Este board, `issues/` e os docs de
-  análise/correções estão em `.scratch/harness/` e `docs/` — versionados e
-  sincronizados com a `origin` (não há segundo repo local para o Kanban).
-- A pasta-mãe `techlead-docs` no disco é só o workspace Cursor (worktrees,
-  rules); não é um repositório git.
+- **Código + governança** no mesmo git. Este board, `issues/` e os docs de
+  análise/correções estão em `.scratch/harness/` e `docs/`.
+- **Editar Kanban só em** `pipeline/.scratch/harness/` (a raiz do workspace
+  tem symlink para lá). Nunca em `.worktrees/**/.scratch/harness/`.
+- Clone canônico do workspace: `pipeline/` na branch `workspace/stable`
+  (rastreia `origin/feature/onda-frontier` até a onda mergiar; depois `main`).
+- Checagem: `bash scripts/check_kanban_sync.sh` em `pipeline/`.
+- A pasta-mãe `techlead-docs` é só workspace Cursor; não é repositório git.
 
 Implementação de ticket acontece em **worktree filha** em
 `.worktrees/<id-slug>/` (fora do tree do clone), numa branch `feature/<slug>`.
