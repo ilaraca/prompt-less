@@ -1252,8 +1252,13 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 **Limitações**
 
 - Modo `--live` (chamada real OpenAI/Claude) ainda não implementado
-- Adapter Devin no `close_loop` é stub (E2E real = série 2); o verify já exige
+- Adapter Devin no `close_loop` é stub (E2E real = `10`); o verify já exige
   checkout Git (`--repo`), `base_commit`/`result_commit` e log JSONL do adapter
+  — **aceito** (20, 2026-09-18)
+- Worktree sujo vs `result_commit` não é checado (verify lê o commit) — **aceito**;
+  worktree limpo antes do close_loop é o `10`
+- Sem `PROMPTLESS_INTEGRITY_KEY`, `evidence_hashes.hmac` fica nulo (SHA-256
+  permanece) — **aceito**; selo tamper-evident da aprovação é o `21`
 - `improve` não aplica propostas nem faz rollback — só `approved_for_experiment`
 - OpenAPI/Mermaid derivam do IR, mas as `operations` **não** são fatiadas por
   serviço: com `--all-contexts` cada contexto recebe todas as actions da UI

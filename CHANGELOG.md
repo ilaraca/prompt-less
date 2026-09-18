@@ -99,6 +99,12 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   bloqueante e aparecem como `x-unresolved-operations` no OpenAPI
 - PRD lista ações com o status de sucesso do IR ou `unresolved` explícito
 
+### Riscos aceitos (`20-evidence-backed-verification`, 2026-09-18)
+
+- Adapter Devin continua stub; o runner real grava o JSONL no `10-devin-e2e`
+- Worktree sujo vs `result_commit` não é checado (verify lê o commit); débito do `10`
+- Sem `PROMPTLESS_INTEGRITY_KEY`, `evidence_hashes.hmac` fica nulo (SHA-256 permanece); selo da aprovação é o `21`
+
 ### Planejado (série 2)
 
 - Modo `--live` (OpenAI / Claude)
