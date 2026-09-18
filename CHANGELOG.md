@@ -7,6 +7,37 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Added
+
+- **Storage seguro da run** (`18-safe-run-storage`): `src/runtime/atomic_io.py`
+  com write-temp + `os.replace`, cópia atômica e contenção de caminho
+  (`resolve_within`)
+- `run_id` e id de serviço com formato canônico validado
+  (`InvalidRunId` / `InvalidContextId`); `run_dir.resolve()` obrigado a ficar
+  sob `<root>/runs` (`UnsafeRunPath`)
+- `RunStore.bootstrap()` reserva o diretório com `mkdir` exclusivo: id repetido
+  levanta `RunIdCollision` e preserva a run anterior; retomada via
+  `bootstrap(resume=True)`
+- Transições de status versionadas: `manifest.version` monotônica,
+  `status_history`, `RunStateConflict` em escrita com versão obsoleta e
+  `InvalidStatusTransition` em transição inválida
+- Espelho em `outputs/` publicado por `.mirror-manifest.json` (run_id + sha256
+  por arquivo), com remoção segura de artefatos obsoletos
+- Testes adversariais (`tests/integration/test_safe_run_storage.py`): traversal,
+  symlink, colisão de id, interrupção no commit da escrita e duas runs
+  concorrentes
+
+### Changed
+
+- `manifest.json`, `state.json`, `provenance.json`, `latest.json`,
+  `canonical-spec.yaml`, `spec-validation.json` e `llm_package_*.json` passam a
+  ser gravados atomicamente
+- Contrato único de contexto: o que é por serviço fica em `contextos/<id>/` na
+  run (`artifacts/`, `validations/`) e no espelho; o diretório morto
+  `runs/<id>/contexts/` deixa de ser criado
+- `EventStore` não cria mais o arquivo no construtor (o diretório da run só
+  nasce no `bootstrap`)
+
 ### Planejado (série 2)
 
 - IR → OpenAPI / Mermaid a partir do Canonical Spec

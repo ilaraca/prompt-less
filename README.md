@@ -906,12 +906,30 @@ Cada `python -m src.run …` cria um diretório isolado e espelha artefatos em `
 
 | Caminho | Conteúdo |
 |---------|----------|
-| `runs/<id>/manifest.json` | status, objective, timestamps |
+| `runs/<id>/manifest.json` | status versionado, objective, timestamps, `status_history` |
 | `runs/<id>/events.jsonl` | trilha append-only de eventos |
 | `runs/<id>/artifacts/` | artefatos da run (incl. `canonical-spec.yaml`) |
-| `runs/<id>/contexts/` | pacotes por serviço (`--all-contexts`) |
+| `runs/<id>/artifacts/contextos/<svc>/` | pacotes por serviço (`--all-contexts`) |
 | `runs/<id>/validations/` | `provenance.json`, `spec-validation.json` |
+| `runs/<id>/validations/contextos/<svc>/` | `spec-validation.json` por serviço |
 | `runs/<id>/state.json` | estado da execução (sem texto bruto) |
+
+**Contrato de contexto (único):** tudo que é por serviço vive em `contextos/<id>/` — na run (`artifacts/`, `validations/`) e no espelho (`outputs/contextos/<id>/`). O id do serviço é validado com a mesma regra do `run_id`.
+
+### Storage seguro da run
+
+`runs/` é o diretório autorizado da execução, e a pipeline trata isso como fronteira de segurança:
+
+| Garantia | Como |
+|----------|------|
+| `run_id` canônico | `[A-Za-z0-9_][A-Za-z0-9_-]*` até 64 chars; `..`, `/`, `\`, espaço, ponto e `latest` são `InvalidRunId` |
+| Sem escape de diretório | `run_dir.resolve()` precisa ficar sob `<root>/runs` (pega até symlink plantado) → `UnsafeRunPath` |
+| Sem JSON parcial | manifest, `state.json`, `provenance.json`, `latest.json`, `canonical-spec.yaml` e pacotes LLM usam write-temp + `os.replace` (`src/runtime/atomic_io.py`) |
+| Colisão de id | `bootstrap()` cria o diretório com `mkdir` exclusivo; id repetido = `RunIdCollision` (retomada explícita: `bootstrap(resume=True)`) |
+| Transição de status | `set_status` valida a transição e usa `version` monotônica; escrita com versão obsoleta = `RunStateConflict`; estado terminal não reabre |
+| Espelho publicado por manifesto | `outputs/.mirror-manifest.json` (run_id + sha256 por arquivo) é o ponto de commit; obsoletos da publicação anterior são removidos depois, symlinks são ignorados e arquivos nunca publicados nunca são apagados |
+
+O espelho em `outputs/` é **last-writer-wins** por design (compatibilidade com os scripts Devin); a fonte da verdade auditável continua sendo `runs/<id>/`.
 
 ### Provenance e claims
 
@@ -974,7 +992,7 @@ Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`
 
 ```bash
 .venv/bin/pytest -v --tb=short
-# esperado: 47 passed
+# esperado: 83 passed
 ```
 
 Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`. CI em `.github/workflows/ci.yml` (compileall + YAML de profiles + pytest + smoke `plan_repos`).
@@ -1025,7 +1043,7 @@ pipeline/
     ├── state_store.py / doc_compress.py / rag_compress.py
     ├── context_builder.py / reason.py / emit.py / economia.py
     ├── domain/                    # Claim, SourceRef, DocumentChunk, CanonicalSpec
-    ├── runtime/                   # RunContext, RunStore, EventStore
+    ├── runtime/                   # RunContext, RunStore, EventStore, atomic_io
     ├── spec/                      # builder do IR
     ├── validators/                # quality gate
     ├── renderers/                 # história/PRD a partir do IR
