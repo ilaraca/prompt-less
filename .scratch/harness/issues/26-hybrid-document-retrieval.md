@@ -1,7 +1,10 @@
 # 26-hybrid-document-retrieval
 
-**Kanban:** Todo  
+**Kanban:** Feedback  
 **Blocked by:** 19-contextual-provenance (Done), 23-candidate-evals (Done)
+
+> Worktree filha `.worktrees/26-hybrid-document-retrieval`, branch
+> `feature/hybrid-document-retrieval`, base `origin/main` (`aaeb004`).
 
 > O `19` e o `23` já saíram. O 23 tem workspaces distintos e gate por caso
 > crítico; o overlay ainda **não** entra no `src.run` (residual aceito,
@@ -39,18 +42,18 @@ Conclusão: âncoras servem documento **com estrutura**; chunk+sinal serve docum
 
 ## Aceite
 
-    40|- [ ] detecção de estrutura classifica o insumo (`structured` | `flat`) com evidência (nº de títulos, densidade de sinal)
-- [ ] insumo `structured` usa âncoras de seção (reaproveitar `doc_preface.parse_sections`) como unidade de recuperação
-- [ ] insumo `flat` mantém o caminho atual de `doc_compress` sem regressão
-- [ ] recuperação estrutural/lexical barata permanece a **primeira** camada
-- [ ] segunda camada semântica é opcional e limitada por budget
-- [ ] todo trecho recuperado carrega `SourceRef` e `score` por estratégia
-- [ ] deduplicação preserva diversidade de fontes
-- [ ] golden fixtures medem recall e precisão (inclui doc com sinônimo e doc só narrativo)
-- [ ] secrets/PII removidos antes de embeddings ou LLM
-- [ ] fallback local funciona sem provider externo
-    50|- [ ] custo adicional aparece na telemetria
-- [ ] índice invertido por seção não entra no prompt (fica em `state/`, como `repo_index`)
+    40|- [x] detecção de estrutura classifica o insumo (`structured` | `flat`) com evidência (nº de títulos, densidade de sinal)
+- [x] insumo `structured` usa âncoras de seção (reaproveitar `doc_preface.parse_sections`) como unidade de recuperação
+- [x] insumo `flat` mantém o caminho atual de `doc_compress` sem regressão
+- [x] recuperação estrutural/lexical barata permanece a **primeira** camada
+- [x] segunda camada semântica é opcional e limitada por budget
+- [x] todo trecho recuperado carrega `SourceRef` e `score` por estratégia
+- [x] deduplicação preserva diversidade de fontes
+- [x] golden fixtures medem recall e precisão (inclui doc com sinônimo e doc só narrativo)
+- [x] secrets/PII removidos antes de embeddings ou LLM
+- [x] fallback local funciona sem provider externo
+    50|- [x] custo adicional aparece na telemetria
+- [x] índice invertido por seção não entra no prompt (fica em `state/`, como `repo_index`)
 
 ## Métrica de sucesso
 
@@ -68,4 +71,33 @@ no contexto do modelo.
 
 ## Implementation note
 
-_(preencher ao mover para Feedback)_
+Entregue na branch `feature/hybrid-document-retrieval`.
+
+### O que saiu
+- Roteador `structured` | `flat` em `src/hybrid_retrieval.py` com evidência
+  (`heading_count`, `signal_density`)
+- `structured` → âncoras via `doc_preface.parse_sections` + TF-IDF; índice
+  invertido em `state/doc_section_index.json` (não no prompt)
+- `flat` → caminho `doc_compress` (chunk + `SIGNAL_RE`) sem regressão
+- 1ª camada sempre lexical/estrutural; 2ª semântica opcional com budget e
+  fallback local (sinônimos + TF), sem provider externo
+- Scrub de secrets/PII antes da camada semântica; cada hit com `SourceRef`,
+  `score` e `retrieval_strategy`; dedupe com diversidade de fontes
+- Telemetria: `est_tokens_semantic` + `hybrid` em `rag_stats`
+- Plugado em `rag_compress` e handler `doc_compress`
+- README + CHANGELOG `[Unreleased]` atualizados
+
+### Como verificar
+```bash
+cd .worktrees/26-hybrid-document-retrieval
+PYTHONPATH=. python scripts/quality_gates.py
+PYTHONPATH=. python -m src.hybrid_retrieval tests/fixtures/hybrid_structured/spec.md --detect-only
+PYTHONPATH=. python -m pytest tests/integration/test_hybrid_retrieval.py -q
+```
+
+### Riscos residuais
+- Camada semântica é lexical expandida (não embeddings); sinônimos fora do
+  léxico local ainda falham
+- `doc_preface` CLI (`--apply`/`--lookup`) permanece ferramenta de navegação
+  do agente — não é estágio da pipeline
+- Overlay IR do 23 continua residual no 14
