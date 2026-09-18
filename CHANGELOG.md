@@ -298,10 +298,11 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Planejado (série 2)
 
-- Devin CLI real no `close_loop`
-- Redis opcional (state backend)
-- Execução concorrente por ondas
-- Apply de propostas + rollback em produção (`14`; candidato já é o ticket 23)
+- Devin CLI real no `close_loop` (`10`)
+- Redis opcional (state backend) (`12b`)
+- Execução concorrente por ondas (`13`)
+- Client `--live` para Gemini / embeddings opcionais na retrieval híbrida
+- Alertas / ADRs / bulkhead no catálogo de engenharia (extensão do `28`)
 
 ## [0.2.0] - 2026-09-12
 
