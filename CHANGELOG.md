@@ -9,7 +9,6 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
-<<<<<<< HEAD
 - **Tokenizer oficial pluggable** (`src/tokenizer.py`): budget e telemetria usam a
   estratégia do `models.provider` / `models.name`; OpenAI via `tiktoken`
   (`method=official`); demais providers ou lib ausente falham aberto para
@@ -66,6 +65,18 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - **Storage seguro da run** (`18-safe-run-storage`): `src/runtime/atomic_io.py`
   com write-temp + `os.replace`, cópia atômica e contenção de caminho
   (`resolve_within`)
+- **Orquestração via `pipeline.yaml`** (`11-stages-yaml`): `stages` vira DAG
+  executável (`handler`, `depends_on`, `gates`, `foreach: context`);
+  `src/run.py` deixa de hardcodar ingest → preprocess → reason → emit
+- Protocolo `Stage` + registry de handlers, checkpoints com `schema_version`,
+  retry/timeout por estágio, retomada `--resume --run-id` (valida hashes das
+  entradas) e cancelamento com `manifest.status: cancelled`
+- Gate YAML `validation.has_errors → blocked`; handlers recusam escrita fora
+  de `runs/<id>/`; runs antigas sem `checkpoints/` migram a partir de
+  `events.jsonl`
+- Testes em `tests/integration/test_stages_yaml.py`: estágio isolado, falha
+  intermediária preserva `run_id`, resume, hash mismatch, timeout, retry,
+  sandbox e migração
 - `run_id` e id de serviço com formato canônico validado
   (`InvalidRunId` / `InvalidContextId`); `run_dir.resolve()` obrigado a ficar
   sob `<root>/runs` (`UnsafeRunPath`)
@@ -112,6 +123,19 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - **Golden tests** (`tests/integration/test_derived_artifacts.py`,
   `tests/fixtures/golden/`): falham se IR, história, PRD, OpenAPI e Mermaid
   divergirem, e se um status/campo/path inventado escapar
+- **Hardening profundo** (`15-hardening-deep`): Agent Debugger persistido na run
+  (`validations/debugger.json` com `failure` / `agent_behavior` /
+  `harness_component` / `root_cause`)
+- Scan de inputs (secrets, PII heurística, instruções suspeitas) **antes** de
+  montar o pacote LLM; achado `error` bloqueia (`reason: input_scan_failed`) e
+  grava `validations/input-scan.json`
+- Tools de recovery `search_claims` e `get_claim` no `llm_package` (OpenAI/Claude
+  + contrato neutro), consultando claims da run
+- Golden recall (`tests/fixtures/golden/expected_claims.yaml`): o teste falha se
+  o recall dos claims anotados cair
+- Profiles explícitos `gtw` / `worker` / `batch` + fallback fail-closed;
+  `realpath`/symlink na policy; allowlist semântica de argv; `run_argv` sempre
+  com `shell=False`
 
 ### Changed
 
@@ -148,6 +172,9 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Método/path ausentes na UI ficam `unresolved`, viram pergunta aberta não
   bloqueante e aparecem como `x-unresolved-operations` no OpenAPI
 - PRD lista ações com o status de sucesso do IR ou `unresolved` explícito
+- `--run-id` e `--resume` na CLI de `src.run`; `cancelled` entra na máquina de
+  status (`failed`/`cancelled` podem voltar a `running` na retomada;
+  `completed`/`blocked` continuam finais)
 
 ### Fixed
 
@@ -169,11 +196,9 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 - Modo `--live` (OpenAI / Claude)
 - Devin CLI real no `close_loop`
-- Orquestração declarativa via `pipeline.yaml` (stages)
 - Redis opcional (state backend)
 - Execução concorrente por ondas
 - Apply de propostas + rollback
-- Hardening profundo (debugger, injection, recovery, golden recall)
 
 ## [0.2.0] - 2026-09-12
 

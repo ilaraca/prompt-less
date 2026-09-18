@@ -343,14 +343,14 @@ def test_sucesso_com_evidencia_unica_e_resolvido():
 
 def test_gate_bloqueia_artefato_divergente(tmp_path: Path, monkeypatch):
     """Renderizador que inventa status não emite artefato (fail-closed)."""
-    import src.run as run_module
+    import src.runtime.handlers as handlers
 
-    original = run_module.render_openapi
+    original = handlers.render_openapi
 
     def _render_com_status_inventado(spec, template=None):
         return original(spec, template).replace("'400':", "'418':", 1)
 
-    monkeypatch.setattr(run_module, "render_openapi", _render_com_status_inventado)
+    monkeypatch.setattr(handlers, "render_openapi", _render_com_status_inventado)
     result = run(
         "openapi",
         dry_run=True,

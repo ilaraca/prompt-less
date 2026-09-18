@@ -22,11 +22,14 @@ from src.runtime.run_context import RunContext
 # manifesto do espelho: ponto de commit da publicação em outputs/
 MIRROR_MANIFEST_NAME = ".mirror-manifest.json"
 
-TERMINAL_STATUSES = frozenset({"completed", "blocked", "failed"})
+TERMINAL_STATUSES = frozenset({"completed", "blocked", "failed", "cancelled"})
 # "" = manifest ainda não existe
 _ALLOWED_TRANSITIONS: dict[str, frozenset] = {
     "": frozenset({"running"}),
-    "running": frozenset({"running", "completed", "blocked", "failed"}),
+    "running": frozenset({"running", "completed", "blocked", "failed", "cancelled"}),
+    # retomada de run interrompida ou falha — completed/blocked continuam finais
+    "failed": frozenset({"running"}),
+    "cancelled": frozenset({"running"}),
 }
 
 
@@ -67,7 +70,11 @@ class RunStore:
                     f"run_id '{self.ctx.run_id}' já existe em {run_dir}; "
                     "gere um id novo ou use bootstrap(resume=True)"
                 ) from None
-        for d in (self.ctx.artifacts_dir, self.ctx.validations_dir):
+        for d in (
+            self.ctx.artifacts_dir,
+            self.ctx.validations_dir,
+            self.ctx.checkpoints_dir,
+        ):
             d.mkdir(parents=True, exist_ok=True)
 
         existing = self.read_manifest()
@@ -227,6 +234,17 @@ class RunStore:
         integrity["hmac"] = seal_hmac(integrity)
         self.write_manifest({"integrity": integrity})
         return integrity
+
+    def write_debugger(self, report: dict[str, Any]) -> Path:
+        """Persiste o Agent Debugger em validations/debugger.json."""
+        path = self.ctx.validations_dir / "debugger.json"
+        atomic_write_json(path, report)
+        self.events.emit(
+            "debugger_recorded",
+            terminal_cause=(report.get("failure") or {}).get("terminal_cause"),
+            owner=(report.get("harness_component") or {}).get("probable_owner"),
+        )
+        return path
 
     # --------------------------------------------------------------- mirror
 

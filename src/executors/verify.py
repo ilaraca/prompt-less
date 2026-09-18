@@ -19,7 +19,12 @@ from src.executors.evidence import (
     test_evidence_errors,
     trace_in_result_commit,
 )
-from src.executors.policy import check_command_allowed, check_write_allowed, load_profiles
+from src.executors.policy import (
+    KNOWN_LAYERS,
+    check_command_allowed,
+    check_write_allowed,
+    load_profiles,
+)
 
 
 @dataclass
@@ -430,7 +435,7 @@ def _is_code_change(changed_files: list[str]) -> bool:
 
 def _infer_layer(repository: str) -> str | None:
     name = repository.lower()
-    for layer in ("bff", "mfe", "api", "gtw"):
+    for layer in KNOWN_LAYERS:
         if layer in name.split("-") or name.endswith(f"-{layer}"):
             return layer
     return None

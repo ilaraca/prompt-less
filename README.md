@@ -120,7 +120,7 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
 
 ## Como a estrutura funciona (camada a camada)
 
-A orquestração está em `src/run.py`. Cada etapa tem um módulo próprio; o dado flui **sempre desidratando** — o que sobra no final é o mínimo necessário para gerar o artefato.
+A orquestração está declarada em `config/pipeline.yaml` (`stages` com `handler`, `depends_on`, `gates`). `src/run.py` carrega o grafo e o executa; cada etapa continua num módulo próprio e o dado flui **sempre desidratando**.
 
 ### 1. `ingest` (`src/ingest.py` + `src/docs_ingest.py`)
 
@@ -255,8 +255,10 @@ Estimativa de tokens: tokenizer do provider configurado em `models.provider` / `
 **Papel:** preparar a geração, sem prosa na saída.
 
 - **`build_llm_package`**: gera JSON dual:
-  - `openai`: `instructions` + `input` + `store: true` (encadeamento futuro via `previous_response_id`)
-  - `claude`: `system` com `cache_control: ephemeral` + `messages`
+  - `openai`: `instructions` + `input` + `store: true` + tools `search_claims` / `get_claim`
+  - `claude`: `system` com `cache_control: ephemeral` + `messages` + as mesmas tools
+  - `tools`: contrato neutro das duas functions de recovery sobre claims da run
+- Antes de montar o pacote, o estágio `reason` varre inputs não confiáveis (secrets, PII heurística, instruções suspeitas). Achado `error` **bloqueia** a run (`reason: input_scan_failed`) e grava `validations/input-scan.json` — não engole o achado.
 - **`src/renderers/`**: com Canonical Spec disponível, os quatro artefatos são renderizados do IR (`render_historia`, `render_prd`, `render_openapi`, `render_mermaid`).
 - **`dry_run_scaffold`**: fallback legado (sem IR) que preenche o template localmente, sem API.
 - Na história/PRD, o render usa o IR + **`engenharia`** + `consolidated` (RF/AC + stack/NFR + handoff SDD). Estado atual e gaps saem de `current_state` / `gaps` do Canonical Spec — sem índice a seção declara *índice não aplicado*, nunca “sem gaps”.
@@ -936,6 +938,7 @@ Cada `python -m src.run …` cria um diretório isolado e espelha artefatos em `
 | `runs/<id>/validations/` | `provenance.json`, `spec-validation.json` |
 | `runs/<id>/validations/contextos/<svc>/` | `spec-validation.json` por serviço |
 | `runs/<id>/state.json` | estado da execução (sem texto bruto) |
+| `runs/<id>/checkpoints/` | um JSON por estágio (`schema_version`, hashes das entradas, status) |
 
 **Contrato de contexto (único):** tudo que é por serviço vive em `contextos/<id>/` — na run (`artifacts/`, `validations/`) e no espelho (`outputs/contextos/<id>/`). O id do serviço é validado com a mesma regra do `run_id`.
 
@@ -954,6 +957,28 @@ Cada `python -m src.run …` cria um diretório isolado e espelha artefatos em `
 | Espelho publicado por manifesto | `outputs/.mirror-manifest.json` (run_id + sha256 por arquivo) é o ponto de commit; obsoletos da publicação anterior são removidos depois, symlinks são ignorados e arquivos nunca publicados nunca são apagados |
 
 O espelho em `outputs/` é **last-writer-wins** por design (compatibilidade com os scripts Devin); a fonte da verdade auditável continua sendo `runs/<id>/`.
+
+### Orquestração declarativa (`pipeline.yaml`)
+
+`stages:` deixou de ser uma lista documental. Cada item vira um nó do grafo:
+
+| Campo | Papel |
+|-------|--------|
+| `id` / `handler` | nome estável + função no registry (`src/runtime/handlers.py`) |
+| `depends_on` | arestas do DAG (ciclo ou handler ausente = falha na carga) |
+| `optional: true` | pulado no grafo default (`repos_scan`, `repo_index`, `marcar`) |
+| `foreach: context` | corre uma vez por serviço depois de `servicos_split` |
+| `gates` | lookup pontilhado fail-closed (ex.: `validation.has_errors` → `blocked`) |
+| `retry` / `timeout_s` | tentativas extras e teto por estágio (omitidos = 0 / sem teto) |
+
+Estágios são **idempotentes**: repetir o mesmo estágio na mesma run só regrava os mesmos artefatos. Checkpoints usam `schema_version: 1`. Retomar uma run antiga sem `checkpoints/` reconstrói a partir de `events.jsonl`.
+
+```bash
+.venv/bin/python -m src.run historia --dry-run --run-id run-manual-1
+.venv/bin/python -m src.run historia --dry-run --run-id run-manual-1 --resume
+```
+
+`--resume` exige `--run-id`, recusa hashes de `inputs/` diferentes do checkpoint e só reabre runs `failed` / `cancelled` / `running`. Cancelamento (Ctrl+C) deixa `manifest.status: cancelled`. Handlers só escrevem dentro de `runs/<id>/` (`UnsafePath` se tentarem escapar). Backend continua **arquivo**; Redis não entra neste ticket.
 
 ### Provenance e claims
 
@@ -1080,16 +1105,33 @@ aprovação vigente. Promote sem registro válido e vinculado falha fechado.
 
 Policy (`config/permission_profiles.yaml` + `src/executors/policy.py`):
 
-- writes/comandos allow/deny por camada (`bff`, `api`, `mfe`, …)
-- comandos parseados como argv (`shlex`); `&&` / `;` / `||` negam
-- paths normalizados (`normalize_repo_path`) — rejeita absoluto e `..`
-- policy avalia o **diff Git** e o **realpath** (symlink para `infra/prod` não
-  passa só porque o path Git está em `src/`)
+- writes/comandos allow/deny por camada (`bff`, `api`, `mfe`, `gtw`, `worker`, `batch`)
+- camada ausente no YAML → fail-closed (`UNKNOWN_EXECUTION_LAYER`)
+- comandos parseados como argv (`shlex`); `&&` / `;` / `||` / backticks negam
+- allowlist **semântica**: tokens exatos do executable + args; path extra passa por `realpath`/normalize
+- paths: `normalize_repo_path` rejeita absoluto e `..`; com `repo_root`, symlink que escapa o repo é recusado
+- policy avalia o **diff Git** e o **realpath** (symlink para `infra/prod` não passa só porque o path Git está em `src/`)
+- execução nova vai por `src/executors/safe_exec.run_argv` — `shell=True` é erro
 - verify fail-closed para layer desconhecido; `NO_TESTS_REPORTED` é error em code change
 - `FILE_OUT_OF_SCOPE` → `required_reverts` (não amplia `editable_surface`)
 - rastreio RF/AC precisa existir no `result_commit` (arquivo e linha)
 
+O `close_loop` também grava `debugger.json` ao lado do `verify-report.json` (e a pipeline grava `runs/<id>/validations/debugger.json` em blocked/failed). Campos: `failure`, `agent_behavior`, `harness_component`, `root_cause`.
+
 O adapter Devin (`src/executors/devin.py`) é stub até o ticket E2E da série 2.
+
+### Hardening (`src/hardening/`)
+
+Camada de confiança da run, **antes** do `--live`:
+
+| Peça | Onde | Efeito |
+|---|---|---|
+| Agent Debugger | `validations/debugger.json` | separa falha do executor, da spec e do harness |
+| Scan de inputs | `validations/input-scan.json` | secrets / PII / injection; error = fail-closed |
+| Recovery de claims | tools no `llm_package` | `search_claims(query, service_id?)`, `get_claim(claim_id)` |
+| Golden recall | `tests/fixtures/golden/expected_claims.yaml` | o teste falha se o recall dos claims anotados cair |
+
+Fora deste ticket: scan de dependência no CI (`25`), cadeia tamper-evident (`19`), clientes OpenAI/Claude (`09`).
 
 ### Plano multi-repo (`plan_repos`)
 
@@ -1114,7 +1156,7 @@ Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`
 .venv/bin/pytest -q
 ```
 
-Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services) e goldens de artefato derivado em `tests/fixtures/golden/` (`openapi.yaml`, `sequence.mmd`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
+Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
 
 ---
 
@@ -1137,7 +1179,7 @@ pipeline/
 │   ├── scan-repos.sh              # pasta de repos → mapa-servicos.yaml (de/para)
 │   └── devin-from-promptless.sh   # scan + index + marcar + artefatos → Devin CLI
 ├── config/
-│   ├── pipeline.yaml              # budget, stages, caching, mapeamento de artefatos
+│   ├── pipeline.yaml              # budget, stages (grafo real), caching, artefatos
 │   ├── tools.compact.yaml         # tools sem prosa
 │   ├── permission_profiles.yaml   # policy por camada (write/command allow-deny)
 │   ├── playbook.yaml              # propostas de melhoria limitadas
@@ -1173,7 +1215,8 @@ pipeline/
     ├── spec/                      # builder do IR
     ├── validators/                # quality gate
     ├── renderers/                 # história/PRD/OpenAPI/Mermaid a partir do IR
-    ├── executors/                 # policy, verify, evidence (Git+logs), loop, Devin
+    ├── executors/                 # policy, verify, evidence (Git+logs), loop, Devin, safe_exec
+    ├── hardening/                 # debugger, input scan, claim tools, recall
     ├── planning/                  # grafo, camadas, plan
     └── learning/                  # evals, proposals, accept, failure_patterns
 ```
@@ -1210,6 +1253,23 @@ artifacts:
 ```
 
 Ajuste o budget conforme o provedor (janela, preço de cache) e o risco de “cortar demais” sinais.
+
+Estágios (trecho do grafo default):
+
+```yaml
+stages:
+  - id: canonical_spec
+    handler: canonical_spec
+    depends_on: [rag_compress]
+    foreach: context
+    gates:
+      - when: validation.has_errors
+        then: blocked
+  - id: emit
+    handler: emit
+    depends_on: [reason]
+    foreach: context
+```
 
 ---
 
@@ -1383,17 +1443,22 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
 - Branch protection em `main` **não** está ligada no GitHub (ver [Gates de qualidade](#gates-de-qualidade)); o workflow já é required-ready
 - `pip-audit` ignora CVEs cujo fix dropou Python 3.9 (lista no workflow)
+- Timeout de estágio é best-effort (thread); o handler pode continuar em background após o teto
+- Estágios opcionais (`repos_scan`, `repo_index`, `marcar`) existem no YAML mas ficam desligados no default
+- Scan de inputs é heurístico (regex); não substitui secret manager nem DLP
+- PII de baixa confiança (e-mail/telefone) só registra warning — não bloqueia sozinha
 
 **Próximos passos (série 2 — ver CHANGELOG [Unreleased])**
 
-1. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`)
+1. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`) — consome as tools já no pacote
 2. Devin CLI real no `close_loop`
-3. Orquestração declarativa via stages em `pipeline.yaml`
-4. Redis opcional (state backend)
-5. Execução concorrente por ondas + apply/rollback de propostas
-6. Hardening profundo (debugger, injection, recovery, golden recall)
-7. Consumidor SDD que leia `outputs/PRD.md` e gere architecture/tasks com RF + NFR
-8. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
+1. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`) — consome as tools já no pacote
+2. Devin CLI real no `close_loop`
+3. Redis opcional (state backend)
+4. Execução concorrente por ondas + apply/rollback de propostas
+5. Consumidor SDD que leia `outputs/PRD.md` e gere architecture/tasks com RF + NFR
+6. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
+7. Ligar estágios opcionais de scan/index/marcar no grafo default
 
 ---
 

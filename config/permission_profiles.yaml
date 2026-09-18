@@ -1,5 +1,6 @@
 version: 1
 # Profiles de permissão por camada (policy executável).
+# Camadas conhecidas: bff, api, mfe, gtw, worker, batch. Qualquer outra é fail-closed.
 profiles:
   bff:
     write_allow:
@@ -14,13 +15,18 @@ profiles:
       - "**/*.pem"
       - "**/*secret*"
     commands_allow:
-      - "./mvnw test"
-      - "./mvnw verify"
-      - "git diff"
-      - "pytest"
+      - executable: ./mvnw
+        args: [test]
+      - executable: ./mvnw
+        args: [verify]
+      - executable: git
+        args: [diff]
+      - executable: pytest
     commands_deny:
-      - "terraform apply"
-      - "kubectl delete"
+      - executable: terraform
+        args: [apply]
+      - executable: kubectl
+        args: [delete]
   api:
     write_allow:
       - "src/**"
@@ -31,10 +37,12 @@ profiles:
       - "**/*.pem"
       - "**/*secret*"
     commands_allow:
-      - "./mvnw test"
-      - "pytest"
+      - executable: ./mvnw
+        args: [test]
+      - executable: pytest
     commands_deny:
-      - "terraform apply"
+      - executable: terraform
+        args: [apply]
   mfe:
     write_allow:
       - "src/**"
@@ -46,7 +54,64 @@ profiles:
       - "**/*.pem"
       - "**/*secret*"
     commands_allow:
-      - "npm test"
-      - "pnpm test"
+      - executable: npm
+        args: [test]
+      - executable: pnpm
+        args: [test]
     commands_deny:
-      - "terraform apply"
+      - executable: terraform
+        args: [apply]
+  gtw:
+    write_allow:
+      - "src/**"
+      - "tests/**"
+      - "README.md"
+      - "CHANGELOG.md"
+    write_deny:
+      - ".github/workflows/**"
+      - "infra/prod/**"
+      - "**/*.pem"
+      - "**/*secret*"
+    commands_allow:
+      - executable: ./mvnw
+        args: [test]
+      - executable: pytest
+    commands_deny:
+      - executable: terraform
+        args: [apply]
+      - executable: kubectl
+        args: [delete]
+  worker:
+    write_allow:
+      - "src/**"
+      - "tests/**"
+      - "README.md"
+      - "CHANGELOG.md"
+    write_deny:
+      - "**/*.pem"
+      - "**/*secret*"
+      - "infra/prod/**"
+    commands_allow:
+      - executable: ./mvnw
+        args: [test]
+      - executable: pytest
+    commands_deny:
+      - executable: terraform
+        args: [apply]
+  batch:
+    write_allow:
+      - "src/**"
+      - "tests/**"
+      - "README.md"
+      - "CHANGELOG.md"
+    write_deny:
+      - "**/*.pem"
+      - "**/*secret*"
+      - "infra/prod/**"
+    commands_allow:
+      - executable: ./mvnw
+        args: [test]
+      - executable: pytest
+    commands_deny:
+      - executable: terraform
+        args: [apply]
