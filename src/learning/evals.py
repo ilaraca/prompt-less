@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -12,9 +13,18 @@ from src.run import run
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures"
-DEFAULT_CASES = ("happy_path", "access_denied", "two_services", "ambiguous_status")
+DEFAULT_CASES = (
+    "happy_path",
+    "access_denied",
+    "two_services",
+    "ambiguous_status",
+    "eval_adversarial",
+    "eval_multi_context",
+)
 _HTTP_RE = re.compile(r"(?:HTTP\s+)?\b([1-5]\d{2})\b", re.IGNORECASE)
 _ARTIFACT_NAMES = {"historia.md", "prd.md"}
+_QUALITY_UP = ("claim_recall", "traceability_rate", "pass_rate")
+_QUALITY_DOWN = ("unexpected_inferences", "avg_est_tokens", "avg_latency_ms")
 
 
 @dataclass
@@ -25,11 +35,17 @@ class CaseScore:
     ownership_match: bool = False
     status_ok: bool = False
     unexpected_inferences: int = 0
+    claim_recall: float = 0.0
+    traceable: bool = True
+    critical: bool = False
+    latency_ms: float = 0.0
     layer_scores: dict[str, Any] = field(default_factory=dict)
     details: dict[str, Any] = field(default_factory=dict)
 
     @property
     def passed(self) -> bool:
+        recall_ok = (not self.critical) or self.claim_recall >= 1.0
+        trace_ok = (not self.critical) or self.traceable
         return (
             self.status_ok
             and self.service_match
@@ -37,6 +53,8 @@ class CaseScore:
             and self.signals_present
             and self.ownership_match
             and self.unexpected_inferences == 0
+            and recall_ok
+            and trace_ok
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -211,8 +229,15 @@ def score_case(
         actual_statuses |= collect_spec_statuses(spec)
 
     expected_statuses = {int(s) for s in (expected.get("http_statuses") or [])}
-    # fixture decide: exact (default) | subset
-    mode = str(expected.get("http_status_mode") or "subset").lower()
+    critical = bool(expected.get("critical"))
+    explicit_mode = expected.get("http_status_mode")
+    if explicit_mode:
+        mode = str(explicit_mode).lower()
+    elif critical:
+        # HTTP crítico exige igualdade, salvo regra explícita na fixture
+        mode = "exact"
+    else:
+        mode = "subset"
     if not expected_statuses:
         expected_status_match = True
     elif mode == "exact":
@@ -225,6 +250,12 @@ def score_case(
     claims_blob = _claims_blob_from_result(result)
     spec_blob = "\n".join(_spec_text_blob(s) for s in specs)
     artifact_blob = "\n".join(t.lower() for t in _load_final_artifacts(output_root))
+    combined_blob = f"{claims_blob}\n{spec_blob}"
+    if signals:
+        hits = sum(1 for sig in signals if sig in combined_blob)
+        claim_recall = round(hits / len(signals), 3)
+    else:
+        claim_recall = 1.0
     if signals:
         ingestion_ok = all(sig in claims_blob for sig in signals)
         spec_ok = all(sig in spec_blob for sig in signals)
@@ -283,7 +314,10 @@ def score_case(
                 break
 
     layer_scores = {
-        "ingestion": {"expected_signals_found": ingestion_ok if signals else True},
+        "ingestion": {
+            "expected_signals_found": ingestion_ok if signals else True,
+            "claim_recall": claim_recall,
+        },
         "canonical_spec": {
             "expected_http_statuses": expected_status_match,
             "expected_signals": spec_ok if signals else True,
@@ -309,6 +343,10 @@ def score_case(
         ownership_match=ownership_match,
         status_ok=status_ok,
         unexpected_inferences=gate_unexpected,
+        claim_recall=claim_recall,
+        traceable=traceable if specs else expect_blocked,
+        critical=critical,
+        latency_ms=float(expected.get("_latency_ms") or 0),
         layer_scores=layer_scores,
         details={
             "expected_services": sorted(expected_services),
@@ -316,9 +354,12 @@ def score_case(
             "expected_statuses": sorted(expected_statuses),
             "actual_spec_statuses": sorted(actual_statuses),
             "http_status_mode": mode,
+            "http_status_mode_explicit": bool(explicit_mode),
             "signals": signals,
+            "claim_recall": claim_recall,
             "unexpected_items": unexpected_items[:20],
             "specs_loaded": len(specs),
+            "fixture_kind": expected.get("fixture_kind"),
         },
     )
 
@@ -327,21 +368,27 @@ def run_eval_suite(
     *,
     cases: tuple[str, ...] | list[str] = DEFAULT_CASES,
     output_root: Path,
+    workspace: Any | None = None,
+    run_id_prefix: str | None = None,
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
+    ws_payload = workspace.to_dict() if hasattr(workspace, "to_dict") else workspace
+    prefix = run_id_prefix or "eval"
     for case_id in cases:
         inputs = FIXTURES / case_id
         if not inputs.is_dir():
             continue
         out = output_root / case_id
         out.mkdir(parents=True, exist_ok=True)
+        started = time.perf_counter()
         result = run(
             "historia",
             dry_run=True,
             inputs_dir=inputs,
             output_root=out,
-            run_id=f"eval-{case_id}",
+            run_id=f"{prefix}-{case_id}"[:64],
         )
+        latency_ms = round((time.perf_counter() - started) * 1000, 1)
         tokens = []
         if result.get("by_context"):
             tokens = [
@@ -352,39 +399,115 @@ def run_eval_suite(
         elif result.get("est_tokens"):
             tokens = [int(result["est_tokens"])]
         expected = _load_expected(case_id)
+        expected = {**expected, "_latency_ms": latency_ms}
         score = score_case(expected, result, output_root=out)
+        score.latency_ms = latency_ms
         results.append(
             {
                 "case_id": case_id,
                 "status": result.get("status"),
                 "ok": score.passed,
+                "critical": bool(expected.get("critical")),
+                "fixture_kind": expected.get("fixture_kind"),
                 "expect_blocked": bool(expected.get("expect_blocked")),
                 "score": score.to_dict(),
                 "est_tokens_max": max(tokens) if tokens else 0,
                 "claims_count": result.get("claims_count") or 0,
+                "claim_recall": score.claim_recall,
+                "traceable": score.traceable,
+                "unexpected_inferences": score.unexpected_inferences,
+                "latency_ms": latency_ms,
             }
         )
 
     passed = sum(1 for r in results if r["ok"])
-    return {
-        "cases": results,
-        "summary": {
-            "total": len(results),
-            "passed": passed,
-            "failed": len(results) - passed,
-            "pass_rate": round(passed / max(len(results), 1), 3),
-            "avg_est_tokens": round(
-                sum(r["est_tokens_max"] for r in results) / max(len(results), 1), 1
-            ),
-        },
+    n = max(len(results), 1)
+    summary = {
+        "total": len(results),
+        "passed": passed,
+        "failed": len(results) - passed,
+        "pass_rate": round(passed / n, 3),
+        "avg_est_tokens": round(sum(r["est_tokens_max"] for r in results) / n, 1),
+        "claim_recall": round(sum(float(r["claim_recall"]) for r in results) / n, 3),
+        "traceability_rate": round(
+            sum(1 for r in results if r["traceable"]) / n, 3
+        ),
+        "unexpected_inferences": int(
+            sum(int(r["unexpected_inferences"]) for r in results)
+        ),
+        "avg_latency_ms": round(sum(float(r["latency_ms"]) for r in results) / n, 1),
+        "http_status_match_rate": round(
+            sum(1 for r in results if (r.get("score") or {}).get("expected_status_match"))
+            / n,
+            3,
+        ),
     }
+    payload: dict[str, Any] = {
+        "cases": results,
+        "summary": summary,
+        "workspace": ws_payload if isinstance(ws_payload, dict) else None,
+    }
+    return payload
+
+
+def _case_map(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {str(c.get("case_id")): c for c in (report.get("cases") or []) if c.get("case_id")}
+
+
+def _workspaces_distinct(baseline: dict[str, Any], candidate: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    b = baseline.get("workspace") or {}
+    c = candidate.get("workspace") or {}
+    info = {"baseline": b, "candidate": c, "distinct": True}
+    if not b and not c:
+        return True, info
+    distinct = bool(
+        b.get("path")
+        and c.get("path")
+        and b["path"] != c["path"]
+        and b.get("workspace_commit")
+        and c.get("workspace_commit")
+        and b["workspace_commit"] != c["workspace_commit"]
+    )
+    info["distinct"] = distinct
+    return distinct, info
+
+
+def _metric_block(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "claim_recall",
+        "traceability_rate",
+        "unexpected_inferences",
+        "pass_rate",
+        "avg_est_tokens",
+        "avg_latency_ms",
+        "http_status_match_rate",
+    )
+    out: dict[str, Any] = {}
+    for key in keys:
+        b = float(baseline.get(key) or 0)
+        c = float(candidate.get(key) or 0)
+        out[key] = {"baseline": b, "candidate": c, "delta": round(c - b, 4)}
+    return out
+
+
+def _improved(metrics: dict[str, Any]) -> bool:
+    for key in _QUALITY_UP:
+        if float((metrics.get(key) or {}).get("delta") or 0) > 0:
+            return True
+    for key in _QUALITY_DOWN:
+        if float((metrics.get(key) or {}).get("delta") or 0) < 0:
+            return True
+    return False
 
 
 def compare_evals(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     b = baseline.get("summary") or {}
     c = candidate.get("summary") or {}
     regression = False
+    critical_regression = False
     reasons: list[str] = []
+    case_gates: list[dict[str, Any]] = []
+
     if float(c.get("pass_rate") or 0) < float(b.get("pass_rate") or 0):
         regression = True
         reasons.append("pass_rate_decreased")
@@ -393,10 +516,44 @@ def compare_evals(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[s
     if b_tok and c_tok > b_tok * 1.25:
         regression = True
         reasons.append("token_budget_regression")
+
+    b_cases = _case_map(baseline)
+    c_cases = _case_map(candidate)
+    for case_id, b_case in b_cases.items():
+        c_case = c_cases.get(case_id)
+        if not c_case:
+            continue
+        critical = bool(b_case.get("critical") or c_case.get("critical"))
+        gate = {
+            "case_id": case_id,
+            "critical": critical,
+            "baseline_ok": bool(b_case.get("ok")),
+            "candidate_ok": bool(c_case.get("ok")),
+        }
+        if critical and b_case.get("ok") and not c_case.get("ok"):
+            critical_regression = True
+            regression = True
+            reasons.append(f"critical_case_regressed:{case_id}")
+            gate["regressed"] = True
+        case_gates.append(gate)
+
+    distinct, ws_info = _workspaces_distinct(baseline, candidate)
+    if (baseline.get("workspace") or candidate.get("workspace")) and not distinct:
+        regression = True
+        reasons.append("workspaces_not_distinct")
+
+    metrics = _metric_block(b, c)
+    improved = (not regression) and (not critical_regression) and _improved(metrics)
+    reject = regression or critical_regression
     return {
         "regression": regression,
+        "critical_regression": critical_regression,
+        "improved": improved,
         "reasons": reasons,
         "baseline": b,
         "candidate": c,
-        "decision": "reject" if regression else "accept",
+        "case_gates": case_gates,
+        "metrics": metrics,
+        "workspaces": ws_info,
+        "decision": "reject" if reject else "accept",
     }
