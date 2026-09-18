@@ -7,6 +7,23 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Added
+
+- **Recuperação híbrida de documentos** (`26-hybrid-document-retrieval`): roteador
+  `structured` | `flat` em `src/hybrid_retrieval.py` — documento com títulos usa
+  âncoras de seção (`doc_preface.parse_sections` + TF-IDF); documento plano mantém
+  `doc_compress` (chunk + `SIGNAL_RE`) sem regressão
+- Segunda camada semântica **opcional**, limitada por budget, com fallback local
+  (sinônimos + cosseno TF) — funciona sem provider externo; secrets/PII são
+  removidos antes dessa camada
+- Cada trecho recuperado carrega `SourceRef`, `score` e `retrieval_strategy`;
+  dedupe preserva diversidade de fontes; índice invertido por seção em
+  `state/doc_section_index.json` (nunca no prompt)
+- Telemetria de custo semântico (`est_tokens_semantic`, `hybrid` em rag_stats);
+  CLI `python -m src.hybrid_retrieval FILE [--query] [--detect-only]`
+- Golden fixtures `hybrid_structured` / `hybrid_synonym` / `hybrid_narrative` +
+  testes em `tests/integration/test_hybrid_retrieval.py`
+
 ### Fixed
 
 - Quality-gates deixam de divergir entre a máquina e o GitHub: o workflow chama

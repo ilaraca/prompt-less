@@ -1,0 +1,21 @@
+min_recall: 0.66
+cases:
+  structured:
+    must_contain:
+      - "400"
+      - "CPF"
+      - "401"
+    strategy: structural_anchor
+  synonym:
+    must_contain:
+      - "documento"
+      - "identificacao"
+    min_hits: 1
+  narrative:
+    must_contain:
+      - "recusa"
+    min_hits: 1
+lexical_flat_regression:
+  must_contain:
+    - "CPF"
+    - "400"
