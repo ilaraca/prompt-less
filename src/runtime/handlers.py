@@ -8,6 +8,7 @@ import yaml
 
 from src.context_builder import build_context
 from src.doc_compress import compress_documents
+from src.domain.provenance import stamp_claim_identity
 from src.emit import emit
 from src.ingest import ARTIFACT_TEMPLATES, load_inputs
 from src.preprocess import preprocess as preprocess_inputs
@@ -247,11 +248,13 @@ def rag_retrieve(ctx: StageContext) -> None:
 def rag_compress(ctx: StageContext) -> None:
     slot = ctx.slot()
     slim_ctx = slot.get("slim_ctx") or _prepare_slot(ctx)["slim_ctx"]
+    servico = slot.get("servico") or (ctx.payload.get("services") or {}).get(ctx.context_id)
     slot["rag"] = compress_rag(
         slim_ctx,
         consolidated_chars=int(ctx.payload.get("consolidated_chars") or 800),
         lines_per_chunk=int(ctx.payload.get("lines_per_chunk") or 40),
         chunk_summary_chars=int(ctx.payload.get("chunk_summary_chars") or 220),
+        service_id=(servico or {}).get("id") or ctx.context_id,
     )
 
 
@@ -267,6 +270,7 @@ def canonical_spec(ctx: StageContext) -> None:
         engenharia=slim_ctx.get("engenharia") or {},
         claims=list(rag.get("claims") or []),
         servico=servico,
+        mapa=ctx.payload.get("mapa"),
     )
     validation = validate_spec(spec)
     slot["spec"] = spec
@@ -472,6 +476,21 @@ def emit_stage(ctx: StageContext) -> None:
     rag = slot.get("rag") or {}
     validation = slot.get("validation")
     servico = slot.get("servico")
+    spec = slot.get("spec")
+    ns = ctx.context_id or (servico or {}).get("id") or "default"
+    claims_out: list[dict[str, Any]] = []
+    if spec is not None:
+        for claim in spec.claims:
+            payload = claim.to_dict()
+            if not payload.get("service_id"):
+                payload["service_id"] = (servico or {}).get("id")
+            claims_out.append(stamp_claim_identity(payload, context=ns))
+    else:
+        for claim in rag.get("claims") or []:
+            payload = dict(claim)
+            if not payload.get("service_id"):
+                payload["service_id"] = (servico or {}).get("id")
+            claims_out.append(stamp_claim_identity(payload, context=ns))
     slot["result"] = {
         "context": ctx.context_id,
         "servico": {k: v for k, v in (servico or {}).items() if k != "indice"} or None,
@@ -480,8 +499,10 @@ def emit_stage(ctx: StageContext) -> None:
         "outputs": outputs,
         "llm_packages": packages,
         "est_tokens": context_pkg.get("est_tokens"),
+        "est_tokens_method": context_pkg.get("est_tokens_method"),
+        "token_usage": context_pkg.get("token_usage"),
         "rag": context_pkg.get("rag_stats"),
-        "claims": list(rag.get("claims") or []),
+        "claims": claims_out,
         "discarded": list(rag.get("discarded") or []),
         "canonical_spec": str(spec_path) if spec_path else None,
         "validation": validation.to_dict() if validation is not None else None,

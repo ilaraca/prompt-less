@@ -80,10 +80,10 @@ def test_adversarial_payload_does_not_pass_verify():
     verify = verify_execution(result, spec, layer="bff")
     assert verify.status == "failed"
     codes = {i.code for i in verify.issues}
-    assert "FILE_OUT_OF_SCOPE" in codes
-    assert "COMMAND_DENIED" in codes
+    # 20: payload sem Git/log não é evidência — fail-closed antes da policy declarada
+    assert "MISSING_BASE_COMMIT" in codes
+    assert "MISSING_RESULT_COMMIT" in codes
     assert "NO_TESTS_REPORTED" in codes
-    assert "RF_NOT_MAPPED" in codes
 
 
 def test_adversarial_input_findings_are_recorded():
