@@ -1561,7 +1561,7 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 
 ## Limitações atuais e próximos passos
 
-**Limitações** (riscos residuais Onda C + Onda D/`10` aceitos em 2026-09-18 — ver board)
+**Limitações** (riscos residuais Onda C–E aceitos em 2026-09-18 — ver board)
 
 - `--live` cobre OpenAI Responses e Claude Messages (HTTP stdlib); Google Gemini
   ainda não tem client; loop de tools de recovery é limitado a poucas rodadas;
@@ -1597,6 +1597,9 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 - Plano multi-repo sem evidência de código cai na topologia por camada
   (`origin: heuristic`, exige revisão); o scheduler de ondas (`13`) já roda com
   adapter injetável / `--stub` — wiring Devin-por-task no CLI ainda é manual
+- Scheduler (`13`): falha parcial numa onda **não** aborta o plano — a onda
+  seguinte ainda roda; só isola o resultado da task. Wiring Devin-por-task no
+  CLI continua via adapter injetado / handoff do `10`
 - O pacote SDD lê o grafo multi-repo observado quando há evidência; fallback
   heurístico continua `requires_review`. NFRs são selecionados por camada +
   criticidade (`28`); tasks recebem o subconjunto da sua `layer`
