@@ -233,7 +233,7 @@ Base: pai `f755cec`.
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 38-critical-context-budget | **In progress** | filha (ajuste) | `.worktrees/38-critical-context-budget` · `feature/critical-context-budget` |
+| 38-critical-context-budget | **Feedback** | filha, HEAD `e96bc94` | `.worktrees/38-critical-context-budget` · `feature/critical-context-budget` |
 | (pai) onda-frontier | — | integra (após Done) | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
 ## Série 4 — Conformidade com o roadmap (frontier ativa)
@@ -261,7 +261,7 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 | 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **Done** | 30, 31, 32, 33, 34 |
 | 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Done** | 30, 31, 32, 33, 34 |
 | 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Done** | 30, 31, 32, 33, 34 |
-| 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | **In progress** | 35, 36, 37 |
+| 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | **Feedback** | 35, 36, 37 |
 | 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **In progress** | 30, 31, 32 |
 
 ### Reabertura após revisão de 2026-09-18
@@ -505,12 +505,12 @@ Sem capacidade de aplicar limites exigidos, bloquear o despacho.
 
 ### 38 — Contexto crítico e custo completo
 
-**Status atual: In progress — ajuste pós-reabertura.**
+**Status atual: Feedback — ajuste pós-reabertura (`e96bc94`).**
 
 **Revisão de 2026-09-18 — ajuste pendente:** com `critical_coverage.complete=False` e `silent_critical_loss=True`, o avaliador ainda retornou `passed=True`. O diagnóstico existe em `layer_scores`, mas não integra os gates obrigatórios.
 
-- [ ] Tornar perda crítica incompatível com aprovação de run concluída; manter tratamento explícito de bloqueio/split esperado.
-- [ ] Adicionar caso negativo com relatório de cobertura incompleta/perda silenciosa e exigir reprovação pelo motivo correto.
+- [x] Tornar perda crítica incompatível com aprovação de run concluída; manter tratamento explícito de bloqueio/split esperado.
+- [x] Adicionar caso negativo com relatório de cobertura incompleta/perda silenciosa e exigir reprovação pelo motivo correto.
 
 **Achado:** `_fit_to_budget()` corta template e consolidado por comprimento,
 sem proteger explicitamente requisitos críticos. Tokenizer e recuperação
@@ -526,12 +526,12 @@ diferenciando estimativa de uso/cobrança observados.
 - [x] Conteúdo crítico não desaparece silenciosamente ao reduzir orçamento.
 - [x] Excesso do mínimo crítico gera divisão ou bloqueio com diagnóstico.
 - [x] Omissões têm motivo e referência recuperável.
-- [ ] Cobertura crítica permanece no conjunto de avaliação.
+- [x] Cobertura crítica permanece no conjunto de avaliação.
 - [x] Métricas da tarefa incluem tentativas e não apresentam estimativa como fatura.
 
 **Código:** `src/context_builder.py`, compressão/recuperação e telemetria.
 
-**Kanban:** Todo · HEAD filha `c1c9b11` · ver
+**Kanban:** Feedback · HEAD filha `e96bc94` · ver
 `issues/38-critical-context-budget.md` § Implementation note.
 
 ### 39 — Regressões por caso e aprendizado controlado
