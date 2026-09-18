@@ -243,9 +243,32 @@ def test_close_loop_reapplies_policy_and_re_verifies_after_fix(tmp_path: Path):
     )
     runner = tmp_path / "runner"
     log_file = runner / "mvnw-test.txt"
-    adapter_log = write_adapter_log(runner / "adapter-log.jsonl", [mvnw_log_record()])
     rf = spec.requirements[0].id
     ac = spec.acceptance_criteria[0].id
+    from src.executors.evidence import spec_content_hash
+
+    shash = spec_content_hash(spec)
+    test_rec = evidenced_test(
+        name="ClienteServiceTest",
+        log_file=log_file,
+        run_id="run-fixed-001",
+        base_commit=base,
+        result_commit=result_sha,
+        spec_hash=shash,
+        covers=[ac],
+    )
+    adapter_log = write_adapter_log(
+        runner / "adapter-log.jsonl",
+        [
+            mvnw_log_record(
+                run_id="run-fixed-001",
+                base_commit=base,
+                result_commit=result_sha,
+                spec_hash=shash,
+                log_sha256=test_rec["log_sha256"],
+            )
+        ],
+    )
     execution = ExecutionResult(
         run_id="run-fixed-001",
         agent="devin",
@@ -258,7 +281,7 @@ def test_close_loop_reapplies_policy_and_re_verifies_after_fix(tmp_path: Path):
             "tests/ClienteServiceTest.java",
         ],
         commands_executed=[MVNW_TEST],
-        tests=[evidenced_test(name="ClienteServiceTest", log_file=log_file)],
+        tests=[test_rec],
         requirement_traceability={
             rf: ["src/main/java/ClienteService.java"],
             ac: ["tests/ClienteServiceTest.java"],

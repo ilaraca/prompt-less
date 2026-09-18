@@ -244,6 +244,7 @@ def test_known_failure_then_real_fix_rerun(tmp_path: Path):
         repo_path=repo,
         out_dir=out / "1",
         layer="bff",
+        require_enforcement=False,
         prompt="impl",
         require_cli=False,
         spec_hash=spec_content_hash(spec),
@@ -269,6 +270,7 @@ def test_known_failure_then_real_fix_rerun(tmp_path: Path):
         repo_path=repo,
         out_dir=out / "2",
         layer="bff",
+        require_enforcement=False,
         prompt="impl",
         require_cli=False,
         invoke_cli=True,
@@ -370,6 +372,7 @@ def test_materialize_ignores_sidecar_passed_without_running(tmp_path: Path):
         repo_path=repo,
         out_dir=out,
         layer="bff",
+        require_enforcement=False,
         prompt="x",
         require_cli=False,
     )
