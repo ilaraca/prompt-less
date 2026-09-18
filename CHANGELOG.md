@@ -24,6 +24,14 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Modo `--live`** (`09-live-llm`): `src/reason.py` chama OpenAI Responses
+  (`OPENAI_API_KEY`) ou Claude Messages (`ANTHROPIC_API_KEY`) com o
+  `llm_package_*.json`; dry-run permanece o default
+- Telemetria real em `token_usage` / `meta.live`: tokens billable, `delta` vs
+  estimado, `cache_hit`/`cache_read_tokens` quando o vendor reporta, e
+  `cost_usd` (tabela `economia.MODELOS`); falha de API não grava pacote/artefato
+  live e deixa `runs/<id>/` íntegro
+- Testes com transporte HTTP mock (`tests/integration/test_live_llm.py`)
 - **Consumidor SDD** (`27-sdd-consumer`): `run sdd` (e `also_emit` de história/PRD)
   gera `sdd-package.yaml` a partir do Canonical Spec — arquitetura, API decisions
   e tasks rastreáveis para revisão humana, sem despacho a executor
@@ -253,7 +261,6 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Planejado (série 2)
 
-- Modo `--live` (OpenAI / Claude)
 - Devin CLI real no `close_loop`
 - Redis opcional (state backend)
 - Execução concorrente por ondas

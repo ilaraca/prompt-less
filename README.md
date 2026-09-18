@@ -52,7 +52,7 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 
 | Cenário | Motivo |
 |--------|--------|
-| Geração 100% automática em produção sem revisão humana | Dry-run preenche esqueleto; `--live` (API) ainda é slot a plugar; Devin E2E e apply+rollback são série 2 |
+| Geração 100% automática em produção sem revisão humana | `--live` chama OpenAI/Claude, mas revisão humana + gates de IR continuam; Devin E2E e apply+rollback são série 2 |
 | Documentos sem sinais lexicais de negócio | Resumo extrativo prioriza termos (regra, HTTP, endpoint…); texto só narrativo pode ser filtrado demais |
 | Extração fiel linha a linha de PDFs jurídicos/contratos | Foco é **sinal para artefato técnico**, não arquivo íntegro |
 | `.doc` legado fora do macOS sem `antiword` | Conversão depende de `textutil` (macOS) ou `antiword` |
@@ -193,7 +193,7 @@ O padrão **Retrieve → Augment → Generate** aparece assim:
 |--------------------|----------------|
 | **Retrieve** | Selecionar e fatiar o que já está nos insumos da execução (UI, regras, docs em `inputs/`) |
 | **Augment** | Comprimir e juntar num `consolidated` ≤ budget |
-| **Generate** | Montar pacote LLM / dry-run scaffold / (futuro) chamada `--live` |
+| **Generate** | Montar pacote LLM / dry-run scaffold / chamada `--live` (OpenAI Responses ou Claude Messages) |
 
 Fluxo interno de `compress_rag()`:
 
@@ -262,7 +262,7 @@ Estimativa de tokens: tokenizer do provider configurado em `models.provider` / `
 - **`src/renderers/`**: com Canonical Spec disponível, os artefatos são renderizados do IR (`render_historia`, `render_prd`, `render_openapi`, `render_mermaid`, `render_sdd`).
 - **`dry_run_scaffold`**: fallback legado (sem IR) que preenche o template localmente, sem API.
 - Na história/PRD, o render usa o IR + **`engenharia`** + `consolidated` (RF/AC + stack/NFR + handoff SDD). Estado atual e gaps saem de `current_state` / `gaps` do Canonical Spec — sem índice a seção declara *índice não aplicado*, nunca “sem gaps”.
-- **`--live`**: slot ainda não implementado — deve consumir o pacote já comprimido.
+- **`--live`**: chama OpenAI Responses ou Claude Messages consumindo o `llm_package_*.json` já comprimido (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`).
 
 ### 8. `emit` (`src/emit.py` + `also_emit` em `run.py`)
 
@@ -308,7 +308,7 @@ Além do artefato, a pipeline grava o **pacote LLM** (contexto já comprimido):
 - `outputs/llm_package_historia.json`
 - `outputs/llm_package_prd.json`
 
-Cada pacote inclui variantes `openai` e `claude` para plugar a API no modo `--live`.
+Cada pacote inclui variantes `openai` e `claude` consumidas pelo modo `--live`.
 
 ### PRD → SDD
 
@@ -541,7 +541,20 @@ Gera scaffold do artefato + pacote LLM comprimido:
 
 ### Live (API)
 
-`--live` está reservado para plugar clientes OpenAI/Claude em `src/reason.py` usando o JSON já montado em `outputs/llm_package_*.json`. Hoje levanta `NotImplementedError` de propósito.
+Por padrão a pipeline é **dry-run** (sem rede). Com `--live`, `src/reason.py` envia o `llm_package_*.json` ao vendor conforme `models.provider` em `config/pipeline.yaml`:
+
+| Provider | API | Variável de ambiente |
+|---|---|---|
+| `openai` (default) | OpenAI Responses (`/v1/responses`) | `OPENAI_API_KEY` |
+| `anthropic` | Claude Messages (`/v1/messages`) | `ANTHROPIC_API_KEY` |
+
+```bash
+export OPENAI_API_KEY=sk-...          # ou ANTHROPIC_API_KEY=...
+export PROMPTLESS_INTEGRITY_KEY="$(openssl rand -hex 32)"
+.venv/bin/python -m src.run historia --live
+```
+
+Telemetria real grava em `token_usage` / `llm_package.meta`: `billable`, `delta` (vs estimado), `cache_hit` / `cache_read_tokens` quando o vendor reporta, e `cost_usd` (tabela de `src/economia.py`). Falha de API aborta o estágio `reason` **sem** gravar o pacote/artefato live daquele tipo — `runs/<id>/` permanece íntegro (manifest `failed`).
 
 ### Testes e CI
 
@@ -1474,7 +1487,7 @@ Na amostra incluída (~3000 linhas + microserviços + docx), a calculadora típi
 **Contagem naive (baseline):** docs brutos + figma/regras/engenharia/template + ~2,5k system + ~1,8k tools + ~3k histórico.  
 **Contagem Prompt-less:** pacote de `build_context` (system compacto + state + consolidado + template) + tools compactas — **sem** histórico e **sem** texto bruto.
 
-Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `src/economia.py` se o vendor mudar a lista. A contagem usa o tokenizer do `--modelo` (`method=official` via tiktoken no OpenAI). Sem a lib oficial, ou em Anthropic/Gemini, o fallback é `chars÷4` com `method=heuristic` e **não** é apresentado como contagem exata. O campo `token_usage.delta` (estimado vs billable) fica pronto para o modo live.
+Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `src/economia.py` se o vendor mudar a lista. A contagem pré-chamada usa o tokenizer do `--modelo` (`method=official` via tiktoken no OpenAI). Sem a lib oficial, ou em Anthropic/Gemini, o fallback é `chars÷4` com `method=heuristic` e **não** é apresentado como contagem exata. No `--live`, `token_usage.billable` / `delta` / `cache_hit` vêm da resposta do vendor (`observe_billable`).
 
 ---
 
@@ -1482,7 +1495,8 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 
 **Limitações**
 
-- Modo `--live` (chamada real OpenAI/Claude) ainda não implementado
+- `--live` cobre OpenAI Responses e Claude Messages (HTTP stdlib); Google Gemini
+  ainda não tem client; loop de tools de recovery é limitado a poucas rodadas
 - Adapter Devin no `close_loop` é stub (E2E real = `10`); o verify já exige
   checkout Git (`--repo`), `base_commit`/`result_commit` e log JSONL do adapter
   — **aceito** (20, 2026-09-18)
@@ -1516,15 +1530,13 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 
 **Próximos passos (série 2 — ver CHANGELOG [Unreleased])**
 
-1. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`) — consome as tools já no pacote
-2. Devin CLI real no `close_loop`
-1. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`) — consome as tools já no pacote
-2. Devin CLI real no `close_loop`
-3. Redis opcional (state backend)
-4. Execução concorrente por ondas + apply/rollback de propostas em produção (`14`)
-5. NFR por tipo (resiliência / observabilidade / segurança) no consumidor SDD (`28`)
-6. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
-7. Ligar estágios opcionais de scan/index/marcar no grafo default
+1. Devin CLI real no `close_loop` (`10`)
+2. Redis opcional (state backend)
+3. Execução concorrente por ondas + apply/rollback de propostas em produção (`14`)
+4. NFR por tipo (resiliência / observabilidade / segurança) no consumidor SDD (`28`)
+5. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
+6. Ligar estágios opcionais de scan/index/marcar no grafo default
+7. Client `--live` para Gemini / endurecer o agent loop de tools
 
 
 ---

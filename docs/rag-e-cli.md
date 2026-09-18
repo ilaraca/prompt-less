@@ -48,7 +48,7 @@ O que muda é o *como* do Retrieve: aqui **não há embeddings nem busca semânt
 |--------------------|----------------|
 | **Retrieve** | Selecionar e fatiar o que já está nos insumos (UI, regras, docs) |
 | **Augment** | Comprimir e juntar num `consolidated` ≤ budget |
-| **Generate** | Montar pacote LLM / dry-run scaffold / (futuro) `--live` |
+| **Generate** | Montar pacote LLM / dry-run scaffold / `--live` (OpenAI/Claude) |
 
 ### Analogia rápida
 
@@ -337,7 +337,7 @@ wc -l inputs/amostra_3000.txt   # amostra de 3000 linhas inclusa
 |-----------|------------------|
 | `tipo` | `openapi` · `mermaid` · `historia` · `prd` |
 | `--dry-run` | Padrão: gera scaffold **sem** chamar API |
-| `--live` | Slot para API (ainda não implementado — `NotImplementedError`) |
+| `--live` | Chama OpenAI Responses / Claude Messages (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) |
 | `--context ID` | Só o serviço `ID` (ex.: `ms-cliente`) |
 | `--all-contexts` | Um pacote por serviço do mapa |
 | `--no-split` | Ignora mapa; emite um único artefato |
@@ -630,7 +630,7 @@ Ordem típica multi-repo: **scan → repo_index → marcar → servicos (check) 
 |-----------|------------------|
 | `tipo` | `openapi` · `mermaid` · `historia` · `prd` |
 | `--dry-run` | Padrão: scaffold **sem** chamar API |
-| `--live` | Slot para API (ainda não implementado) |
+| `--live` | Chama OpenAI Responses / Claude Messages (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) |
 | `--context ID` | Só o serviço `ID` |
 | `--all-contexts` | Um pacote por serviço do mapa |
 | `--no-split` | Ignora mapa; um artefato único |

@@ -1,11 +1,14 @@
-"""Raciocínio: monta pacote LLM (cacheável) ou dry-run determinístico sem API."""
+"""Raciocínio: monta pacote LLM (cacheável), dry-run local ou chamada `--live`."""
 from __future__ import annotations
 
 import json
-from typing import Any
+import os
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
-from src.hardening.claim_tools import claude_tools, claim_tool_specs, openai_tools
-from src.hardening.input_scan import InputScanBlocked, scan_blobs
+from src.economia import MODELOS, custo_chamada
 from src.engenharia import (
     format_arquitetura,
     format_documentacao,
@@ -16,6 +19,540 @@ from src.engenharia import (
     format_seguranca,
     format_stack,
 )
+from src.hardening.claim_tools import (
+    claude_tools,
+    claim_tool_specs,
+    dispatch_tool,
+    openai_tools,
+)
+from src.hardening.input_scan import InputScanBlocked, scan_blobs
+from src.tokenizer import TokenEstimate, observe_billable, provider_for_model
+
+# Transporte HTTP injetável: (method, url, headers, body, timeout) → (status, body).
+Transport = Callable[[str, str, dict[str, str], bytes, float], tuple[int, bytes]]
+
+OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+CLAUDE_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_VERSION = "2023-06-01"
+DEFAULT_LIVE_TIMEOUT_S = 90.0
+DEFAULT_MAX_OUTPUT_TOKENS = 8192
+MAX_TOOL_ROUNDS = 3
+
+# Nomes curtos do config/economia → IDs de API do vendor.
+_API_MODEL_IDS: dict[tuple[str, str], str] = {
+    ("openai", "gpt-4o"): "gpt-4o",
+    ("openai", "gpt-4o-mini"): "gpt-4o-mini",
+    ("openai", "gpt-4.1"): "gpt-4.1",
+    ("anthropic", "claude-sonnet"): "claude-sonnet-4-20250514",
+    ("anthropic", "claude-haiku"): "claude-haiku-4-5-20251001",
+}
+
+
+class LiveApiError(RuntimeError):
+    """Falha na chamada `--live`. O handler não deve gravar artefato parcial."""
+
+    def __init__(self, message: str, *, status: int | None = None, body: str | None = None):
+        super().__init__(message)
+        self.status = status
+        self.body = body
+
+
+@dataclass
+class LiveUsage:
+    input_tokens: int
+    output_tokens: int
+    billable_tokens: int
+    cache_read_tokens: int = 0
+    cache_hit_ratio: float | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class LiveResult:
+    text: str
+    provider: str
+    model: str
+    usage: LiveUsage
+    response_id: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+    tool_rounds: int = 0
+
+
+def resolve_api_model(provider: str, model: str) -> str:
+    key = (provider.lower().strip(), model.lower().strip())
+    mapped = _API_MODEL_IDS.get(key)
+    if mapped:
+        return mapped
+    return model.strip()
+
+
+def env_api_key(provider: str) -> str | None:
+    if provider == "openai":
+        return os.environ.get("OPENAI_API_KEY") or None
+    if provider == "anthropic":
+        return os.environ.get("ANTHROPIC_API_KEY") or None
+    return None
+
+
+def default_transport(
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: bytes,
+    timeout: float,
+) -> tuple[int, bytes]:
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return int(resp.status), resp.read()
+    except urllib.error.HTTPError as exc:
+        payload = exc.read() if hasattr(exc, "read") else b""
+        return int(exc.code), payload
+    except urllib.error.URLError as exc:
+        raise LiveApiError(f"falha de rede na API ({url}): {exc}") from exc
+
+
+def _http_json(
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    *,
+    timeout: float,
+    transport: Transport | None = None,
+) -> dict[str, Any]:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    hdrs = {"Content-Type": "application/json", **headers}
+    status, raw = (transport or default_transport)(method, url, hdrs, body, timeout)
+    text = raw.decode("utf-8", errors="replace")
+    try:
+        data = json.loads(text) if text.strip() else {}
+    except json.JSONDecodeError as exc:
+        raise LiveApiError(
+            f"resposta não-JSON da API (HTTP {status})",
+            status=status,
+            body=text[:2000],
+        ) from exc
+    if status < 200 or status >= 300:
+        err = data.get("error") if isinstance(data, dict) else None
+        msg = ""
+        if isinstance(err, dict):
+            msg = str(err.get("message") or err.get("type") or "")
+        elif isinstance(err, str):
+            msg = err
+        raise LiveApiError(
+            msg or f"API HTTP {status}",
+            status=status,
+            body=text[:2000],
+        )
+    if not isinstance(data, dict):
+        raise LiveApiError("resposta JSON inesperada (não-objeto)", status=status)
+    return data
+
+
+def _usage_from_openai(raw_usage: dict[str, Any] | None) -> LiveUsage:
+    usage = raw_usage if isinstance(raw_usage, dict) else {}
+    input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+    output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+    details = usage.get("input_tokens_details")
+    cached = 0
+    if isinstance(details, dict):
+        cached = int(details.get("cached_tokens") or 0)
+    cached = cached or int(usage.get("cache_read_input_tokens") or 0)
+    billable = input_tokens + output_tokens
+    ratio = round(cached / input_tokens, 4) if input_tokens > 0 and cached > 0 else (
+        0.0 if input_tokens > 0 else None
+    )
+    return LiveUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        billable_tokens=billable,
+        cache_read_tokens=cached,
+        cache_hit_ratio=ratio,
+        raw=dict(usage),
+    )
+
+
+def _usage_from_claude(raw_usage: dict[str, Any] | None) -> LiveUsage:
+    usage = raw_usage if isinstance(raw_usage, dict) else {}
+    input_tokens = int(usage.get("input_tokens") or 0)
+    output_tokens = int(usage.get("output_tokens") or 0)
+    cached = int(usage.get("cache_read_input_tokens") or 0)
+    billable = input_tokens + output_tokens
+    ratio = round(cached / input_tokens, 4) if input_tokens > 0 and cached > 0 else (
+        0.0 if input_tokens > 0 else None
+    )
+    return LiveUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        billable_tokens=billable,
+        cache_read_tokens=cached,
+        cache_hit_ratio=ratio,
+        raw=dict(usage),
+    )
+
+
+def _merge_usage(parts: list[LiveUsage]) -> LiveUsage:
+    if not parts:
+        return LiveUsage(0, 0, 0)
+    input_tokens = sum(p.input_tokens for p in parts)
+    output_tokens = sum(p.output_tokens for p in parts)
+    cached = sum(p.cache_read_tokens for p in parts)
+    billable = sum(p.billable_tokens for p in parts)
+    ratio = round(cached / input_tokens, 4) if input_tokens > 0 and cached > 0 else (
+        0.0 if input_tokens > 0 else None
+    )
+    return LiveUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        billable_tokens=billable,
+        cache_read_tokens=cached,
+        cache_hit_ratio=ratio,
+        raw={"rounds": [p.raw for p in parts]},
+    )
+
+
+def _openai_output_text(data: dict[str, Any]) -> str:
+    chunks: list[str] = []
+    for item in data.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "message":
+            for part in item.get("content") or []:
+                if isinstance(part, dict) and part.get("type") in {
+                    "output_text",
+                    "text",
+                }:
+                    chunks.append(str(part.get("text") or ""))
+        elif item.get("type") == "output_text":
+            chunks.append(str(item.get("text") or ""))
+    if chunks:
+        return "".join(chunks).strip()
+    # fallback legado chat-completions shape
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices:
+        msg = (choices[0] or {}).get("message") or {}
+        return str(msg.get("content") or "").strip()
+    return ""
+
+
+def _openai_function_calls(data: dict[str, Any]) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    for item in data.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") in {"function_call", "tool_call"}:
+            calls.append(item)
+    return calls
+
+
+def _claude_text(data: dict[str, Any]) -> str:
+    chunks: list[str] = []
+    for block in data.get("content") or []:
+        if isinstance(block, dict) and block.get("type") == "text":
+            chunks.append(str(block.get("text") or ""))
+    return "".join(chunks).strip()
+
+
+def _claude_tool_uses(data: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        b
+        for b in (data.get("content") or [])
+        if isinstance(b, dict) and b.get("type") == "tool_use"
+    ]
+
+
+def _price_for_model(model: str) -> dict[str, float]:
+    if model in MODELOS:
+        return MODELOS[model]
+    short = model.lower()
+    for key, preco in MODELOS.items():
+        if key in short or short.startswith(key):
+            return preco
+    # fallback conservador (gpt-4o) só para telemetria — não inventa preço exato
+    return MODELOS["gpt-4o"]
+
+
+def build_live_telemetry(
+    estimate: TokenEstimate | dict[str, Any] | None,
+    live: LiveResult,
+) -> dict[str, Any]:
+    """Une estimado pré-chamada com billable/cache/custo reais do vendor."""
+    if isinstance(estimate, TokenEstimate):
+        base = observe_billable(estimate, live.usage.billable_tokens)
+    elif isinstance(estimate, dict) and estimate.get("estimated") is not None:
+        method = estimate.get("method") or "heuristic"
+        if method not in ("official", "heuristic"):
+            method = "heuristic"
+        fake = TokenEstimate(
+            tokens=int(estimate.get("estimated") or estimate.get("tokens") or 0),
+            method=method,  # type: ignore[arg-type]
+            provider=str(estimate.get("provider") or live.provider),
+            model=str(estimate.get("model") or live.model),
+            encoding=estimate.get("encoding"),
+            fallback_reason=estimate.get("fallback_reason"),
+        )
+        base = observe_billable(fake, live.usage.billable_tokens)
+    else:
+        base = {
+            "estimated": None,
+            "method": None,
+            "billable": live.usage.billable_tokens,
+            "delta": None,
+            "delta_pct": None,
+            "provider": live.provider,
+            "model": live.model,
+        }
+    preco = _price_for_model(live.model)
+    cache_hit = float(live.usage.cache_hit_ratio or 0.0)
+    cost = custo_chamada(
+        live.usage.input_tokens,
+        output_tokens=live.usage.output_tokens,
+        preco=preco,
+        cache_hit=cache_hit,
+        cacheable_prefix=live.usage.input_tokens,
+    )
+    return {
+        **base,
+        "input_tokens": live.usage.input_tokens,
+        "output_tokens": live.usage.output_tokens,
+        "cache_read_tokens": live.usage.cache_read_tokens,
+        "cache_hit": live.usage.cache_hit_ratio,
+        "cost_usd": cost,
+        "live_provider": live.provider,
+        "live_model": live.model,
+        "response_id": live.response_id,
+        "tool_rounds": live.tool_rounds,
+    }
+
+
+def call_openai_responses(
+    package: dict[str, Any],
+    *,
+    model: str,
+    api_key: str,
+    claims: list[dict[str, Any]] | None = None,
+    timeout: float = DEFAULT_LIVE_TIMEOUT_S,
+    transport: Transport | None = None,
+    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+) -> LiveResult:
+    """OpenAI Responses API consumindo `package['openai']`."""
+    openai_pkg = package.get("openai")
+    if not isinstance(openai_pkg, dict):
+        raise LiveApiError("llm_package sem bloco 'openai'")
+    api_model = resolve_api_model("openai", model)
+    usages: list[LiveUsage] = []
+    response_id: str | None = None
+    last_raw: dict[str, Any] = {}
+    text = ""
+    tool_rounds = 0
+
+    payload: dict[str, Any] = {
+        "model": api_model,
+        "instructions": openai_pkg.get("instructions"),
+        "input": openai_pkg.get("input"),
+        "store": bool(openai_pkg.get("store", True)),
+        "tools": openai_pkg.get("tools") or [],
+        "max_output_tokens": max_output_tokens,
+    }
+
+    for round_i in range(MAX_TOOL_ROUNDS + 1):
+        data = _http_json(
+            "POST",
+            OPENAI_RESPONSES_URL,
+            {"Authorization": f"Bearer {api_key}"},
+            payload,
+            timeout=timeout,
+            transport=transport,
+        )
+        last_raw = data
+        response_id = str(data.get("id") or "") or response_id
+        usages.append(_usage_from_openai(data.get("usage") if isinstance(data.get("usage"), dict) else None))
+        text = _openai_output_text(data)
+        calls = _openai_function_calls(data)
+        if text and not calls:
+            break
+        if not calls:
+            break
+        if round_i >= MAX_TOOL_ROUNDS:
+            break
+        tool_rounds += 1
+        outputs: list[dict[str, Any]] = []
+        for call in calls:
+            name = str(call.get("name") or call.get("function", {}).get("name") or "")
+            args = call.get("arguments") or call.get("function", {}).get("arguments") or {}
+            call_id = str(call.get("call_id") or call.get("id") or name)
+            result = dispatch_tool(name, args, claims)
+            outputs.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": json.dumps(result, ensure_ascii=False),
+                }
+            )
+        payload = {
+            "model": api_model,
+            "previous_response_id": response_id,
+            "input": outputs,
+            "store": True,
+        }
+
+    if not text:
+        raise LiveApiError(
+            "OpenAI Responses não retornou texto de artefato",
+            body=json.dumps(last_raw, ensure_ascii=False)[:2000],
+        )
+    return LiveResult(
+        text=text,
+        provider="openai",
+        model=api_model,
+        usage=_merge_usage(usages),
+        response_id=response_id,
+        raw=last_raw,
+        tool_rounds=tool_rounds,
+    )
+
+
+def call_claude_messages(
+    package: dict[str, Any],
+    *,
+    model: str,
+    api_key: str,
+    claims: list[dict[str, Any]] | None = None,
+    timeout: float = DEFAULT_LIVE_TIMEOUT_S,
+    transport: Transport | None = None,
+    max_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+) -> LiveResult:
+    """Anthropic Messages API consumindo `package['claude']`."""
+    claude_pkg = package.get("claude")
+    if not isinstance(claude_pkg, dict):
+        raise LiveApiError("llm_package sem bloco 'claude'")
+    api_model = resolve_api_model("anthropic", model)
+    usages: list[LiveUsage] = []
+    last_raw: dict[str, Any] = {}
+    text = ""
+    tool_rounds = 0
+    messages = list(claude_pkg.get("messages") or [])
+    system = claude_pkg.get("system")
+    tools = claude_pkg.get("tools") or []
+
+    for round_i in range(MAX_TOOL_ROUNDS + 1):
+        payload: dict[str, Any] = {
+            "model": api_model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+            "tools": tools,
+        }
+        if system is not None:
+            payload["system"] = system
+        data = _http_json(
+            "POST",
+            CLAUDE_MESSAGES_URL,
+            {
+                "x-api-key": api_key,
+                "anthropic-version": ANTHROPIC_VERSION,
+            },
+            payload,
+            timeout=timeout,
+            transport=transport,
+        )
+        last_raw = data
+        usages.append(_usage_from_claude(data.get("usage") if isinstance(data.get("usage"), dict) else None))
+        text = _claude_text(data)
+        tool_uses = _claude_tool_uses(data)
+        stop = str(data.get("stop_reason") or "")
+        if text and stop != "tool_use" and not tool_uses:
+            break
+        if not tool_uses:
+            break
+        if round_i >= MAX_TOOL_ROUNDS:
+            break
+        tool_rounds += 1
+        messages = [
+            *messages,
+            {"role": "assistant", "content": data.get("content") or []},
+        ]
+        tool_results: list[dict[str, Any]] = []
+        for block in tool_uses:
+            name = str(block.get("name") or "")
+            result = dispatch_tool(name, block.get("input") or {}, claims)
+            tool_results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": str(block.get("id") or name),
+                    "content": json.dumps(result, ensure_ascii=False),
+                }
+            )
+        messages.append({"role": "user", "content": tool_results})
+
+    if not text:
+        raise LiveApiError(
+            "Claude Messages não retornou texto de artefato",
+            body=json.dumps(last_raw, ensure_ascii=False)[:2000],
+        )
+    return LiveResult(
+        text=text,
+        provider="anthropic",
+        model=api_model,
+        usage=_merge_usage(usages),
+        response_id=str(last_raw.get("id") or "") or None,
+        raw=last_raw,
+        tool_rounds=tool_rounds,
+    )
+
+
+def live_generate(
+    package: dict[str, Any],
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    claims: list[dict[str, Any]] | None = None,
+    timeout: float = DEFAULT_LIVE_TIMEOUT_S,
+    transport: Transport | None = None,
+) -> LiveResult:
+    """Despacha para OpenAI Responses ou Claude Messages conforme o provider."""
+    meta = package.get("meta") if isinstance(package.get("meta"), dict) else {}
+    usage_hint = meta.get("token_usage") if isinstance(meta, dict) else None
+    resolved_model = (
+        model
+        or (usage_hint or {}).get("model")
+        or "gpt-4o"
+    )
+    resolved_provider = (
+        (provider or "").strip().lower()
+        or provider_for_model(str(resolved_model))
+        or "openai"
+    )
+    if resolved_provider == "google":
+        raise LiveApiError(
+            "provider 'google' ainda não tem client --live; use openai ou anthropic"
+        )
+    if resolved_provider not in {"openai", "anthropic"}:
+        raise LiveApiError(f"provider --live não suportado: {resolved_provider}")
+
+    key = api_key or env_api_key(resolved_provider)
+    if not key:
+        env_name = "OPENAI_API_KEY" if resolved_provider == "openai" else "ANTHROPIC_API_KEY"
+        raise LiveApiError(f"defina {env_name} para usar --live com {resolved_provider}")
+
+    if resolved_provider == "openai":
+        return call_openai_responses(
+            package,
+            model=str(resolved_model),
+            api_key=key,
+            claims=claims,
+            timeout=timeout,
+            transport=transport,
+        )
+    return call_claude_messages(
+        package,
+        model=str(resolved_model),
+        api_key=key,
+        claims=claims,
+        timeout=timeout,
+        transport=transport,
+    )
 
 
 def build_llm_package(
