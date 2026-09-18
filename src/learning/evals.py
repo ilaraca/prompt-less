@@ -41,11 +41,16 @@ class CaseScore:
     latency_ms: float = 0.0
     layer_scores: dict[str, Any] = field(default_factory=dict)
     details: dict[str, Any] = field(default_factory=dict)
+    # Gates de aprovação (AND obrigatório; diagnóstico fica em layer_scores/details)
+    required_gates: dict[str, bool] = field(default_factory=dict)
+    fail_reasons: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
+        if self.required_gates:
+            return all(self.required_gates.values())
+        # fallback legado (não deve ocorrer após score_case)
         recall_ok = (not self.critical) or self.claim_recall >= 1.0
-        trace_ok = (not self.critical) or self.traceable
         return (
             self.status_ok
             and self.service_match
@@ -54,7 +59,7 @@ class CaseScore:
             and self.ownership_match
             and self.unexpected_inferences == 0
             and recall_ok
-            and trace_ok
+            and self.traceable
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -97,6 +102,75 @@ def _load_final_artifacts(output_root: Path | None) -> list[str]:
         except OSError:
             continue
     return texts
+
+
+def _artifact_filename(name: str) -> str:
+    base = str(name).strip().lower()
+    if base.endswith(".md"):
+        return base
+    return f"{base}.md"
+
+
+def _expected_artifacts_present(
+    output_root: Path | None, expected_artifacts: list[str]
+) -> tuple[bool, list[str]]:
+    """Verifica presença física dos artefatos finais declarados na fixture."""
+    if not expected_artifacts:
+        return True, []
+    if output_root is None or not output_root.exists():
+        return False, list(expected_artifacts)
+    found_names = {
+        p.name.lower()
+        for p in output_root.rglob("*")
+        if p.is_file() and p.name.lower() in _ARTIFACT_NAMES
+    }
+    missing = [
+        name
+        for name in expected_artifacts
+        if _artifact_filename(name) not in found_names
+    ]
+    return not missing, missing
+
+
+def _blocking_pendencies(specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    for spec in specs:
+        for q in spec.get("open_questions") or []:
+            if bool(q.get("blocking")):
+                found.append(
+                    {
+                        "id": q.get("id"),
+                        "text": q.get("text"),
+                        "service_id": spec.get("service_id"),
+                    }
+                )
+    return found
+
+
+def _collect_block_reasons(result: dict[str, Any]) -> set[str]:
+    reasons: set[str] = set()
+    if result.get("reason"):
+        reasons.add(str(result["reason"]))
+    for ctx in result.get("by_context") or []:
+        if ctx.get("reason"):
+            reasons.add(str(ctx["reason"]))
+    return reasons
+
+
+def _collect_block_codes(result: dict[str, Any]) -> set[str]:
+    codes: set[str] = set()
+
+    def _from_validation(val: Any) -> None:
+        if not isinstance(val, dict):
+            return
+        for issue in val.get("issues") or []:
+            if isinstance(issue, dict) and issue.get("code"):
+                codes.add(str(issue["code"]))
+
+    _from_validation(result.get("validation"))
+    for ctx in result.get("by_context") or []:
+        _from_validation(ctx.get("validation"))
+    return codes
 
 
 def _spec_text_blob(spec: dict[str, Any]) -> str:
@@ -245,31 +319,28 @@ def score_case(
     else:
         expected_status_match = expected_statuses.issubset(actual_statuses)
 
-    # sinais: ingestion (claims) E/OU canonical spec — não provenance/packages
+    # sinais: diagnóstico por camada — aprovação NÃO permite compensação entre elas
     signals = [str(s).lower() for s in (expected.get("signals") or [])]
     claims_blob = _claims_blob_from_result(result)
     spec_blob = "\n".join(_spec_text_blob(s) for s in specs)
     artifact_blob = "\n".join(t.lower() for t in _load_final_artifacts(output_root))
-    combined_blob = f"{claims_blob}\n{spec_blob}"
+    expected_artifact_names = [str(a) for a in (expected.get("artifacts") or [])]
+    artifacts_present, missing_artifacts = _expected_artifacts_present(
+        output_root, expected_artifact_names
+    )
     if signals:
-        hits = sum(1 for sig in signals if sig in combined_blob)
+        hits = sum(1 for sig in signals if sig in f"{claims_blob}\n{spec_blob}")
         claim_recall = round(hits / len(signals), 3)
-    else:
-        claim_recall = 1.0
-    if signals:
         ingestion_ok = all(sig in claims_blob for sig in signals)
         spec_ok = all(sig in spec_blob for sig in signals)
-        # para casos blocked sem artefato, spec/claims bastam
-        if expect_blocked:
-            signals_present = ingestion_ok or spec_ok
-        else:
-            art_ok = all(sig in artifact_blob for sig in signals) if artifact_blob else False
-            signals_present = (ingestion_ok or spec_ok) and (art_ok or spec_ok)
+        art_ok = (
+            all(sig in artifact_blob for sig in signals) if artifact_blob else False
+        )
     else:
+        claim_recall = 1.0
         ingestion_ok = True
         spec_ok = True
         art_ok = True
-        signals_present = True
 
     expected_own = expected.get("ownership") or {}
     found_own = _collect_repos(result)
@@ -301,7 +372,7 @@ def score_case(
     else:
         gate_unexpected = unexpected_inferences
 
-    # requirements traceability no spec
+    # requirements traceability no spec (fonte inválida / vínculo quebrado)
     traceable = True
     for spec in specs:
         claim_ids = {c.get("id") for c in (spec.get("claims") or []) if c.get("id")}
@@ -312,6 +383,75 @@ def score_case(
             if not src or any(s not in claim_ids for s in src):
                 traceable = False
                 break
+        if not traceable:
+            break
+
+    if not specs:
+        # run completa sem spec não é rastreável; bloqueio esperado pode não emitir
+        traceable = bool(expect_blocked)
+
+    blocking = _blocking_pendencies(specs)
+    no_blocking_pendencies = True if expect_blocked else (len(blocking) == 0)
+
+    # causa esperada em casos de bloqueio
+    actual_reasons = _collect_block_reasons(result)
+    actual_codes = _collect_block_codes(result)
+    expected_reason = expected.get("expected_reason") or expected.get("block_reason")
+    expected_codes = {
+        str(c) for c in (expected.get("expected_block_codes") or expected.get("block_codes") or [])
+    }
+    if expect_blocked:
+        reason_ok = (
+            True
+            if not expected_reason
+            else str(expected_reason) in actual_reasons
+        )
+        codes_ok = (
+            True if not expected_codes else expected_codes.issubset(actual_codes)
+        )
+        block_cause_ok = reason_ok and codes_ok
+    else:
+        block_cause_ok = True
+
+    # --- gates de aprovação (AND; uma dimensão falsa nunca compensa outra) ---
+    needs_artifact_files = bool(expected_artifact_names) and not expect_blocked
+    needs_artifact_signals = bool(signals) and needs_artifact_files
+    needs_spec_signals = bool(signals) and bool(specs or not expect_blocked)
+
+    gate_spec_signals = (not needs_spec_signals) or spec_ok
+    gate_artifacts_present = (not needs_artifact_files) or artifacts_present
+    gate_artifact_signals = (not needs_artifact_signals) or art_ok
+    # spec presente: run completa exige canonical-spec carregado
+    gate_spec_present = True if expect_blocked else bool(specs)
+    gate_recall = (not critical) or claim_recall >= 1.0
+    gate_unexpected_ok = gate_unexpected == 0
+
+    required_gates: dict[str, bool] = {
+        "status_ok": status_ok,
+        "service_match": service_match,
+        "expected_status_match": expected_status_match,
+        "ownership_match": ownership_match,
+        "unexpected_inferences_ok": gate_unexpected_ok,
+        "spec_present": gate_spec_present,
+        "spec_signals": gate_spec_signals,
+        "artifacts_present": gate_artifacts_present,
+        "artifact_signals": gate_artifact_signals,
+        "traceable": traceable,
+        "no_blocking_pendencies": no_blocking_pendencies,
+        "claim_recall_ok": gate_recall,
+        "block_cause_ok": block_cause_ok,
+    }
+
+    fail_reasons = [name for name, ok in required_gates.items() if not ok]
+    # signals_present: agregado diagnóstico (sem compensação spec→artefato)
+    if expect_blocked:
+        signals_present = (not signals) or (ingestion_ok or spec_ok)
+    elif not signals:
+        signals_present = True
+    else:
+        signals_present = gate_spec_signals and (
+            gate_artifact_signals if needs_artifact_signals else True
+        )
 
     layer_scores = {
         "ingestion": {
@@ -321,18 +461,28 @@ def score_case(
         "canonical_spec": {
             "expected_http_statuses": expected_status_match,
             "expected_signals": spec_ok if signals else True,
-            "all_requirements_traceable": traceable if specs else expect_blocked,
+            "all_requirements_traceable": traceable,
+            "spec_present": gate_spec_present,
         },
         "artifacts": {
             "prd_historia_signals": (
                 True
                 if expect_blocked or not signals
-                else all(sig in artifact_blob for sig in signals)
-            )
+                else art_ok
+            ),
+            "expected_artifacts_present": gate_artifacts_present,
+            "missing_artifacts": missing_artifacts,
         },
         "provenance": {
             "unexpected_inferences": unexpected_inferences,
             "max_unreviewed_inferences": max_unreviewed,
+            "blocking_pendencies": len(blocking),
+        },
+        "block": {
+            "expect_blocked": expect_blocked,
+            "cause_ok": block_cause_ok,
+            "actual_reasons": sorted(actual_reasons),
+            "actual_codes": sorted(actual_codes),
         },
     }
 
@@ -344,10 +494,12 @@ def score_case(
         status_ok=status_ok,
         unexpected_inferences=gate_unexpected,
         claim_recall=claim_recall,
-        traceable=traceable if specs else expect_blocked,
+        traceable=traceable,
         critical=critical,
         latency_ms=float(expected.get("_latency_ms") or 0),
         layer_scores=layer_scores,
+        required_gates=required_gates,
+        fail_reasons=fail_reasons,
         details={
             "expected_services": sorted(expected_services),
             "found_services": sorted(found_services),
@@ -360,6 +512,13 @@ def score_case(
             "unexpected_items": unexpected_items[:20],
             "specs_loaded": len(specs),
             "fixture_kind": expected.get("fixture_kind"),
+            "missing_artifacts": missing_artifacts,
+            "blocking_pendencies": blocking[:10],
+            "expected_reason": expected_reason,
+            "expected_block_codes": sorted(expected_codes),
+            "actual_block_reasons": sorted(actual_reasons),
+            "actual_block_codes": sorted(actual_codes),
+            "fail_reasons": fail_reasons,
         },
     )
 

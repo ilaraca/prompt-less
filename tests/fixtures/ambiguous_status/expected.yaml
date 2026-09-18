@@ -3,6 +3,9 @@ tipo: historia
 split: true
 critical: true
 expect_blocked: true
+expected_reason: spec_validation_failed
+expected_block_codes:
+  - AMBIGUOUS_HTTP_STATUS
 services:
   - ms-cliente
 http_statuses:
