@@ -19,7 +19,6 @@ from tests.integration.evidence_support import (
     DEFAULT_BASE,
     DEFAULT_RESULT,
     MVNW_TEST,
-    TEST_TS,
     evidenced_test,
     make_git_repo,
     mvnw_log_record,
@@ -45,15 +44,36 @@ def _mini_spec():
     )
 
 
-def _fake_devin_runner(repo: Path, *, files: dict[str, str] | None = None):
-    """Simula o CLI: altera arquivos no checkout e retorna exit 0."""
+def _fake_devin_runner(
+    repo: Path,
+    *,
+    files: dict[str, str] | None = None,
+    sidecar: dict | None = None,
+    test_exit: int = 0,
+):
+    """Simula o CLI: altera arquivos no checkout e retorna exit 0.
+
+    Também atende comandos de teste sugeridos no sidecar (harness reexecuta).
+    """
 
     def runner(argv, profile=None, cwd=None, timeout=None, **kwargs):
-        assert argv[0] in {"devin", "fake-devin"}
-        assert "--print" in argv or "-p" in argv
         root = Path(cwd or repo)
-        write_files(root, files or DEFAULT_RESULT)
-        return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+        if argv and argv[0] in {"devin", "fake-devin"}:
+            assert "--print" in argv or "-p" in argv
+            write_files(root, files or DEFAULT_RESULT)
+            if sidecar is not None:
+                pl = root / "docs" / "prompt-less"
+                pl.mkdir(parents=True, exist_ok=True)
+                (pl / "execution-result.json").write_text(
+                    json.dumps(sidecar), encoding="utf-8"
+                )
+            return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+        # harness materialize — comando de verificação
+        return SimpleNamespace(
+            returncode=test_exit,
+            stdout="tests ok\n" if test_exit == 0 else "fail\n",
+            stderr="",
+        )
 
     return runner
 
@@ -128,7 +148,31 @@ def test_verify_rejects_dirty_worktree(tmp_path: Path):
     (repo / "orphan.txt").write_text("uncommitted\n", encoding="utf-8")
     runner = tmp_path / "runner"
     log_file = runner / "mvnw-test.txt"
-    adapter_log = write_adapter_log(runner / "adapter-log.jsonl", [mvnw_log_record()])
+    from src.executors.evidence import make_evidence_binding, spec_content_hash
+
+    bind = make_evidence_binding(
+        run_id="run-dirty-verify",
+        repository="bff-cliente",
+        base_commit=base,
+        result_commit=result_sha,
+        spec_hash=spec_content_hash(spec),
+    )
+    test = evidenced_test(
+        name="ClienteServiceTest",
+        log_file=log_file,
+        covers=[spec.acceptance_criteria[0].id],
+        binding=bind,
+    )
+    adapter_log = write_adapter_log(
+        runner / "adapter-log.jsonl",
+        [
+            mvnw_log_record(
+                log=log_file.name,
+                binding=bind,
+                log_sha256=test["log_sha256"],
+            )
+        ],
+    )
     rf = spec.requirements[0].id
     ac = spec.acceptance_criteria[0].id
     execution = ExecutionResult(
@@ -143,7 +187,7 @@ def test_verify_rejects_dirty_worktree(tmp_path: Path):
             "tests/ClienteServiceTest.java",
         ],
         commands_executed=[MVNW_TEST],
-        tests=[evidenced_test(name="ClienteServiceTest", log_file=log_file)],
+        tests=[test],
         requirement_traceability={
             rf: ["src/main/java/ClienteService.java"],
             ac: ["tests/ClienteServiceTest.java"],
@@ -169,37 +213,28 @@ def test_close_loop_after_adapter_writes_verify_report(tmp_path: Path):
     rf = spec.requirements[0].id
     ac = spec.acceptance_criteria[0].id
     out.mkdir(parents=True)
-    (out / "mvnw-test.txt").write_text("ClienteServiceTest exit=0\n", encoding="utf-8")
 
-    def runner(argv, profile=None, cwd=None, timeout=None, **kwargs):
-        root = Path(cwd or repo)
-        write_files(root, DEFAULT_RESULT)
-        pl = root / "docs" / "prompt-less"
-        pl.mkdir(parents=True, exist_ok=True)
-        (pl / "execution-result.json").write_text(
-            json.dumps(
-                {
-                    "requirement_traceability": {
-                        rf: ["src/main/java/ClienteService.java"],
-                        ac: ["tests/ClienteServiceTest.java"],
-                    },
-                    "tests": [
-                        {
-                            "name": "ClienteServiceTest",
-                            "passed": True,
-                            "command": MVNW_TEST,
-                            "exit_code": 0,
-                            "timestamp": TEST_TS,
-                            "log": "mvnw-test.txt",
-                        }
-                    ],
-                }
-            ),
-            encoding="utf-8",
-        )
-        return SimpleNamespace(returncode=0, stdout="done\n", stderr="")
+    sidecar = {
+        "requirement_traceability": {
+            rf: ["src/main/java/ClienteService.java"],
+            ac: ["tests/ClienteServiceTest.java"],
+        },
+        "tests": [
+            {
+                "name": "ClienteServiceTest",
+                "passed": True,
+                "command": MVNW_TEST,
+                "kind": "unit",
+                "covers": [ac],
+            }
+        ],
+    }
+    adapter = DevinAdapter(
+        cli_bin="fake-devin",
+        runner=_fake_devin_runner(repo, sidecar=sidecar),
+    )
+    from src.executors.evidence import spec_content_hash
 
-    adapter = DevinAdapter(cli_bin="fake-devin", runner=runner)
     execution = adapter.execute(
         run_id="rundevin01",
         repository="bff-cliente",
@@ -207,8 +242,10 @@ def test_close_loop_after_adapter_writes_verify_report(tmp_path: Path):
         out_dir=out,
         layer="bff",
         prompt="impl",
+        spec_hash=spec_content_hash(spec),
     )
     assert execution.tests
+    assert execution.tests[0]["executed_by"] == "harness"
     assert execution.commands_executed
 
     spec_path = artifacts / "canonical-spec.yaml"
@@ -246,10 +283,7 @@ def test_devin_adapter_feeds_close_loop_cli_path(tmp_path: Path):
     )
     out = run_dir / "executor"
 
-    def runner(argv, profile=None, cwd=None, timeout=None, **kwargs):
-        return SimpleNamespace(returncode=0, stdout="noop\n", stderr="")
-
-    adapter = DevinAdapter(cli_bin="fake-devin", runner=runner)
+    adapter = DevinAdapter(cli_bin="fake-devin", runner=_fake_devin_runner(repo))
     adapter.execute(
         run_id="rundevin02",
         repository="bff-cliente",

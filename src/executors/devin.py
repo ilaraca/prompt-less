@@ -10,13 +10,20 @@ from typing import Any, Callable
 from src.executors.base import ExecutionResult
 from src.executors.evidence import (
     GitEvidenceError,
+    HARNESS_EXECUTED_BY,
+    command_argv,
     full_commit_sha,
+    hash_bytes,
     inspect_commits,
+    is_non_behavioral_kind,
+    make_evidence_binding,
+    normalize_test_kind,
     run_git,
     worktree_dirty,
 )
+from src.executors.policy import load_profiles
 from src.executors.safe_exec import run_argv
-from src.runtime.atomic_io import atomic_write_json
+from src.runtime.atomic_io import atomic_write_json, sha256_of
 
 Runner = Callable[..., Any]
 
@@ -171,6 +178,7 @@ class DevinAdapter:
         auto_commit: bool = True,
         invoke_cli: bool = True,
         require_cli: bool = True,
+        spec_hash: str | None = None,
     ) -> ExecutionResult:
         """Invoca o CLI, grava adapter-log.jsonl + execution.json e devolve o resultado.
 
@@ -259,8 +267,24 @@ class DevinAdapter:
         if not isinstance(unresolved, list):
             unresolved = []
 
-        tests = _tests_from_sidecar(hints, log_dir=out)
-        self._materialize_test_evidence(tests, log_path=log_path, out_dir=out)
+        tests_suggested = _tests_from_sidecar(hints, log_dir=out)
+        binding = make_evidence_binding(
+            run_id=run_id,
+            repository=repository,
+            base_commit=git.base_sha or base_commit,
+            result_commit=git.result_sha or result_commit,
+            spec_hash=spec_hash,
+        )
+        profiles = load_profiles()
+        profile = profiles.get(layer) if layer else None
+        tests = self._materialize_test_evidence(
+            tests_suggested,
+            log_path=log_path,
+            out_dir=out,
+            repo=repo,
+            binding=binding,
+            profile=profile,
+        )
         commands = _commands_from_log(log_path)
         command_strs: list[str] = []
         for cmd in commands:
@@ -379,44 +403,140 @@ class DevinAdapter:
             detail = (proc.stderr or proc.stdout or "").strip()
             raise DirtyWorktreeError(f"falha ao commitar resultado do Devin: {detail}")
 
-    @staticmethod
     def _materialize_test_evidence(
-        tests: list[dict[str, Any]], *, log_path: Path, out_dir: Path
-    ) -> None:
-        """Copia evidência de testes do sidecar para o JSONL consumido pelo verify."""
-        if not tests:
-            # JSONL vazio é válido (sem code change / sem testes reportados)
-            if not log_path.exists():
-                log_path.write_text("", encoding="utf-8")
-            return
-        # regrava o log só com comandos de teste (policy-checkáveis)
+        self,
+        suggestions: list[dict[str, Any]],
+        *,
+        log_path: Path,
+        out_dir: Path,
+        repo: Path,
+        binding: dict[str, Any],
+        profile: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Executa sugestões do sidecar via runner do harness.
+
+        ``passed=True`` do agente **nunca** vira ``exit_code=0`` sem execução.
+        Sidecar só sugere comando/kind/covers; argv/stdout/stderr/exit vêm do
+        runner controlado pelo harness e ficam vinculados ao binding.
+        """
+        materialized: list[dict[str, Any]] = []
         if log_path.exists():
             log_path.unlink()
-        for test in tests:
-            cmd = test.get("command")
-            if not cmd:
+        if not suggestions:
+            log_path.write_text("", encoding="utf-8")
+            return materialized
+
+        for index, suggestion in enumerate(suggestions):
+            name = str(suggestion.get("name") or f"test-{index}")
+            kind = normalize_test_kind(suggestion.get("kind"))
+            covers = suggestion.get("covers") or suggestion.get("acceptance_criteria") or []
+            if isinstance(covers, (str, int)):
+                covers = [covers]
+            covers_list = [str(c) for c in covers]
+
+            if is_non_behavioral_kind(kind):
+                # Stub/skip: registra separadamente; não executa nem finge passe.
+                materialized.append(
+                    {
+                        "name": name,
+                        "kind": kind,
+                        "passed": False,
+                        "suggestion_only": True,
+                        "executed_by": None,
+                        "covers": covers_list,
+                        "binding": dict(binding),
+                    }
+                )
                 continue
-            exit_code = test.get("exit_code")
-            if not isinstance(exit_code, int):
-                exit_code = 0 if test.get("passed") else 1
-            ts = test.get("timestamp") or _now_iso()
-            log_rel = test.get("log")
+
+            command = suggestion.get("command") or suggestion.get("cmd")
+            if command is None and isinstance(suggestion.get("argv"), list):
+                raw_argv = [str(a) for a in suggestion["argv"]]
+                command = (
+                    {"executable": raw_argv[0], "args": raw_argv[1:]}
+                    if raw_argv
+                    else None
+                )
+            argv_t = command_argv(command) if command is not None else None
+            if argv_t is None:
+                # Sem comando: não inventa exit_code a partir de passed=.
+                materialized.append(
+                    {
+                        "name": name,
+                        "kind": kind,
+                        "passed": False,
+                        "suggestion_only": True,
+                        "executed_by": None,
+                        "covers": covers_list,
+                        "binding": dict(binding),
+                        "error": "sidecar sem comando executável",
+                    }
+                )
+                continue
+
+            argv = [str(a) for a in argv_t]
+            ts = _now_iso()
+            stdout = ""
+            stderr = ""
+            try:
+                proc = self.runner(
+                    argv,
+                    profile=profile,
+                    cwd=str(repo),
+                    capture_output=True,
+                    text=True,
+                    repo_root=str(repo),
+                )
+                exit_code = int(getattr(proc, "returncode", 1))
+                stdout = getattr(proc, "stdout", "") or ""
+                stderr = getattr(proc, "stderr", "") or ""
+            except Exception as exc:  # noqa: BLE001 — captura real da falha
+                exit_code = 1
+                stderr = str(exc)
+
+            safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name)[:80]
+            log_name = f"harness-test-{safe or index}.log"
+            log_body = f"argv: {argv!r}\nexit_code: {exit_code}\n\nstdout:\n{stdout}\n\nstderr:\n{stderr}\n"
+            dest = out_dir / log_name
+            dest.write_text(log_body, encoding="utf-8")
+            log_digest = sha256_of(dest)
+
             rec: dict[str, Any] = {
                 "timestamp": ts,
-                "command": cmd,
+                "argv": argv,
+                "command": " ".join(argv),
                 "exit_code": exit_code,
+                "log": log_name,
+                "log_sha256": log_digest,
+                "stdout_sha256": hash_bytes(stdout.encode("utf-8")),
+                "stderr_sha256": hash_bytes(stderr.encode("utf-8")),
+                "executed_by": HARNESS_EXECUTED_BY,
+                "kind": kind,
+                "binding": dict(binding),
+                "name": name,
             }
-            if isinstance(log_rel, str) and log_rel:
-                src = Path(log_rel)
-                if not src.is_absolute():
-                    src = out_dir / log_rel
-                if src.is_file():
-                    dest = out_dir / src.name
-                    if src.resolve() != dest.resolve():
-                        dest.write_bytes(src.read_bytes())
-                    rec["log"] = dest.name
-                    test["log"] = dest.name
             append_adapter_log(log_path, rec)
+
+            materialized.append(
+                {
+                    "name": name,
+                    "kind": kind,
+                    "passed": exit_code == 0,
+                    "command": {"executable": argv[0], "args": argv[1:]},
+                    "argv": argv,
+                    "exit_code": exit_code,
+                    "timestamp": ts,
+                    "log": log_name,
+                    "log_sha256": log_digest,
+                    "executed_by": HARNESS_EXECUTED_BY,
+                    "covers": covers_list,
+                    "binding": dict(binding),
+                }
+            )
+
+        if not log_path.exists():
+            log_path.write_text("", encoding="utf-8")
+        return materialized
 
 
 def main(argv: list[str] | None = None) -> None:

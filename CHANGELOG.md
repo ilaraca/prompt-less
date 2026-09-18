@@ -20,6 +20,17 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Evidência de teste independente** (`35-independent-test-evidence`):
+  `_materialize_test_evidence` deixa de traduzir `passed=True` do sidecar em
+  `exit_code=0` — o runner do harness executa o comando sugerido, captura
+  argv/stdout/stderr/exit reais e grava binding (`run_id`, repositório,
+  commits, `spec_hash`) no JSONL. Sidecar é só sugestão (`command`/`kind`/
+  `covers`). Verify exige `executed_by=harness`, rejeita log ausente/
+  incompleto/adulterado/de outra run, e bloqueia AC obrigatório sem prova
+  comportamental (`AC_WITHOUT_BEHAVIORAL_EVIDENCE` — arquivo existente não
+  basta). Stubs/skips ficam em `evidence_hashes.test_kinds.stub_or_skip`,
+  separados de E2E real. Testes em
+  `tests/integration/test_independent_test_evidence.py`.
 - **Revisão obrigatória bloqueante** (`33-required-review-gate`): match lexical
   com `requires_review=true` deixa de ser só warning — o gate emite
   `REQUIRED_REVIEW_PENDING` até `review_decisions` registrar ator, justificativa
