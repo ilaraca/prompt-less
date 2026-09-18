@@ -949,16 +949,16 @@ O espelho em `outputs/` é **last-writer-wins** por design (compatibilidade com 
 | `optional: true` | pulado no grafo default (`repos_scan`, `repo_index`, `marcar`) |
 | `foreach: context` | corre uma vez por serviço depois de `servicos_split` |
 | `gates` | lookup pontilhado fail-closed (ex.: `validation.has_errors` → `blocked`) |
-| `retry` / `timeout_s` | tentativas extras e teto por estágio (omitidos = 0 / sem teto) |
+| `retry` / `timeout_s` | tentativas extras e teto por estágio (omitidos = 0 / sem teto). Timeout é **best-effort**: a thread pode continuar após o teto |
 
-Estágios são **idempotentes**: repetir o mesmo estágio na mesma run só regrava os mesmos artefatos. Checkpoints usam `schema_version: 1`. Retomar uma run antiga sem `checkpoints/` reconstrói a partir de `events.jsonl`.
+Estágios são **idempotentes**: repetir o mesmo estágio na mesma run só regrava os mesmos artefatos. Checkpoints usam `schema_version: 1`. Retomar uma run antiga sem `checkpoints/` reconstrói a partir de `events.jsonl`. `--resume` **reexecuta** os estágios (não pula CPU); o ganho é o mesmo `run_id`/diretório.
 
 ```bash
 .venv/bin/python -m src.run historia --dry-run --run-id run-manual-1
 .venv/bin/python -m src.run historia --dry-run --run-id run-manual-1 --resume
 ```
 
-`--resume` exige `--run-id`, recusa hashes de `inputs/` diferentes do checkpoint e só reabre runs `failed` / `cancelled` / `running`. Cancelamento (Ctrl+C) deixa `manifest.status: cancelled`. Handlers só escrevem dentro de `runs/<id>/` (`UnsafePath` se tentarem escapar). Backend continua **arquivo**; Redis não entra neste ticket.
+`--resume` exige `--run-id`, recusa hashes de `inputs/` diferentes do checkpoint (`HashMismatch`) e só reabre runs `failed` / `cancelled` / `running`. `completed` e `blocked` são finais — run bem-sucedida não retoma; use um `run_id` novo. Cancelamento (Ctrl+C) deixa `manifest.status: cancelled`. Handlers só escrevem dentro de `runs/<id>/` (`UnsafePath` se tentarem escapar). Backend continua **arquivo**; Redis não entra neste ticket.
 
 ### Provenance e claims
 
@@ -1276,8 +1276,9 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 - Resumo de docs é **extrativo por regex**, não LLM small (bom custo; pode perder nuance)
 - Estimativa de tokens é heurística (`len/4`), não tokenizer oficial
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
-- Timeout de estágio é best-effort (thread); o handler pode continuar em background após o teto
-- Estágios opcionais (`repos_scan`, `repo_index`, `marcar`) existem no YAML mas ficam desligados no default
+- Timeout de estágio é best-effort (thread); o handler pode continuar em background após o teto — **aceito** (11, 2026-09-18); o YAML default não define `timeout_s`
+- `--resume` reexecuta estágios idempotentes no mesmo `run_id`, recusa hash diferente e não reabre `completed`/`blocked` — **aceito** (contrato do 11+18)
+- Estágios opcionais (`repos_scan`, `repo_index`, `marcar`) existem no YAML mas ficam desligados no default — **aceito**; ligar sem handler real falha fechado
 
 **Próximos passos (série 2 — ver CHANGELOG [Unreleased])**
 
@@ -1288,7 +1289,7 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 5. Hardening profundo (debugger, injection, recovery, golden recall)
 6. Consumidor SDD que leia `outputs/PRD.md` e gere architecture/tasks com RF + NFR
 7. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
-8. Ligar estágios opcionais de scan/index/marcar no grafo default
+8. Ligar estágios opcionais de scan/index/marcar no grafo default (fora do 11; índice real no 22)
 
 ---
 

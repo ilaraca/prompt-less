@@ -74,6 +74,12 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   status (`failed`/`cancelled` podem voltar a `running` na retomada;
   `completed`/`blocked` continuam finais)
 
+### Riscos aceitos (`11-stages-yaml`, 2026-09-18)
+
+- Timeout de estágio é best-effort (thread); o YAML default não define `timeout_s`
+- `--resume` reexecuta estágios idempotentes, recusa hash diferente e não reabre `completed`/`blocked`
+- `repos_scan` / `repo_index` / `marcar` permanecem desligados no grafo default
+
 ### Planejado (série 2)
 
 - Modo `--live` (OpenAI / Claude)
