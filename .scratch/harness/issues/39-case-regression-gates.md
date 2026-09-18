@@ -1,6 +1,8 @@
 # 39-case-regression-gates
 
-**Kanban:** Feedback  
+**Kanban:** Done  
+
+> Aprovado por humano em 2026-09-18 (`pode seguir`). Não reabre worktree filha.
 **Blocked by:** (ver board)  
 **Prioridade:** P0.1/P3
 

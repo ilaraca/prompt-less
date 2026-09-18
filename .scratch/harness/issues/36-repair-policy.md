@@ -1,6 +1,8 @@
 # 36-repair-policy
 
-**Kanban:** Feedback  
+**Kanban:** Done  
+
+> Aprovado por humano em 2026-09-18 (`pode seguir`). Não reabre worktree filha.
 **Blocked by:** 30, 31, 32, 33, 34  
 **Prioridade:** P1.2
 

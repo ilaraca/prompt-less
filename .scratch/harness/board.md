@@ -213,17 +213,17 @@ permanecem no HEAD do slice; não reabrir worktrees.
 | 34-cli-failure-exit | **Done** | filha, HEAD `addea9a` | `.worktrees/34-cli-failure-exit` · `feature/cli-failure-exit` |
 | (pai) onda-frontier | — | P0 integrado @ `87487fd` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
-### Onda F — Série 4 P1 / regressão (em curso)
+### Onda F — Série 4 P1 / regressão (**integrada** no pai)
 
 Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 35-independent-test-evidence | **Feedback** | filha, HEAD `36bcbc3` | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
-| 36-repair-policy | **Feedback** | filha | `.worktrees/36-repair-policy` · `feature/repair-policy` |
-| 37-executor-enforcement | **Feedback** | filha, HEAD `e4d458b` | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
-| 39-case-regression-gates | **Feedback** | filha, HEAD `e453a3d` | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
-| (pai) onda-frontier | — | integra filhas | `.worktrees/onda-merge` · `feature/onda-frontier` |
+| 35-independent-test-evidence | **Done** | filha, HEAD `36bcbc3` | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
+| 36-repair-policy | **Done** | filha, HEAD `fb4f0bc` | `.worktrees/36-repair-policy` · `feature/repair-policy` |
+| 37-executor-enforcement | **Done** | filha, HEAD `e4d458b` | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
+| 39-case-regression-gates | **Done** | filha, HEAD `e453a3d` | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
+| (pai) onda-frontier | — | P1 integrado @ `b8f9b7d` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
 
 ## Série 4 — Conformidade com o roadmap (frontier ativa)
@@ -248,11 +248,11 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 | 32-eval-typed-http | P0.1 | HTTP tipado por serviço e operação | **Done** | — |
 | 33-required-review-gate | P0.2 | Revisão obrigatória bloqueante e auditável | **Done** | — |
 | 34-cli-failure-exit | P0.3 | Exit code de falha e bloqueio de consumo | **Done** | — |
-| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **Feedback** | 30, 31, 32, 33, 34 |
-| 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Feedback** | 30, 31, 32, 33, 34 |
-| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Feedback** | 30, 31, 32, 33, 34 |
+| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **Done** | 30, 31, 32, 33, 34 |
+| 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Done** | 30, 31, 32, 33, 34 |
+| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Done** | 30, 31, 32, 33, 34 |
 | 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | Todo | 35, 36, 37 |
-| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **Feedback** | 30, 31, 32 |
+| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **Done** | 30, 31, 32 |
 
 ### Ordem de implementação e fechamento
 
