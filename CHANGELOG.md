@@ -9,6 +9,16 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Execução concorrente por ondas** (`13-parallel-exec`): scheduler
+  `src/executors/scheduler.py` consome `waves` do `implementation_plan`, limita
+  N tasks com semáforo (`--max-concurrency`) e agrega `ExecutionResult` + verify
+  por repositório; falha numa task **não** apaga resultados das irmãs da onda
+- CLI `python -m src.parallel_exec --plan … [--max-concurrency N] [--dry-run|--stub]`
+  grava `parallel-report.json`; state file backend ganha compare-and-set + lock
+  (`FileStateBackend`, sem Redis/`12b`)
+- Testes com adapter fake paralelo:
+  `tests/integration/test_parallel_exec.py`
+
 - **Devin CLI real no close_loop** (`10-devin-e2e`): `DevinAdapter.execute`
   invoca `devin --print --prompt-file …`, grava `adapter-log.jsonl` (comandos
   de build/teste) + `devin-session.json` (metadados da sessão), commit automático
@@ -230,6 +240,8 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- README: limitações do `13-parallel-exec` documentam riscos residuais aceitos
+  (CLI sem Devin-por-task; onda seguinte após falha parcial; Redis/`12b` parqueado)
 - README: limitações do `10-devin-e2e` documentam riscos residuais aceitos
   (sidecar para testes/build no JSONL; `DEVIN_E2E` só com CLI autenticado;
   auto-commit local sem push/PR)
@@ -315,7 +327,6 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 ### Planejado (série 2)
 
 - Redis opcional (state backend) (`12b`)
-- Execução concorrente por ondas (`13`)
 - Client `--live` para Gemini / embeddings opcionais na retrieval híbrida
 - Alertas / ADRs / bulkhead no catálogo de engenharia (extensão do `28`)
 
