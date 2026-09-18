@@ -226,13 +226,13 @@ Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
 | (pai) onda-frontier | — | P1 integrado @ `b8f9b7d` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
 
-### Onda F — 38 context budget (Feedback)
+### Onda F — 38 context budget (**integrada** no pai)
 
 Base: pai `f755cec`.
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 38-critical-context-budget | **Feedback** | filha, HEAD `c1c9b11` | `.worktrees/38-critical-context-budget` · `feature/critical-context-budget` |
+| 38-critical-context-budget | **Done** | filha, HEAD `c1c9b11` | `.worktrees/38-critical-context-budget` · `feature/critical-context-budget` |
 | (pai) onda-frontier | — | integra (após Done) | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
 ## Série 4 — Conformidade com o roadmap (frontier ativa)
@@ -260,7 +260,7 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 | 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **Done** | 30, 31, 32, 33, 34 |
 | 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Done** | 30, 31, 32, 33, 34 |
 | 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Done** | 30, 31, 32, 33, 34 |
-| 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | **Feedback** | 35, 36, 37 |
+| 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | **Done** | 35, 36, 37 |
 | 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **Done** | 30, 31, 32 |
 
 ### Ordem de implementação e fechamento

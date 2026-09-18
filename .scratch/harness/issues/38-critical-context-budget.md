@@ -1,6 +1,8 @@
 # 38-critical-context-budget
 
-**Kanban:** Feedback  
+**Kanban:** Done  
+
+> Aprovado por humano em 2026-09-18 (`pode seguir`). Não reabre worktree filha.
 **Blocked by:** 35, 36, 37 (Done)  
 **Prioridade:** P2.2
 
