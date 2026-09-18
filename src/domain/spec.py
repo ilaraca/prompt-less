@@ -8,14 +8,42 @@ from src.domain.claim import Claim
 
 
 @dataclass
+class ClaimLink:
+    """Vínculo claim → requisito/AC/erro com método e score de matching."""
+
+    claim_id: str
+    method: str = "lexical"
+    score: float = 1.0
+    requires_review: bool = False
+    context: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        data = {
+            "claim_id": self.claim_id,
+            "method": self.method,
+            "score": self.score,
+            "requires_review": self.requires_review,
+        }
+        if self.context:
+            data["context"] = self.context
+        return data
+
+
+@dataclass
 class Requirement:
     id: str
     text: str
     source_claims: list[str] = field(default_factory=list)
     status: str = "draft"
+    claim_links: list[ClaimLink] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["claim_links"] = [
+            link.to_dict() if isinstance(link, ClaimLink) else link
+            for link in self.claim_links
+        ]
+        return data
 
 
 @dataclass
@@ -26,9 +54,15 @@ class AcceptanceCriterion:
     when: str
     then: str
     source_claims: list[str] = field(default_factory=list)
+    claim_links: list[ClaimLink] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["claim_links"] = [
+            link.to_dict() if isinstance(link, ClaimLink) else link
+            for link in self.claim_links
+        ]
+        return data
 
 
 @dataclass
@@ -203,9 +237,15 @@ class SpecError:
     status: int
     code: str | None = None
     source_claims: list[str] = field(default_factory=list)
+    claim_links: list[ClaimLink] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["claim_links"] = [
+            link.to_dict() if isinstance(link, ClaimLink) else link
+            for link in self.claim_links
+        ]
+        return data
 
 
 @dataclass

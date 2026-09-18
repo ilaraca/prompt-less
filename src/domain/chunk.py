@@ -40,6 +40,7 @@ class ChunkSummary:
     reason: str | None = None
     recoverable: bool = True
     document: str | None = None
+    section: str | None = None
     start_line: int | None = None
     end_line: int | None = None
     content_hash: str | None = None

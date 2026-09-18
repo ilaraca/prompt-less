@@ -16,6 +16,7 @@ from src.runtime.atomic_io import (
     sha256_of,
 )
 from src.runtime.event_store import EventStore
+from src.runtime.integrity import collect_sealed_files, current_kid, seal_hmac
 from src.runtime.run_context import RunContext
 
 # manifesto do espelho: ponto de commit da publicação em outputs/
@@ -204,6 +205,28 @@ class RunStore:
             discarded=len(discarded),
         )
         return path
+
+    def seal_artifacts(self) -> dict[str, Any]:
+        """
+        Ancora sha256 dos artefatos no manifest com HMAC da ponta da cadeia.
+
+        Não emite evento depois do selo: `events_tip` é o HMAC do último
+        evento já gravado (`run_finished` se chamado após `finish`).
+        """
+        files = collect_sealed_files(
+            self.ctx.run_dir, self.ctx.artifacts_dir, self.ctx.validations_dir
+        )
+        kid = current_kid()
+        integrity = {
+            "algo": "hmac-sha256",
+            "kid": kid,
+            "events_tip": self.events.tip,
+            "files": files,
+            "sealed_at": _now(),
+        }
+        integrity["hmac"] = seal_hmac(integrity)
+        self.write_manifest({"integrity": integrity})
+        return integrity
 
     # --------------------------------------------------------------- mirror
 

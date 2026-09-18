@@ -16,6 +16,22 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - `token_usage` no resultado da run e no `llm_package.meta`, com hook
   `observe_billable` para o live (09) persistir estimado vs tokens cobrados
 - Testes de budget no limite (`== teto` cabe; `teto+1` corta template)
+- **Verificação por evidência** (`20-evidence-backed-verification`): o
+  `close_loop` deixa de confiar em `changed_files` / comandos / testes
+  declarados no payload. `base_commit` e `result_commit` são obrigatórios;
+  o verify confirma ancestralidade no mesmo repositório e calcula o diff
+  com Git
+- Policy avalia o diff real e o realpath (symlink em `src/` apontando para
+  `infra/prod` é `FILE_OUT_OF_SCOPE` / `PATH_ESCAPES_REPO`)
+- Comandos vêm do JSONL estruturado do adapter (`--adapter-log`); testes
+  exigem comando, `exit_code`, timestamp ISO-8601 e artefato/log existente
+- Rastreio RF/AC precisa existir no `result_commit` (arquivo e linha);
+  divergência relato × evidência é `EVIDENCE_DIVERGENCE`
+- `verify-report.json` inclui `evidence_hashes` (SHA-256 do diff, do log e
+  dos artefatos; HMAC reusa `PROMPTLESS_INTEGRITY_KEY` / `seal_hmac` do 19)
+- Testes (`tests/integration/test_evidence_verify.py`): payload forjado não
+  esconde arquivo fora de escopo; teste só declarado é recusado; hashes
+  reproduzíveis a partir do repo e dos logs
 - **Storage seguro da run** (`18-safe-run-storage`): `src/runtime/atomic_io.py`
   com write-temp + `os.replace`, cópia atômica e contenção de caminho
   (`resolve_within`)
@@ -33,6 +49,23 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Testes adversariais (`tests/integration/test_safe_run_storage.py`): traversal,
   symlink, colisão de id, interrupção no commit da escrita e duas runs
   concorrentes
+- **Proveniência contextual** (`19-contextual-provenance`): um identificador
+  público `id` (`CLM-0001` / `CLM-R001` / `CLM-SYN-001`); chave multi-contexto
+  `(context, id)`; `resolve_claim` fail-closed se o id for ambíguo
+- Deduplicação de claims por identidade completa (`context`, texto, origin,
+  `service_id`, `chunk_id`, sources); `id` público não é renomeado quando dois
+  contextos repetem `CLM-0001`
+- `ClaimLink` (método lexical + score) em RF/AC/erro; score < 0.6 marca
+  `requires_review` e emite warning `LOW_CONFIDENCE_CLAIM_MATCH` sem mudar
+  `status`
+- `SourceRef.selected_lines` e `locator` (`$.bloqueios[0]`) para o trecho
+  realmente usado; claims sintéticos ganham `content_hash` + seção
+- Cadeia HMAC-SHA256 em `events.jsonl` com `kid` (`PROMPTLESS_INTEGRITY_KID`,
+  anel `PROMPTLESS_INTEGRITY_KEYS` para rotação); selo depois de `finish`,
+  `events_tip` = HMAC de `run_finished`
+- Testes (`tests/integration/test_contextual_provenance.py`): multi-contexto
+  sem perda, dedup por identidade, adulteração de evento/artefato e match
+  de baixa confiança
 - **OpenAPI e Mermaid derivados do IR** (`src/renderers/openapi.py`,
   `src/renderers/mermaid.py`): `run openapi|mermaid` passa a renderizar a partir
   do Canonical Spec — paths, métodos, schemas e status saem de
@@ -54,6 +87,9 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Budget (`context_build`) e telemetria (`est_tokens`, calculadora) passam a
   contar com o tokenizer ativo em vez de `len/4` fixo; recorte de consolidado
   ainda usa tokens×4 só como clip em caracteres
+- `close_loop` / `verify_execution` exigem checkout Git (`--repo`) e log
+  estruturado do adapter; `changed_files` e `commands_executed` do payload
+  só servem para detectar divergência, não como evidência
 - `manifest.json`, `state.json`, `provenance.json`, `latest.json`,
   `canonical-spec.yaml`, `spec-validation.json` e `llm_package_*.json` passam a
   ser gravados atomicamente
@@ -61,7 +97,11 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   run (`artifacts/`, `validations/`) e no espelho; o diretório morto
   `runs/<id>/contexts/` deixa de ser criado
 - `EventStore` não cria mais o arquivo no construtor (o diretório da run só
-  nasce no `bootstrap`)
+  nasce no `bootstrap`); cada evento carrega `prev_hash`/`hash`
+- `emit` grava artefatos com write-temp + `os.replace` (digest precisa do
+  arquivo já commitado)
+- História/PRD passam a listar os claims utilizados na seção Proveniência
+- `provenance.json` agrega `spec.claims` (inclui sintéticos `CLM-*-SYN-*`)
 - `Operation` do IR ganha `request_schema`, `response_schema` e `unresolved`;
   `success_status` só é resolvido com evidência (um único 2xx declarado nas
   decisões e uma única operação) e agora carrega `source_claims`
@@ -78,6 +118,12 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   serviço; `ERR-*` acompanha a operação dona e erro órfão fica `unresolved`
   (não é copiado). OpenAPI, Mermaid e futuros consumidores leem o mesmo
   `spec.operations` — o recorte não vive em cada renderer
+
+### Riscos aceitos (`20-evidence-backed-verification`, 2026-09-18)
+
+- Adapter Devin continua stub; o runner real grava o JSONL no `10-devin-e2e`
+- Worktree sujo vs `result_commit` não é checado (verify lê o commit); débito do `10`
+- Sem `PROMPTLESS_INTEGRITY_KEY`, `evidence_hashes.hmac` fica nulo (SHA-256 permanece); selo da aprovação é o `21`
 
 ### Planejado (série 2)
 

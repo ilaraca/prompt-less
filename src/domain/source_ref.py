@@ -12,6 +12,16 @@ class SourceRef:
     start_line: int | None = None
     end_line: int | None = None
     content_hash: str | None = None
+    selected_lines: tuple[int, ...] | None = None
+    locator: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {k: v for k, v in asdict(self).items() if v is not None}
+        data: dict[str, Any] = {}
+        for key, value in asdict(self).items():
+            if value is None or value == () or value == []:
+                continue
+            if key == "selected_lines":
+                data[key] = list(value)
+            else:
+                data[key] = value
+        return data

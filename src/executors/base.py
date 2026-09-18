@@ -19,6 +19,7 @@ class ExecutionResult:
     requirement_traceability: dict[str, list[str]] = field(default_factory=dict)
     layer: str | None = None
     approved: bool | None = None
+    adapter_log: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -38,6 +39,7 @@ class ExecutionResult:
             requirement_traceability=dict(data.get("requirement_traceability") or {}),
             layer=data.get("layer"),
             approved=data.get("approved"),
+            adapter_log=data.get("adapter_log"),
         )
 
 

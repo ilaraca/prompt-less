@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.runtime.atomic_io import atomic_write_text
 from src.runtime.run_context import context_subdir
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +31,5 @@ def emit(
         path = context_subdir(base / subdir, context) / name
     else:
         path = base / subdir / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    atomic_write_text(path, content)
     return path

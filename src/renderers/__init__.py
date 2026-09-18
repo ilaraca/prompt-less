@@ -50,6 +50,36 @@ def _rf_from_spec(spec: CanonicalSpec) -> str:
     return "\n".join(lines) if lines else "- _(sem RF)_"
 
 
+def _provenance_md(spec: CanonicalSpec) -> str:
+    used: list[str] = []
+    seen: set[str] = set()
+    for bucket in (spec.requirements, spec.acceptance_criteria, spec.errors):
+        for item in bucket:
+            for cid in item.source_claims or []:
+                if cid not in seen:
+                    seen.add(cid)
+                    used.append(cid)
+    by_id = {c.id: c for c in spec.claims}
+    lines: list[str] = []
+    for cid in used:
+        claim = by_id.get(cid)
+        if claim is None:
+            lines.append(f"- `{cid}` _(claim ausente)_")
+            continue
+        loc = ""
+        src = claim.sources[0] if claim.sources else None
+        if src is not None:
+            loc = f" — `{src.document}`"
+            if src.selected_lines:
+                loc += " L" + ",".join(str(n) for n in src.selected_lines)
+            elif src.locator:
+                loc += f" `{src.locator}`"
+            elif src.section:
+                loc += f" {src.section}"
+        lines.append(f"- `{claim.id}` {claim.text}{loc}")
+    return "\n".join(lines) if lines else "- _(sem claims utilizados)_"
+
+
 def _operacao_md(op) -> str:
     """Ação do PRD alinhada ao IR — sem method/path/status inventado."""
     if not op.owner or "owner" in (op.unresolved or []):
@@ -106,6 +136,7 @@ def render_historia(
             "documentacao": format_documentacao(eng),
             "dependencias": "- Canonical Spec validado",
             "fora_escopo": "- Itens não presentes no Canonical Spec",
+            "proveniencia": _provenance_md(spec),
         },
     )
 
@@ -172,5 +203,6 @@ def render_prd(
             "riscos": "\n".join(f"- {q.text}" for q in spec.open_questions) or "- _(nenhum)_",
             "contexto_comprimido": consolidated or "_(vazio)_",
             "ownership": _ownership_md(spec),
+            "proveniencia": _provenance_md(spec),
         },
     )

@@ -5,11 +5,19 @@ import re
 from collections import defaultdict
 from typing import Any
 
+from src.domain.chunk import content_hash
 from src.domain.claim import Claim, ClaimOrigin
+from src.domain.provenance import (
+    MATCH_REVIEW_THRESHOLD,
+    lexical_match_score,
+    make_claim_id,
+    parse_claim_ref,
+)
 from src.domain.source_ref import SourceRef
 from src.domain.spec import (
     AcceptanceCriterion,
     CanonicalSpec,
+    ClaimLink,
     DataSchema,
     OpenQuestion,
     Operation,
@@ -221,6 +229,8 @@ def _claims_from_dicts(raw: list[dict[str, Any]]) -> list[Claim]:
                 start_line=s.get("start_line"),
                 end_line=s.get("end_line"),
                 content_hash=s.get("content_hash"),
+                selected_lines=_selected_lines(s.get("selected_lines")),
+                locator=s.get("locator"),
             )
             for s in (c.get("sources") or [])
         ]
@@ -229,9 +239,10 @@ def _claims_from_dicts(raw: list[dict[str, Any]]) -> list[Claim]:
             origin_e = ClaimOrigin(origin)
         except ValueError:
             origin_e = ClaimOrigin.INFERRED
+        public_id, parsed_ns = parse_claim_ref(str(c.get("id") or ""))
         out.append(
             Claim(
-                id=str(c.get("id") or f"CLM-{len(out)+1:04d}"),
+                id=public_id or make_claim_id(len(out) + 1),
                 text=str(c.get("text") or ""),
                 origin=origin_e,
                 confidence=_parse_confidence(c.get("confidence"), default=0.5),
@@ -244,14 +255,43 @@ def _claims_from_dicts(raw: list[dict[str, Any]]) -> list[Claim]:
     return out
 
 
-def _match_claim_ids(text: str, claims: list[Claim]) -> list[str]:
-    blob = text.lower()
-    matched: list[str] = []
+def _selected_lines(raw: Any) -> tuple[int, ...] | None:
+    if not raw:
+        return None
+    return tuple(int(x) for x in raw)
+
+
+def _match_claim_links(
+    text: str, claims: list[Claim], *, context: str | None = None
+) -> list[ClaimLink]:
+    matched: list[ClaimLink] = []
     for c in claims:
-        tokens = [t for t in re.split(r"\W+", c.text.lower()) if len(t) > 3][:6]
-        if tokens and sum(1 for t in tokens if t in blob) >= max(1, len(tokens) // 2):
-            matched.append(c.id)
+        score = lexical_match_score(c.text, text)
+        if score is None:
+            continue
+        matched.append(
+            ClaimLink(
+                claim_id=c.id,
+                method="lexical",
+                score=round(score, 3),
+                requires_review=score < MATCH_REVIEW_THRESHOLD,
+                context=context or c.service_id,
+            )
+        )
     return matched
+
+
+def _ids_from_links(links: list[ClaimLink]) -> list[str]:
+    return [link.claim_id for link in links]
+
+
+def _synthetic_source(section: str, locator: str, text: str) -> SourceRef:
+    return SourceRef(
+        document="regras.yaml",
+        section=section,
+        content_hash=content_hash(text),
+        locator=locator,
+    )
 
 
 def build_canonical_spec(
@@ -335,19 +375,41 @@ def build_canonical_spec(
         else:
             text = f"Validar: {trigger} → HTTP status a confirmar"
             then = "retornar HTTP status a confirmar"
-        src = _match_claim_ids(f"{trigger} {status_i}", claim_objs)
-        if not src:
+        src_links = _match_claim_links(
+            f"{trigger} {status_i}", claim_objs, context=service_id
+        )
+        if not src_links:
             synth = Claim(
-                id=f"CLM-SYN-{i:03d}",
+                id=make_claim_id(i, kind="SYN"),
                 text=text,
                 origin=ClaimOrigin.DECLARED,
                 confidence=1.0,
-                sources=[SourceRef(document="regras.yaml", section=f"bloqueios[{i-1}]")],
+                service_id=service_id,
+                sources=[
+                    _synthetic_source(
+                        f"bloqueios[{i-1}]", f"$.bloqueios[{i-1}]", text
+                    )
+                ],
             )
             claim_objs.append(synth)
-            src = [synth.id]
+            src_links = [
+                ClaimLink(
+                    claim_id=synth.id,
+                    method="synthetic",
+                    score=1.0,
+                    requires_review=False,
+                    context=service_id,
+                )
+            ]
+        src = _ids_from_links(src_links)
         requirements.append(
-            Requirement(id=rf_id, text=text, source_claims=src, status="draft")
+            Requirement(
+                id=rf_id,
+                text=text,
+                source_claims=src,
+                status="draft",
+                claim_links=src_links,
+            )
         )
         acceptance.append(
             AcceptanceCriterion(
@@ -357,6 +419,7 @@ def build_canonical_spec(
                 when=trigger,
                 then=then,
                 source_claims=src,
+                claim_links=src_links,
             )
         )
         if status_declared and status_i is not None:
@@ -367,6 +430,7 @@ def build_canonical_spec(
                     status=status_i,
                     code=b.get("code"),
                     source_claims=src,
+                    claim_links=src_links,
                 )
             )
 
@@ -384,18 +448,34 @@ def build_canonical_spec(
             text = f"Decisão: {d}"
             when = str(d)
             then = "sucesso"
-        src = _match_claim_ids(text, claim_objs)
-        if not src:
+        src_links = _match_claim_links(text, claim_objs, context=service_id)
+        if not src_links:
             synth = Claim(
-                id=f"CLM-SYN-D{j:03d}",
+                id=make_claim_id(j, kind="SYND"),
                 text=text,
                 origin=ClaimOrigin.DECLARED,
                 confidence=1.0,
-                sources=[SourceRef(document="regras.yaml", section=f"decisoes[{j-1}]")],
+                service_id=service_id,
+                sources=[
+                    _synthetic_source(
+                        f"decisoes[{j-1}]", f"$.decisoes[{j-1}]", text
+                    )
+                ],
             )
             claim_objs.append(synth)
-            src = [synth.id]
-        requirements.append(Requirement(id=rf_id, text=text, source_claims=src))
+            src_links = [
+                ClaimLink(
+                    claim_id=synth.id,
+                    method="synthetic",
+                    score=1.0,
+                    requires_review=False,
+                    context=service_id,
+                )
+            ]
+        src = _ids_from_links(src_links)
+        requirements.append(
+            Requirement(id=rf_id, text=text, source_claims=src, claim_links=src_links)
+        )
         acceptance.append(
             AcceptanceCriterion(
                 id=f"AC-{i:03d}",
@@ -404,17 +484,30 @@ def build_canonical_spec(
                 when=when,
                 then=then,
                 source_claims=src,
+                claim_links=src_links,
             )
         )
         for match in _SUCCESS_STATUS_RE.finditer(then):
             success_evidence.setdefault(int(match.group(1)), []).extend(src)
 
     if not requirements:
+        fallback_ids = [c.id for c in claim_objs[:1]]
+        fallback_links = [
+            ClaimLink(
+                claim_id=cid,
+                method="declared",
+                score=1.0,
+                requires_review=False,
+                context=service_id,
+            )
+            for cid in fallback_ids
+        ]
         requirements.append(
             Requirement(
                 id="RF-001",
                 text="Permitir submissão com dados válidos (HTTP status a confirmar)",
-                source_claims=[c.id for c in claim_objs[:1]],
+                source_claims=fallback_ids,
+                claim_links=fallback_links,
             )
         )
         acceptance.append(
@@ -424,7 +517,8 @@ def build_canonical_spec(
                 given="dados válidos",
                 when="submeter",
                 then="sucesso com status HTTP a confirmar",
-                source_claims=[c.id for c in claim_objs[:1]],
+                source_claims=fallback_ids,
+                claim_links=fallback_links,
             )
         )
 
