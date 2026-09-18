@@ -112,11 +112,16 @@ def close_loop(
     repo_path: Path | None = None,
     adapter_log: Path | None = None,
 ) -> dict:
+    import time
+
+    from src.task_metrics import build_task_metrics
+
     spec = _load_spec(spec_path)
     adapter = DevinAdapter(result_path=result_path)
     execution = adapter.collect_result()
 
     log_path = adapter_log or _default_adapter_log(result_path, execution)
+    t0 = time.perf_counter()
     # Sempre re-verify completo (também após cada tentativa de reparo).
     verify = verify_execution(
         execution,
@@ -125,8 +130,11 @@ def close_loop(
         repo_path=repo_path,
         adapter_log=log_path,
     )
+    validation_ms = int((time.perf_counter() - t0) * 1000)
     repair = None
+    repair_ms = 0
     if verify.has_errors and verify.status != "needs_approval":
+        t1 = time.perf_counter()
         profiles = load_profiles()
         layer_name = layer or execution.layer
         profile = profiles.get(layer_name) if layer_name else None
@@ -138,6 +146,7 @@ def close_loop(
             layer=layer_name,
             repo_root=repo_path,
         )
+        repair_ms = int((time.perf_counter() - t1) * 1000)
     elif verify.status == "needs_approval":
         repair = {
             "status": "awaiting_approval",
@@ -148,11 +157,30 @@ def close_loop(
             "issues": [i.to_dict() for i in verify.issues],
         }
 
+    exec_usage = None
+    if isinstance(execution.to_dict(), dict):
+        exec_usage = (execution.to_dict().get("meta") or {}).get("token_usage")
+    task_metrics = build_task_metrics(
+        attempts=max(1, int(attempt)),
+        duration_ms={
+            "validation_ms": validation_ms,
+            "repair_ms": repair_ms,
+            "total_ms": validation_ms + repair_ms,
+        },
+        token_usage=exec_usage if isinstance(exec_usage, dict) else None,
+        phases={
+            "validation_ms": validation_ms,
+            "repair_ms": repair_ms,
+            "total_ms": validation_ms + repair_ms,
+        },
+    )
+
     report = {
         "run_id": execution.run_id,
         "verify": verify.to_dict(),
         "repair": repair,
         "execution": execution.to_dict(),
+        "task_metrics": task_metrics,
     }
     debugger = build_debugger_report(
         verify=verify,

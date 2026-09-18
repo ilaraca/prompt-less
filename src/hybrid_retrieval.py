@@ -745,6 +745,16 @@ def compress_documents_hybrid(
                     "recoverable": True,
                     "document": hit.document,
                     "strategy": hit.strategy,
+                    "ref": {
+                        "source": "hybrid_retrieval.hit",
+                        "chunk_id": hit.chunk_id,
+                        "document": hit.document,
+                        "strategy": hit.strategy,
+                        "section": hit.source.section if hit.source else None,
+                        "start_line": hit.source.start_line if hit.source else None,
+                        "end_line": hit.source.end_line if hit.source else None,
+                        "content_hash": hit.source.content_hash if hit.source else None,
+                    },
                 }
             )
             continue

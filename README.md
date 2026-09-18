@@ -258,8 +258,18 @@ Evolução natural (próximo passo): manter `doc_compress` / budget e trocar só
 2. **`dynamic`** — JSON enxuto:
    - `comando` (`Gerar openapi|mermaid|historia|prd`)
    - `state` (metadados, sem docs brutos)
-   - `contexto_comprimido` (saída do RAG)
-   - `template` (esqueleto; se estourar budget, trunca o template)
+   - `critical` — RF/AC/contratos/evidências reservados (Canonical Spec + state/RAG)
+   - `contexto_comprimido` (saída do RAG; cortável)
+   - `template` (esqueleto; se estourar budget, trunca o template **não-crítico**)
+
+**Budget crítico (38):** `_fit_to_budget` reserva espaço para requisitos, contratos,
+aceites e evidências. Conteúdo crítico **não** desaparece em silêncio ao reduzir
+o teto: omissões têm `reason` + `ref` recuperável; se o mínimo crítico não cabe,
+a run bloqueia (`CRITICAL_BUDGET_EXCEEDED`) ou exige divisão
+(`CRITICAL_BUDGET_SPLIT_REQUIRED`) com `diagnosis` / `split_plan` em
+`budget_report`. `task_metrics` registra `attempts` e marca custo como
+`estimate` (nunca `is_invoice`); no live, `cost_kind=observed_billing` distingue
+uso observado de fatura.
 
 Estimativa de tokens: tokenizer do provider configurado em `models.provider` / `models.name` (`tiktoken` para OpenAI). Se a lib oficial não estiver disponível, fail-open para `chars÷4` com `method=heuristic` — o fallback **não** é contagem exata.
 
@@ -1572,12 +1582,14 @@ Cada execução imprime JSON com:
 - `llm_package` / `llm_packages` — pacotes por tipo
 - `est_tokens` — estimativa do pacote principal (tokenizer oficial ou heurística)
 - `est_tokens_method` — `official` ou `heuristic`
-- `token_usage` — `estimated`, `method`, `billable`/`delta` (preenchidos no live / 09)
+- `token_usage` — `estimated`, `method`, `billable`/`delta` (preenchidos no live / 09); `is_invoice=false` e `cost_kind` (`estimate` | `observed_billing`) — estimativa **não** é fatura
+- `budget_report` / `budget_status` — cobertura crítica, omissões recuperáveis, split/block
+- `task_metrics` — `attempts`, `duration_ms` (validação/reparo no `close_loop`), `cost` com `is_invoice=false`
 - `rag.raw` / `rag.compressed` — antes/depois da compressão
 - `rag.doc_reduction_pct` — % de redução documental
 - `docs_ingested` — lista de arquivos e linhas
 
-Use essas métricas para validar que a pipeline continua “barata” ao crescer o volume de insumos.
+Use essas métricas para validar que a pipeline continua “barata” ao crescer o volume de insumos. Casos `critical: true` no conjunto de evals (`access_denied`, `eval_adversarial`, `eval_multi_context`, …) cobrem preservação de sinais críticos.
 
 ### Calculadora de economia (`src/economia.py`)
 
@@ -1657,6 +1669,10 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   IDs Anthropic curtos mapeiam para snapshot pinned; `cost_usd` usa tabela local
   (`economia.MODELOS`), não a fatura do vendor; artefato live ainda passa pelo
   gate `derived_artifact` (saída fora do IR bloqueia — intencional) (`09`)
+- Budget crítico (`38`): `split_required` diagnostica lotes (`split_plan`) e
+  bloqueia a run — **não** reexecuta automaticamente cada lote; recuperação de
+  omissões não-críticas depende de tools (`search_claims` / `get_claim`) ou
+  re-RAG. Estimativa pré-chamada nunca é apresentada como fatura
 - Devin E2E (`10`/`35`/`37`): checkout isolado e `shell=False` **não** são
   sandbox. Sem `EnforcementContract` que ateste os `limits.required_capabilities`
   do profile (ou `EnforcedRunner` local), o despacho é bloqueado. O sidecar só

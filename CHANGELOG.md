@@ -9,6 +9,15 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Contexto crítico e custo completo** (`38-critical-context-budget`):
+  `_fit_to_budget` reserva RF/AC/contratos/evidências (`dynamic.critical`) e
+  deixa de cortar conteúdo crítico em silêncio. Omissões não-críticas trazem
+  `reason` + `ref` recuperável; excesso do mínimo crítico bloqueia ou exige
+  split (`CRITICAL_BUDGET_*`, `budget_report.diagnosis` / `split_plan`).
+  `task_metrics` inclui `attempts` e duração de validação/reparo; custo distingue
+  `estimate` vs `observed_billing` e nunca marca estimativa como fatura
+  (`is_invoice=false`). Compressão/híbrido enriquecem omissões com refs.
+  Testes: `tests/integration/test_critical_context_budget.py`.
 - **Regressões por caso e experimento controlado** (`39-case-regression-gates`):
   `compare_evals` marca pass→fail em qualquer caso (mesmo com `pass_rate`
   agregado igual), bloqueia conjuntos incomparáveis e exige tolerância não
