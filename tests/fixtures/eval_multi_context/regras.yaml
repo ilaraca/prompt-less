@@ -1,0 +1,15 @@
+fluxo: Onboarding e Pagamento
+bloqueios:
+  - trigger: CPF inválido
+    status: 400
+    code: CPF_INVALIDO
+  - trigger: saldo negativo
+    status: 422
+    code: SALDO_NEGATIVO
+  - trigger: sem autenticação
+    status: 401
+decisoes:
+  - quando: cliente ativo e payload válido
+    entao: persistir e retornar 200
+  - quando: pagamento pendente e PIX ok
+    entao: confirmar e retornar 200
