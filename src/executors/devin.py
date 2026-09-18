@@ -21,6 +21,7 @@ from src.executors.evidence import (
     full_commit_sha,
     hash_bytes,
     inspect_commits,
+    is_behavioral_test_command,
     is_non_behavioral_kind,
     make_evidence_binding,
     normalize_test_kind,
@@ -40,6 +41,31 @@ from src.executors.safe_exec import run_argv
 from src.runtime.atomic_io import atomic_write_json, sha256_of
 
 Runner = Callable[..., Any]
+
+
+def invoke_runner(
+    runner: Runner | EnforcedRunner,
+    argv: list[str],
+    *,
+    profile: dict[str, Any] | None = None,
+    cwd: Path | str | None = None,
+    timeout: float | None = None,
+    repo_root: Path | str | None = None,
+    capture_output: bool = True,
+    text: bool = True,
+    **kwargs: Any,
+) -> Any:
+    """Invoca runner de forma uniforme (callable ou ``EnforcedRunner``)."""
+    return runner(
+        argv,
+        profile=profile,
+        cwd=cwd,
+        timeout=timeout,
+        repo_root=repo_root,
+        capture_output=capture_output,
+        text=text,
+        **kwargs,
+    )
 
 
 class DirtyWorktreeError(RuntimeError):
@@ -553,11 +579,33 @@ class DevinAdapter:
                 continue
 
             argv = [str(a) for a in argv_t]
+            if not is_behavioral_test_command(argv):
+                # Autorizado + exit 0 ≠ prova: git diff / inspeção não bastam.
+                materialized.append(
+                    {
+                        "name": name,
+                        "kind": kind,
+                        "passed": False,
+                        "suggestion_only": True,
+                        "executed_by": None,
+                        "covers": covers_list,
+                        "binding": dict(binding),
+                        "command": {"executable": argv[0], "args": argv[1:]},
+                        "argv": argv,
+                        "error": (
+                            "comando não é runner de teste comportamental "
+                            "(kind/covers do agente não bastam)"
+                        ),
+                    }
+                )
+                continue
+
             ts = _now_iso()
             stdout = ""
             stderr = ""
             try:
-                proc = self.runner(
+                proc = invoke_runner(
+                    self.runner,
                     argv,
                     profile=profile,
                     cwd=str(repo),

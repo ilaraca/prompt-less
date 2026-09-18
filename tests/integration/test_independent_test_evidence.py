@@ -382,3 +382,243 @@ def test_materialize_ignores_sidecar_passed_without_running(tmp_path: Path):
     assert result.tests[0].get("executed_by") is None
     # Nenhum comando de teste foi executado — só o CLI Devin
     assert all(c[0] in {"fake-devin", "devin"} for c in calls)
+
+
+def test_git_diff_with_covers_never_proves_acceptance(tmp_path: Path):
+    """git diff autorizado + kind/covers do sidecar ≠ prova comportamental."""
+    spec = _spec()
+    ac = spec.acceptance_criteria[0].id
+    rf = spec.requirements[0].id
+    repo, _, _ = make_git_repo(tmp_path, base_files=DEFAULT_BASE)
+    out = tmp_path / "out"
+    test_calls: list[list[str]] = []
+
+    def runner(argv, profile=None, cwd=None, timeout=None, **kwargs):
+        if argv and argv[0] in {"fake-devin", "devin"}:
+            write_files(
+                Path(cwd or repo),
+                {
+                    **DEFAULT_RESULT,
+                    "docs/prompt-less/execution-result.json": json.dumps(
+                        {
+                            "requirement_traceability": {
+                                rf: ["src/main/java/ClienteService.java"],
+                                ac: ["tests/ClienteServiceTest.java"],
+                            },
+                            "tests": [
+                                {
+                                    "name": "diff-as-unit",
+                                    "passed": True,
+                                    "kind": "unit",
+                                    "covers": [ac],
+                                    "command": {"executable": "git", "args": ["diff"]},
+                                }
+                            ],
+                        }
+                    ),
+                },
+            )
+            return SimpleNamespace(returncode=0, stdout="devin\n", stderr="")
+        test_calls.append(list(argv))
+        return SimpleNamespace(returncode=0, stdout="diff\n", stderr="")
+
+    adapter = DevinAdapter(cli_bin="fake-devin", runner=runner)
+    result = adapter.execute(
+        run_id="run-git-diff",
+        repository="bff-cliente",
+        repo_path=repo,
+        out_dir=out,
+        layer="bff",
+        require_enforcement=False,
+        prompt="impl",
+        require_cli=False,
+        spec_hash=spec_content_hash(spec),
+    )
+
+    assert result.tests
+    assert result.tests[0].get("suggestion_only") is True
+    assert result.tests[0].get("passed") is False
+    assert result.tests[0].get("executed_by") is None
+    assert "comportamental" in str(result.tests[0].get("error") or "").lower()
+    # Harness recusou antes de executar — nem git diff foi despachado.
+    assert test_calls == []
+
+    verify = verify_execution(
+        result,
+        spec,
+        layer="bff",
+        repo_path=repo,
+        adapter_log=out / "adapter-log.jsonl",
+    )
+    assert verify.status == "failed"
+    assert any(i.code == "AC_WITHOUT_BEHAVIORAL_EVIDENCE" for i in verify.issues)
+
+
+def test_devin_enforced_runner_executes_real_pytest(tmp_path: Path):
+    """DevinAdapter + EnforcedRunner reais: materializa pytest sem stub na chamada."""
+    import os
+    import sys
+
+    from src.executors.policy import load_profiles, normalize_limits
+    from src.executors.runner import EnforcedRunner
+
+    spec = _spec()
+    ac = spec.acceptance_criteria[0].id
+    rf = spec.requirements[0].id
+    repo, _, _ = make_git_repo(tmp_path, base_files=DEFAULT_BASE)
+    out = tmp_path / "out"
+    profile = dict(load_profiles()["bff"])
+    profile["limits"] = dict(normalize_limits(profile))
+    # Profile canônico do bff já permite `pytest`; wrapper no PATH (venv fora do PATH).
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    wrapper = bin_dir / "pytest"
+    wrapper.write_text(
+        f"#!/bin/sh\nexec '{sys.executable}' -m pytest \"$@\"\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    old_path = os.environ.get("PATH", "")
+    os.environ["PATH"] = f"{bin_dir}{os.pathsep}{old_path}"
+
+    test_body = "def test_cliente_ok():\n    assert True\n"
+    sidecar = {
+        "requirement_traceability": {
+            rf: ["src/main/java/ClienteService.java"],
+            ac: ["tests/ClienteServiceTest.java"],
+        },
+        "tests": [
+            {
+                "name": "ClienteServiceTest",
+                "passed": True,  # agente mente — harness reexecuta
+                "kind": "unit",
+                "covers": [ac],
+                "command": {
+                    "executable": "pytest",
+                    "args": ["tests/test_cliente.py", "-q"],
+                },
+            }
+        ],
+    }
+
+    try:
+        with EnforcedRunner(profile, repo_root=repo) as enforced:
+            adapter = DevinAdapter(cli_bin="fake-devin", runner=enforced)
+
+            def _invoke_cli_seed(
+                *,
+                repo: Path,
+                prompt_file: Path,
+                out_dir: Path,
+                session: dict,
+                timeout: float | None,
+                require_cli: bool,
+                profile: dict | None,
+            ) -> None:
+                del prompt_file, out_dir, timeout, require_cli, profile
+                write_files(
+                    repo,
+                    {
+                        **DEFAULT_RESULT,
+                        "tests/test_cliente.py": test_body,
+                        "docs/prompt-less/execution-result.json": json.dumps(sidecar),
+                    },
+                )
+                session["events"].append(
+                    {
+                        "timestamp": "2026-09-18T12:00:00+00:00",
+                        "kind": "invoke",
+                        "argv": ["fake-devin"],
+                        "exit_code": 0,
+                        "profile_applied_to_cli": False,
+                        "layer_profile": True,
+                    }
+                )
+
+            adapter._invoke_cli = _invoke_cli_seed  # type: ignore[method-assign]
+            result = adapter.execute(
+                run_id="run-enforced-pytest",
+                repository="bff-cliente",
+                repo_path=repo,
+                out_dir=out,
+                layer="bff",
+                profile=profile,
+                require_enforcement=False,
+                prompt="impl",
+                require_cli=False,
+                spec_hash=spec_content_hash(spec),
+            )
+    finally:
+        os.environ["PATH"] = old_path
+
+    assert result.tests
+    assert result.tests[0]["executed_by"] == HARNESS_EXECUTED_BY
+    assert result.tests[0]["exit_code"] == 0, (
+        (out / result.tests[0]["log"]).read_text(encoding="utf-8")
+        if (out / result.tests[0].get("log", "")).is_file()
+        else result.tests[0]
+    )
+    assert result.tests[0]["passed"] is True
+    assert result.tests[0]["argv"][0] == "pytest"
+    assert "tests/test_cliente.py" in result.tests[0]["argv"]
+
+    verify = verify_execution(
+        result,
+        spec,
+        layer="bff",
+        repo_path=repo,
+        adapter_log=out / "adapter-log.jsonl",
+    )
+    assert verify.status == "passed", [i.to_dict() for i in verify.issues]
+
+def test_forged_git_diff_harness_log_rejected_on_verify(tmp_path: Path):
+    """Mesmo com JSONL harness + exit 0, git diff não cobre AC."""
+    spec = _spec()
+    repo, base, result_sha = make_git_repo(
+        tmp_path, base_files=DEFAULT_BASE, extra_result=DEFAULT_RESULT
+    )
+    runner = tmp_path / "runner"
+    log_file = runner / "git-diff.log"
+    bind = make_evidence_binding(
+        run_id="run-ev-001",
+        repository="bff-cliente",
+        base_commit=base,
+        result_commit=result_sha,
+        spec_hash=spec_content_hash(spec),
+    )
+    test = evidenced_test(
+        name="diff-as-proof",
+        log_file=log_file,
+        command="git diff",
+        covers=[spec.acceptance_criteria[0].id],
+        binding=bind,
+    )
+    rec = {
+        "timestamp": "2026-09-17T12:00:00+00:00",
+        "argv": ["git", "diff"],
+        "command": "git diff",
+        "exit_code": 0,
+        "log": log_file.name,
+        "log_sha256": test["log_sha256"],
+        "executed_by": HARNESS_EXECUTED_BY,
+        "kind": "unit",
+        "binding": bind,
+        "name": "diff-as-proof",
+    }
+    execution = _result(
+        spec,
+        base=base,
+        result=result_sha,
+        changed=list(DEFAULT_RESULT),
+        tests=[test],
+    )
+    verify = verify_execution(
+        execution,
+        spec,
+        layer="bff",
+        repo_path=repo,
+        adapter_log=write_adapter_log(runner / "adapter-log.jsonl", [rec]),
+    )
+    assert verify.status == "failed"
+    assert any(i.code == "TEST_NOT_EVIDENCED" for i in verify.issues)
+    assert any(i.code == "AC_WITHOUT_BEHAVIORAL_EVIDENCE" for i in verify.issues)
