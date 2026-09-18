@@ -1,4 +1,9 @@
-"""Execução de argv sempre com shell=False."""
+"""Execução de argv sempre com shell=False.
+
+Para limites efetivos (writes, rede, credenciais, recursos) use
+``src.executors.runner.EnforcedRunner`` — ``run_argv`` sozinho só aplica
+allowlist de comando quando ``profile`` é passado.
+"""
 from __future__ import annotations
 
 import subprocess
@@ -26,9 +31,14 @@ def run_argv(
     check: bool = False,
     capture_output: bool = True,
     text: bool = True,
+    env: dict[str, str] | None = None,
     **kwargs: Any,
 ) -> subprocess.CompletedProcess[Any]:
-    """subprocess.run com argv em lista. `shell` verdadeiro é recusado."""
+    """subprocess.run com argv em lista. `shell` verdadeiro é recusado.
+
+    Nota: ``profile=None`` **não** impõe policy — só `shell=False`. Worktree
+    isolado também não é sandbox. Preferir ``EnforcedRunner`` para despacho.
+    """
     if kwargs.pop("shell", False):
         raise ShellForbidden("execução via shell é proibida")
     if not argv or not isinstance(argv, list):
@@ -44,5 +54,6 @@ def run_argv(
         check=check,
         capture_output=capture_output,
         text=text,
+        env=env,
         **kwargs,
     )

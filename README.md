@@ -1219,7 +1219,18 @@ Policy (`config/permission_profiles.yaml` + `src/executors/policy.py`):
 - allowlist **semântica**: tokens exatos do executable + args; path extra passa por `realpath`/normalize
 - paths: `normalize_repo_path` rejeita absoluto e `..`; com `repo_root`, symlink que escapa o repo é recusado
 - policy avalia o **diff Git** e o **realpath** (symlink para `infra/prod` não passa só porque o path Git está em `src/`)
-- execução nova vai por `src/executors/safe_exec.run_argv` — `shell=True` é erro
+- `limits` por profile: `timeout_seconds`, `max_processes`, `memory_mb`, `network`
+  (`deny`|`allow`), `credentials` (`scrub`|`passthrough`), `required_capabilities`
+- execução nova vai por `src.executors.safe_exec.run_argv` — `shell=True` é erro;
+  **`run_argv(profile=None)` não é sandbox** (só impede shell)
+- enforcement durante a execução: `src.executors.runner.EnforcedRunner` (writes,
+  comandos, scrub de credenciais, timeout, processos/memória best-effort, rede
+  via sitecustomize + deny de CLIs); log JSONL confiável com `"enforced": true`
+- despacho Devin exige `EnforcementContract` cujas `guarantees` cubram
+  `limits.required_capabilities` (default externo = sem garantias →
+  `DispatchBlocked`); evidência em `enforcement-contract.json` /
+  `devin-session.json`; CLI: `--enforcement-contract` ou `--allow-unenforced`
+  (lab)
 - verify fail-closed para layer desconhecido; `NO_TESTS_REPORTED` é error em code change
 - `FILE_OUT_OF_SCOPE` → `required_reverts` (não amplia `editable_surface`)
 - reparo reaplica profile + raiz autorizada a cada tentativa (`denied_paths`
@@ -1634,13 +1645,14 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   IDs Anthropic curtos mapeiam para snapshot pinned; `cost_usd` usa tabela local
   (`economia.MODELOS`), não a fatura do vendor; artefato live ainda passa pelo
   gate `derived_artifact` (saída fora do IR bloqueia — intencional) (`09`)
-- Devin E2E (`10`): o adapter não captura automaticamente os comandos internos
-  da sessão Devin — testes/build precisam constar no sidecar
-  `docs/prompt-less/execution-result.json` (ou JSONL) com artefato/log; sem
-  isso o verify falha fechado em code change (`NO_TESTS_REPORTED` /
-  `TEST_NOT_EVIDENCED`)
+- Devin E2E (`10`/`37`): checkout isolado e `shell=False` **não** são sandbox.
+  Sem `EnforcementContract` que ateste os `limits.required_capabilities` do
+  profile (ou `EnforcedRunner` local), o despacho é bloqueado. Comandos
+  internos do Devin CLI externo só entram no JSONL se o sandbox/sidecar os
+  reportar; o runner local grava argv com `"enforced": true`. Testes/build
+  ausentes → verify fail-closed (`NO_TESTS_REPORTED` / `TEST_NOT_EVIDENCED`)
 - `DEVIN_E2E=1` exige CLI Devin autenticado e rede; no CI sem credencial o
-  teste live é skip (`10`)
+  teste live é skip (`10`); live sem contrato usa `--allow-unenforced` só em lab
 - Auto-commit do adapter fica só no checkout isolado — sem push nem abertura
   de PR pelo harness (`10`)
 - Sem `PROMPTLESS_INTEGRITY_KEY`, `evidence_hashes.hmac` fica nulo (SHA-256
