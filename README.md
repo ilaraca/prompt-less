@@ -517,11 +517,18 @@ Gera scaffold do artefato + pacote LLM comprimido:
 ### Testes e CI
 
 ```bash
-.venv/bin/pip install -r requirements.txt
-.venv/bin/pytest -v --tb=short
+# reproduzível (mesmo lock do CI)
+.venv/bin/pip install --require-hashes -r requirements-dev.lock
+.venv/bin/pytest -q
 ```
 
-Workflow GitHub Actions (`.github/workflows/ci.yml`): `compileall` + validação de `permission_profiles.yaml` + pytest + smoke `plan_repos --help`.
+O workflow `.github/workflows/ci.yml` (`name: CI`) é o check required-ready:
+compile, ruff, mypy, coverage ≥ 70% (relatório por módulo), pytest (incluindo
+testes adversariais de runtime/policy/provenance), `pip-audit`, detect-secrets,
+validação YAML, artifacts de eval/coverage/verify. Actions pinadas por SHA,
+`permissions: contents: read`, matriz Python 3.9–3.13.
+
+Regenerar o lock: `pip-compile --generate-hashes --allow-unsafe --output-file=requirements.lock requirements.in` e o equivalente para `requirements-dev.lock`. Detalhe em [Gates de qualidade](#gates-de-qualidade).
 
 ## Exemplos de uso
 
@@ -1060,11 +1067,11 @@ Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`
 ### Evals e testes
 
 ```bash
-.venv/bin/pytest -v --tb=short
-# esperado: 121 passed
+.venv/bin/pytest -q
+# esperado: 128 passed
 ```
 
-Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services) e goldens de artefato derivado em `tests/fixtures/golden/` (`openapi.yaml`, `sequence.mmd`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`. CI em `.github/workflows/ci.yml` (compileall + YAML de profiles + pytest + smoke `plan_repos`).
+Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services) e goldens de artefato derivado em `tests/fixtures/golden/` (`openapi.yaml`, `sequence.mmd`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
 
 ---
 
@@ -1074,10 +1081,16 @@ Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_
 pipeline/
 ├── README.md
 ├── CHANGELOG.md
-├── requirements.txt
+├── pyproject.toml                 # ruff, mypy, coverage (piso 70%)
+├── requirements.in / requirements-dev.in
+├── requirements.lock / requirements-dev.lock
+├── requirements.txt               # piso não pinado (aponta o lock)
 ├── pytest.ini
+├── .secrets.baseline
+├── .yamllint.yaml
 ├── .github/workflows/ci.yml
 ├── scripts/
+│   ├── ci_reports.py              # YAML + artifacts eval/coverage/verify
 │   ├── scan-repos.sh              # pasta de repos → mapa-servicos.yaml (de/para)
 │   └── devin-from-promptless.sh   # scan + index + marcar + artefatos → Devin CLI
 ├── config/
@@ -1156,12 +1169,61 @@ Ajuste o budget conforme o provedor (janela, preço de cache) e o risco de “co
 
 ## Dependências
 
-- Python 3.9+ (CI usa 3.11)
-- `PyYAML`
-- `python-docx` (`.docx`)
-- `pytest` (suíte de integração / evals)
+- **Python 3.9–3.13** — a matriz do CI cobre exatamente essas versões
+- Runtime: `PyYAML`, `python-docx` (`.docx`) — lock em `requirements.lock`
+- Dev/CI: `pytest`, `ruff`, `mypy`, `coverage`, `pip-audit`, `detect-secrets`, `yamllint` — lock em `requirements-dev.lock`
 - macOS: `textutil` nativo para `.doc` legado  
   Linux: `antiword` (opcional) para `.doc`
+
+Instalação reproduzível:
+
+```bash
+python -m pip install --require-hashes -r requirements-dev.lock
+```
+
+`requirements.txt` continua sendo o piso não pinado (`PyYAML` / `python-docx` / `pytest`) para um `pip install` rápido. O CI **não** usa esse arquivo — usa o lock com hashes.
+
+---
+
+## Gates de qualidade
+
+O job agregador **`CI`** (depende de `quality-gates` na matriz) é o check estável para exigir no GitHub. Cada célula da matriz publica o artifact `quality-reports-py<versão>` com:
+
+| Arquivo | Origem |
+|---------|--------|
+| `coverage.xml` / `coverage.json` / `coverage-html/` | pytest-cov (`--cov-fail-under=70`) |
+| `coverage-by-module.json` | cobertura por arquivo (não só o agregado) |
+| `eval-report.json` | resumo do junit, ou placeholder se a run não gerou eval |
+| `verify-report.json` | placeholder `ci_no_close_loop` quando o workflow não roda `close_loop` |
+| `pytest.xml` | junit da suíte (inclui testes adversariais) |
+
+`pip-audit --strict` faz parte do gate. Em 2026-09-18 o lock (compilado em Python 3.9) ainda carrega CVEs cujos fixes exigem pacotes que largaram o 3.9 (`pytest` 9, `click` 8.3, `filelock` 3.20, `msgpack` 1.2, `requests` 2.33, `urllib3` 2.7). Esses IDs estão em `--ignore-vuln` no workflow; o audit continua falhando em CVE **nova**.
+
+### Branch protection (ainda não ativa)
+
+Em 2026-09-18 a API (`gh api repos/ilaraca/prompt-less/branches/main`) respondeu `protected: false`. A permissão de admin existe, mas **não** ligamos a regra agora: o check `CI` só passa a existir no remoto depois deste workflow chegar em `main`; exigí-lo antes bloquearia merges.
+
+Depois do merge em `main`, em **Settings → Branches → Add branch protection rule** (`main`):
+
+1. Require a pull request before merging
+2. Require approvals: **1**
+3. Require status checks to pass before merging → check **`CI`**
+4. Require branches to be up to date before merging
+5. Não marcar “Allow bypassing” para administradores se quiser o gate inescapável
+
+Equivalente via API (quando for a hora):
+
+```bash
+gh api -X PUT repos/ilaraca/prompt-less/branches/main/protection \
+  -F required_status_checks.strict=true \
+  -F 'required_status_checks.contexts[]=CI' \
+  -F enforce_admins=true \
+  -F required_pull_request_reviews.required_approving_review_count=1 \
+  -F restrictions= \
+  -F required_linear_history=false
+```
+
+Até essa regra existir, merge em `main` **não** está protegido pelo GitHub — só pelo workflow que falha na PR.
 
 ---
 
@@ -1262,6 +1324,8 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 - Resumo de docs é **extrativo por regex**, não LLM small (bom custo; pode perder nuance)
 - Estimativa de tokens é heurística (`len/4`), não tokenizer oficial
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
+- Branch protection em `main` **não** está ligada no GitHub (ver [Gates de qualidade](#gates-de-qualidade)); o workflow já é required-ready
+- `pip-audit` ignora CVEs cujo fix dropou Python 3.9 (lista no workflow)
 
 **Próximos passos (série 2 — ver CHANGELOG [Unreleased])**
 
