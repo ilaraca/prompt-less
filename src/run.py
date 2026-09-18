@@ -158,7 +158,13 @@ def run(
         prov_path = store.write_provenance(claims=unique_claims, discarded=discarded)
         if status in {"blocked", "failed"}:
             _write_debugger(result, status=status)
-        store.mirror_artifacts_to_outputs(compat_root)
+            store.invalidate_mirror(
+                compat_root,
+                status=status,
+                reason=_reason_from_result(result),
+            )
+        else:
+            store.mirror_artifacts_to_outputs(compat_root)
         store.finish(status, result)
         store.seal_artifacts()
         return {
@@ -214,18 +220,20 @@ def run(
     except (StageError, HashMismatch) as exc:
         store.events.emit("run_failed", error=str(exc))
         _write_debugger({}, status="failed", exc=exc)
+        store.invalidate_mirror(compat_root, status="failed", reason=str(exc))
         if not store.is_finished:
-            store.finish("failed")
+            store.finish("failed", {"reason": str(exc)})
         raise
     except Exception as exc:
         store.events.emit("run_failed", error=str(exc))
         _write_debugger({}, status="failed", exc=exc)
+        store.invalidate_mirror(compat_root, status="failed", reason=str(exc))
         if not store.is_finished:
-            store.finish("failed")
+            store.finish("failed", {"reason": str(exc)})
         raise
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="Prompt-less — token-efficient tech artifacts")
     p.add_argument("tipo", choices=["openapi", "mermaid", "historia", "prd", "sdd"])
     p.add_argument("--dry-run", action="store_true", default=True)
@@ -255,17 +263,57 @@ def main() -> None:
         action="store_true",
         help="Retoma a run --run-id a partir dos checkpoints (valida hashes)",
     )
-    args = p.parse_args()
-    result = run(
-        args.tipo,
-        dry_run=not args.live,
-        context=args.context,
-        all_contexts=args.all_contexts,
-        no_split=args.no_split,
-        run_id=args.run_id,
-        resume=args.resume,
+    p.add_argument(
+        "--inputs-dir",
+        type=Path,
+        default=None,
+        help="Diretório de inputs (default: ./inputs)",
     )
+    p.add_argument(
+        "--output-root",
+        type=Path,
+        default=None,
+        help="Raiz para runs/ e outputs/ (default: raiz do repo)",
+    )
+    args = p.parse_args(argv)
+    try:
+        result = run(
+            args.tipo,
+            dry_run=not args.live,
+            context=args.context,
+            all_contexts=args.all_contexts,
+            no_split=args.no_split,
+            run_id=args.run_id,
+            resume=args.resume,
+            inputs_dir=args.inputs_dir,
+            output_root=args.output_root,
+        )
+    except Exception as exc:
+        payload: dict[str, Any] = {
+            "status": "failed",
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+        }
+        if args.run_id:
+            payload["run_id"] = args.run_id
+            run_dir = (args.output_root or ROOT) / "runs" / args.run_id
+            manifest_path = run_dir / "manifest.json"
+            if manifest_path.is_file():
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    manifest = {}
+                if isinstance(manifest, dict):
+                    payload["status"] = str(manifest.get("status") or "failed")
+                    payload["run_dir"] = str(run_dir)
+                    summary = manifest.get("result_summary")
+                    if isinstance(summary, dict) and summary.get("reason"):
+                        payload["reason"] = summary["reason"]
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        raise SystemExit(2) from exc
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    if str(result.get("status") or "") in {"blocked", "failed"}:
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

@@ -993,10 +993,31 @@ Além da geração de artefatos, a série 1 adicionou um **harness** auditável:
 
 Cada `python -m src.run …` cria um diretório isolado e espelha artefatos em `outputs/` (compatível com scripts Devin).
 
+**Exit code:** a CLI imprime o JSON da run e sai com **0** só se
+`status=completed`. `blocked` / `failed` (e exceções) saem com código **2**,
+mantendo o JSON/diagnóstico no stdout para automação (`reason` /
+`error_type`). Scripts com `set -e` param antes de copiar artefatos ou
+chamar o executor.
+
+```bash
+.venv/bin/python -m src.run historia --dry-run --run-id demo-1
+# → exit 0 + JSON com status completed
+
+.venv/bin/python -m src.run historia --dry-run --no-split \
+  --inputs-dir tests/fixtures/adversarial_injection --output-root /tmp/pl
+# → exit 2 + JSON com status blocked / reason input_scan_failed
+```
+
+Consumidores (`assert_run_ready_for_executor`, gate em
+`python -m src.executors.devin --root … --run-id …`) recusam despacho quando o
+manifesto não está `completed`, quando o `run_id` diverge, ou quando o espelho
+`outputs/.mirror-manifest.json` marca blocked/failed — não reutilizam história
+de outra execução.
+
 | Caminho | Conteúdo |
 |---------|----------|
 | `runs/<id>/events.jsonl` | trilha append-only com cadeia HMAC (`prev_hmac` / `hmac`; `hash` é SHA-256 do payload) |
-| `runs/<id>/manifest.json` | status versionado, objective, timestamps, `status_history`, `integrity` (selo HMAC-SHA256) |
+| `runs/<id>/manifest.json` | status versionado, objective, timestamps, `status_history`, `result_summary.reason`, `integrity` (selo HMAC-SHA256) |
 | `runs/<id>/artifacts/` | artefatos da run (incl. `canonical-spec.yaml`) |
 | `runs/<id>/artifacts/contextos/<svc>/` | pacotes por serviço (`--all-contexts`) |
 | `runs/<id>/validations/` | `provenance.json`, `spec-validation.json` |
@@ -1018,7 +1039,7 @@ Cada `python -m src.run …` cria um diretório isolado e espelha artefatos em `
 | Integridade da trilha | cada evento em `events.jsonl` encadeia `prev_hmac` → `hmac` (HMAC-SHA256 de `kid:prev_hmac:hash`). Assinatura usa `PROMPTLESS_INTEGRITY_KEY` + `PROMPTLESS_INTEGRITY_KID` (default `v1`). Rotação: `PROMPTLESS_INTEGRITY_KEYS=v1=antiga`. Fail-closed se a chave atual faltar. `seal_artifacts()` roda **depois** de `finish`, sem emitir evento após o selo — `events_tip` é o HMAC de `run_finished`. `verify_run_dir` recusa ponta errada, kid desconhecido, evento forjado e artefato adulterado |
 | Colisão de id | `bootstrap()` cria o diretório com `mkdir` exclusivo; id repetido = `RunIdCollision` (retomada explícita: `bootstrap(resume=True)`) |
 | Transição de status | `set_status` valida a transição e usa `version` monotônica; escrita com versão obsoleta = `RunStateConflict`; estado terminal não reabre |
-| Espelho publicado por manifesto | `outputs/.mirror-manifest.json` (run_id + sha256 por arquivo) é o ponto de commit; obsoletos da publicação anterior são removidos depois, symlinks são ignorados e arquivos nunca publicados nunca são apagados |
+| Espelho publicado por manifesto | `outputs/.mirror-manifest.json` (run_id + status + sha256 por arquivo) é o ponto de commit; obsoletos da publicação anterior são removidos depois, symlinks são ignorados e arquivos nunca publicados nunca são apagados. Em `blocked`/`failed` o espelho é **invalidado** (`status` + `reason`, `files: []`) e o que a run completed anterior havia publicado é podado |
 
 O espelho em `outputs/` é **last-writer-wins** por design (compatibilidade com os scripts Devin); a fonte da verdade auditável continua sendo `runs/<id>/`.
 
