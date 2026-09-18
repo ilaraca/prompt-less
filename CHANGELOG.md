@@ -9,6 +9,17 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Evals de candidato** (`23-candidate-evals`): `improve` materializa workspaces
+  distintos, aplica a proposta só no candidato e compara evals com gate por
+  caso crítico (não só pass rate agregado)
+- Métricas de eval passam a incluir claim recall, statuses HTTP, traceability,
+  inferências inesperadas, custo (`avg_est_tokens`) e latência
+- Fixtures `eval_adversarial` (HTTP exact) e `eval_multi_context`; testes de
+  concorrência e recovery do apply
+- Histórico de propostas guarda diff e métricas comparadas; o resultado
+  distingue `proposed`, `applied_to_candidate`, `evaluated`,
+  `approved_for_experiment`, `accepted` e `rejected`
+
 - **Evidência de código no Canonical Spec** (`22-code-evidence-spec`): o IR
   passa a modelar `current_state`, `gaps` e `code_evidence`; o `repo_index`
   aponta arquivo, símbolo, linha, rota e confiança, com origem `observed` ou
@@ -73,6 +84,11 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- `improve` deixa de comparar a mesma eval duas vezes: baseline e candidate
+  são workspaces/commits distintos; `accepted` só existe depois do apply no
+  candidato
+- HTTP em caso crítico passa a exigir igualdade de status, salvo regra
+  explícita (`http_status_mode`) na fixture
 - História e PRD passam a preencher estado atual e gaps a partir do Canonical
   Spec; o placeholder “sem gaps” some quando o índice não foi aplicado
 - `manifest.json`, `state.json`, `provenance.json`, `latest.json`,
@@ -101,7 +117,7 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Orquestração declarativa via `pipeline.yaml` (stages)
 - Tokenizer oficial + Redis opcional
 - Execução concorrente por ondas
-- Apply de propostas + rollback
+- Apply de propostas + rollback **em produção** (candidato já é o ticket 23)
 - Hardening profundo (debugger, injection, recovery, golden recall)
 
 ## [0.2.0] - 2026-09-12

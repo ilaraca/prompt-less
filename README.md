@@ -45,7 +45,7 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 | **Gate antes de implementar** | Canonical Spec bloqueia ambiguidade (ex.: HTTP indefinido) com `PipelineBlocked` |
 | **Verify pós-executor** | `close_loop` confere ExecutionResult vs spec + policy de camada |
 | **Plano coordenado multi-repo** | `plan_repos` gera ondas/contratos a partir do mapa de serviços |
-| **Melhoria sem regressão silenciosa** | `improve` + evals; propostas só `approved_for_experiment` |
+| **Melhoria sem regressão silenciosa** | `improve` aplica a proposta só no candidato, compara evals distintas e só então promove status |
 
 ### Onde *não* é a melhor ferramenta (ainda)
 
@@ -98,7 +98,7 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
         (pós-execução, opcional)
  [close_loop] ───────────── ExecutionResult × spec × policy → verify / repair
  [plan_repos] ───────────── mapa-servicos → implementation_plan (ondas)
- [improve] ──────────────── diagnose → propostas → evals → approved_for_experiment
+ [improve] ──────────────── diagnose → apply no candidato → evals distintas → accepted / approved_for_experiment / rejected
 ```
 
 ### Técnicas de economia de tokens (mapeamento do artigo)
@@ -1044,18 +1044,32 @@ O adapter Devin (`src/executors/devin.py`) é stub até o ticket E2E da série 2
 ```bash
 .venv/bin/python -m src.improve --verify-report /tmp/verify/verify-report.json
 .venv/bin/python -m src.improve --out state/knowledge   # demo sem report (falha AMBIGUOUS_HTTP)
+.venv/bin/python -m src.improve --cases happy_path,eval_adversarial --out /tmp/improve
 ```
 
-Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`playbook.yaml`) → eval suite → decisão. Status positivo = **`approved_for_experiment`** — não aplica mudança de código (apply + rollback = série 2).
+Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`playbook.yaml`) → **workspaces distintos** (snapshot de `config/` em `evals/workspaces/{baseline,candidate}`) → a proposta é aplicada **somente no candidato** (overlay atômico) → eval suite nos dois lados → decisão.
+
+Status:
+
+| Status | Significado |
+|--------|-------------|
+| `proposed` | proposta gerada, ainda sem apply |
+| `applied_to_candidate` | overlay gravado só no workspace candidato |
+| `evaluated` | evals baseline × candidate rodaram |
+| `approved_for_experiment` | aplicada, sem regressão crítica; ainda não é melhoria comprovada |
+| `accepted` | melhoria comprovada **no candidato** (não é apply em produção) |
+| `rejected` | regressão crítica, não aplicada, risco medium+, ou workspaces iguais |
+
+Uma proposta **não aplicada** nunca entra em `accepted` nem `approved_for_experiment`. Regressão em qualquer caso `critical: true` rejeita o candidato mesmo se o pass rate agregado subir. HTTP crítico exige igualdade de status, salvo `http_status_mode` explícito na fixture. O histórico (`state/knowledge/proposals-history.json`) guarda diff e métricas comparadas. Apply em produção continua no ticket `14`.
 
 ### Evals e testes
 
 ```bash
 .venv/bin/pytest -v --tb=short
-# esperado: 97 passed
+# esperado: 132 passed
 ```
 
-Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services) e goldens de artefato derivado em `tests/fixtures/golden/` (`openapi.yaml`, `sequence.mmd`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`. CI em `.github/workflows/ci.yml` (compileall + YAML de profiles + pytest + smoke `plan_repos`).
+Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services, **eval_adversarial**, **eval_multi_context**) e goldens de artefato derivado em `tests/fixtures/golden/` (`openapi.yaml`, `sequence.mmd`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`, com métricas de claim recall, traceability, inferências inesperadas, custo e latência. Casos `critical` têm gate individual na comparação baseline × candidate. CI em `.github/workflows/ci.yml` (compileall + YAML de profiles + pytest + smoke `plan_repos`).
 
 ---
 
@@ -1244,7 +1258,7 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 
 - Modo `--live` (chamada real OpenAI/Claude) ainda não implementado
 - Adapter Devin no `close_loop` é stub (E2E real = série 2)
-- `improve` não aplica propostas nem faz rollback — só `approved_for_experiment`
+- `improve` aplica propostas só no workspace candidato e compara evals distintas; apply + rollback em produção continua no ticket `14`
 - OpenAPI/Mermaid derivam do IR, mas as `operations` **não** são fatiadas por
   serviço: com `--all-contexts` cada contexto recebe todas as actions da UI
 - Status de sucesso só é resolvido com evidência: um 2xx declarado inequívoco
@@ -1262,7 +1276,7 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 2. Devin CLI real no `close_loop`
 3. Orquestração declarativa via stages em `pipeline.yaml`
 4. Tokenizer oficial + Redis opcional
-5. Execução concorrente por ondas + apply/rollback de propostas
+5. Execução concorrente por ondas + apply/rollback de propostas **em produção** (`14`)
 6. Hardening profundo (debugger, injection, recovery, golden recall)
 7. Consumidor SDD que leia `outputs/PRD.md` e gere architecture/tasks com RF + NFR
 8. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
