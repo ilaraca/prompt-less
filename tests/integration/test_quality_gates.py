@@ -41,6 +41,7 @@ def test_lockfiles_exist_and_are_hashed():
     assert "mypy" in dev_text
     assert "pip-audit" in dev_text
     assert "detect-secrets" in dev_text
+    assert "exceptiongroup==" in dev_text
 
 
 def test_ci_has_minimal_permissions_and_sha_pinned_actions():

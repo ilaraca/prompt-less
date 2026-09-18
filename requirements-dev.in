@@ -1,4 +1,6 @@
-# Ferramentas de CI / desenvolvimento. Regenerar o lock (Python ≥3.10):
+# Ferramentas de CI / desenvolvimento. Regenerar o lock na versão mais antiga
+# da matriz (3.10), senão backports com marker (ex.: exceptiongroup no pytest 9)
+# ficam de fora e `pip install --require-hashes` quebra nas células velhas.
 #   pip-compile --generate-hashes --allow-unsafe --output-file=requirements-dev.lock requirements-dev.in
 -r requirements.in
 pytest>=8.0.0
@@ -13,3 +15,4 @@ yamllint>=1.35.0
 pip-tools>=7.4.0
 pip>=26.2
 setuptools>=83.0.0
+exceptiongroup>=1.0.0

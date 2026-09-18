@@ -11,8 +11,11 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 - `pip-audit --strict` na matriz 3.10–3.13 deixava de passar: o lock compilado
   em 3.9 pinava `pip` 26.0.1 e `setuptools` 82.0.1, cujos fixes exigem
-  Python ≥3.10. A matriz larga o 3.9, o lock recompila em 3.12 (`pip` 26.2.1,
+  Python ≥3.10. A matriz larga o 3.9, o lock recompila no 3.10 (`pip` 26.2.1,
   `setuptools` 84) e o workflow não usa mais `--ignore-vuln`
+- `pip install --require-hashes` no 3.10 falhava porque o pytest 9 puxa
+  `exceptiongroup` só abaixo do 3.11; o lock compilado em 3.12 não pinava
+  o backport. O lock passa a incluir `exceptiongroup==1.3.1`
 
 ### Added
 

@@ -1303,7 +1303,7 @@ O job agregador **`CI`** (depende de `quality-gates` na matriz) é o check está
 | `verify-report.json` | placeholder `ci_no_close_loop` quando o workflow não roda `close_loop` |
 | `pytest.xml` | junit da suíte (inclui testes adversariais) |
 
-`pip-audit --strict` faz parte do gate. O lock é compilado em Python 3.12 (`pip>=26.2`, `setuptools>=83`) e a matriz começa em 3.10, para que os fixes de CVE que largaram o 3.9 entrem no gate sem `--ignore-vuln`.
+`pip-audit --strict` faz parte do gate. O lock é compilado em Python 3.10 (`pip>=26.2`, `setuptools>=83`, `exceptiongroup` para o pytest 9) e a matriz cobre 3.10–3.13, para que os fixes de CVE que largaram o 3.9 entrem no gate sem `--ignore-vuln`.
 
 ### Branch protection (ainda não ativa)
 
