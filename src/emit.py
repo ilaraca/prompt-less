@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.runtime.run_context import context_subdir
+
 ROOT = Path(__file__).resolve().parents[1]
 
 # arquivos na raiz de outputs/ (legado / single-context)
@@ -25,7 +27,7 @@ def emit(
     name = OUTPUTS[tipo]
     base = root or ROOT
     if context:
-        path = base / subdir / "contextos" / context / name
+        path = context_subdir(base / subdir, context) / name
     else:
         path = base / subdir / name
     path.parent.mkdir(parents=True, exist_ok=True)

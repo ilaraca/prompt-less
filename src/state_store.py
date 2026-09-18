@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from src.runtime.atomic_io import atomic_write_json
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PATH = ROOT / "state" / "workflow.json"
 
@@ -16,7 +18,6 @@ def read_state(path: Path = DEFAULT_PATH) -> dict[str, Any]:
 
 
 def write_state(data: dict[str, Any], path: Path = DEFAULT_PATH) -> dict[str, Any]:
-    path.parent.mkdir(parents=True, exist_ok=True)
     # só campos relevantes ao workflow (padrão do artigo)
     docs_meta = [
         {"name": d.get("name"), "lines": d.get("lines"), "est_tokens_raw": d.get("est_tokens_raw")}
@@ -40,5 +41,6 @@ def write_state(data: dict[str, Any], path: Path = DEFAULT_PATH) -> dict[str, An
         "previous_actions": data.get("previous_actions", []),
         "status": data.get("status", "ready"),
     }
-    path.write_text(json.dumps(slim, ensure_ascii=False, indent=2), encoding="utf-8")
+    # write-temp + rename: interrupção nunca deixa state.json parcial
+    atomic_write_json(Path(path), slim)
     return slim

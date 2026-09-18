@@ -1,0 +1,45 @@
+---
+description: Toda feature nova deve atualizar README e CHANGELOG antes de considerar o trabalho pronto
+alwaysApply: true
+---
+
+# Documentação obrigatória em features
+
+Quando uma mudança **entrega comportamento novo** (CLI, módulo, gate, config, artefato, integração, política), a tarefa **não está pronta** sem documentação no mesmo PR/commit (ou no commit imediatamente seguinte, se o usuário pedir commit separado).
+
+## Obrigatório
+
+1. **`CHANGELOG.md`** — entrada Keep a Changelog sob `[Unreleased]` (ou a versão alvo):
+   - `Added` / `Changed` / `Fixed` / `Removed` conforme o caso
+   - Foco no *porquê* e no efeito observável (CLI, artefato, gate), não lista de arquivos
+2. **`README.md`** — atualizar o que o usuário precisa saber:
+   - novos comandos/flags
+   - novos artefatos ou pastas (`runs/`, configs)
+   - mudança de fluxo/arquitetura relevante
+   - limitações se a feature for parcial (stub, série 2, etc.)
+3. Se existir ticket em `.scratch/` / issue do harness: mencionar no Implementation note que README+CHANGELOG foram atualizados
+
+## Não contar como “só código”
+
+- Novo `python -m src.*` ou flag em CLI existente
+- Novo gate/policy/validator com código de erro
+- Novo artefato persistido (`canonical-spec`, provenance, plan, verify-report)
+- Nova config em `config/*.yaml` que muda comportamento
+- Mudança que invalida exemplos ou a seção “Limitações / próximos passos”
+
+## Exceções (só estes)
+
+- Typo, rename interno sem API/CLI, refatoração sem mudança observável
+- Testes que só cobrem comportamento já documentado
+- Ajuste de CI sem novo contrato para o usuário
+
+## Checklist antes de “Done” / Feedback
+
+- [ ] CHANGELOG tem bullet da mudança
+- [ ] README reflete uso real (comando + saída esperada se for CLI)
+- [ ] Limitações/próximos passos não contradizem o que shipou
+
+```text
+❌ BAD: mergear feat de close_loop sem seção no README nem linha no CHANGELOG
+✅ GOOD: feat + README (como rodar) + CHANGELOG Added na mesma entrega
+```
