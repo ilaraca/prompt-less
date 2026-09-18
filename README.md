@@ -1268,12 +1268,11 @@ Status:
 | `accepted` | melhoria comprovada **no candidato** (não é apply em produção) |
 | `rejected` | regressão crítica, não aplicada, risco medium+, ou workspaces iguais |
 
-Uma proposta **não aplicada** nunca entra em `accepted` nem `approved_for_experiment`. Regressão em qualquer caso `critical: true` rejeita o candidato mesmo se o pass rate agregado subir. HTTP crítico exige igualdade de status, salvo `http_status_mode` explícito na fixture. O histórico (`state/knowledge/proposals-history.json`) guarda diff e métricas comparadas. Apply em produção continua no ticket `14`.
+Uma proposta **não aplicada** nunca entra em `accepted` nem `approved_for_experiment`. Regressão em qualquer caso `critical: true` rejeita o candidato mesmo se o pass rate agregado subir. O gate HTTP das evals compara **contratos tipados por operação** (`http_operations` na fixture: serviço, método, rota, `success_status` resolvido e erros vinculados) — números em RF/AC/perguntas **não** provam o contrato; sucesso ausente/pendente (`requires_review`) não recebe valor presumido. Sem `http_operations`, o fallback `http_statuses` também só lê o tipado. Modo `exact` (default em `critical`) vs `subset` (`http_status_mode`) aplica-se aos erros da operação. O histórico (`state/knowledge/proposals-history.json`) guarda diff e métricas comparadas. Apply em produção continua no ticket `14`.
 
 Limites deste slice (não reabrir; o `14` consome o overlay):
 
 - O apply grava `config/proposal-overlay.yaml` só no candidato. `src.run` continua lendo `config/pipeline.yaml` do ROOT — a eval prova isolamento e gates, não o efeito da chave do playbook no IR.
-- `two_services` ainda espera HTTP 401 que o spec não materializa (residual do recorte de regras). O gate multi-contexto que passa é `eval_multi_context` (200/400/422 exact).
 - A suíte default inclui `eval_adversarial` e `eval_multi_context`. `--cases` restringe.
 
 ### Evals e testes
@@ -1283,7 +1282,7 @@ Limites deste slice (não reabrir; o `14` consome o overlay):
 PYTHONPATH=. .venv/bin/python scripts/quality_gates.py
 ```
 
-Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services, **eval_adversarial**, **eval_multi_context**), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`, com métricas de claim recall, traceability, inferências inesperadas, custo e latência. Casos `critical` têm gate individual na comparação baseline × candidate. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
+Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services, **eval_adversarial**, **eval_multi_context**), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`, com métricas de claim recall, traceability, inferências inesperadas, custo e latência. O gate HTTP usa `http_operations` (serviço + método + rota + sucesso tipado + erros da op); casos `critical` têm gate individual na comparação baseline × candidate. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
 
 
 ---

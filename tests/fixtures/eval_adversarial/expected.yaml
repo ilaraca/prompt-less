@@ -9,6 +9,13 @@ services:
 http_statuses:
   - 200
   - 400
+http_operations:
+  - service: ms-cliente
+    method: POST
+    path: /clientes
+    success_status: 200
+    error_statuses:
+      - 400
 max_unreviewed_inferences: 0
 forbidden_inferences:
   - http 500

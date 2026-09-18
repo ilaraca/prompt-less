@@ -8,6 +8,14 @@ http_statuses:
   - 401
   - 403
 http_status_mode: subset
+http_operations:
+  - service: ms-cliente
+    method: GET
+    path: /clientes/{cpf}
+    success_status: 200
+    error_statuses:
+      - 401
+      - 403
 max_unreviewed_inferences: 0
 ownership:
   ms-cliente:

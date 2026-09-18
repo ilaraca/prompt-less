@@ -9,6 +9,14 @@ http_statuses:
   - 400
   - 422
 http_status_mode: subset
+http_operations:
+  - service: ms-cliente
+    method: POST
+    path: /clientes
+    success_status: 200
+    error_statuses:
+      - 400
+      - 422
 max_unreviewed_inferences: 0
 ownership:
   ms-cliente:
