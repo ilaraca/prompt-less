@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from src.learning.accept import decide_proposals, load_history
+from src.learning.apply_rollback import apply_proposals_with_rollback
 from src.learning.evals import compare_evals, run_eval_suite
 from src.learning.failure_patterns import classify_issues, diagnose_verify_report
 from src.learning.proposals import build_proposals
@@ -12,6 +13,7 @@ from src.learning.workspaces import (
 
 __all__ = [
     "apply_proposals_to_candidate",
+    "apply_proposals_with_rollback",
     "build_proposals",
     "classify_issues",
     "compare_evals",
