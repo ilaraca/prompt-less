@@ -9,6 +9,16 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Plano multi-repo baseado em evidência** (`24-evidence-based-planning`):
+  dependências observadas (OpenAPI clients, imports, URLs, eventos, arquivos
+  de build e contratos do Canonical Spec) passam a ser a autoridade do
+  `implementation_plan`; cada aresta registra `from`/`to`, tipo, arquivo/símbolo,
+  confiança e o motivo
+- Grafo global detecta repositórios compartilhados e ciclos; fallback por
+  camada fica `origin: heuristic` e `requires_review`;
+  `ready_for_parallel_execution` só fica verdadeiro com plano `--reviewed` e
+  sem conflito (ciclos e contratos ausentes bloqueiam o scheduler)
+
 - **Evidência de código no Canonical Spec** (`22-code-evidence-spec`): o IR
   passa a modelar `current_state`, `gaps` e `code_evidence`; o `repo_index`
   aponta arquivo, símbolo, linha, rota e confiança, com origem `observed` ou
@@ -73,6 +83,9 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- `ready_for_parallel_execution` no relatório do plano exige plano revisado e
+  ausência de conflito (ciclo, contrato ausente, repo compartilhado sem
+  `coordenacao`); topologia por camada deixa de ser autoridade
 - História e PRD passam a preencher estado atual e gaps a partir do Canonical
   Spec; o placeholder “sem gaps” some quando o índice não foi aplicado
 - `manifest.json`, `state.json`, `provenance.json`, `latest.json`,

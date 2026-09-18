@@ -44,7 +44,7 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 | **Pré-processamento barato + raciocínio caro** | Camada local (“modelo pequeno”) + slot para LLM grande |
 | **Gate antes de implementar** | Canonical Spec bloqueia ambiguidade (ex.: HTTP indefinido) com `PipelineBlocked` |
 | **Verify pós-executor** | `close_loop` confere ExecutionResult vs spec + policy de camada |
-| **Plano coordenado multi-repo** | `plan_repos` gera ondas/contratos a partir do mapa de serviços |
+| **Plano coordenado multi-repo** | `plan_repos` gera ondas/contratos a partir de dependências observadas (código + Canonical Spec); camada é fallback revisável |
 | **Melhoria sem regressão silenciosa** | `improve` + evals; propostas só `approved_for_experiment` |
 
 ### Onde *não* é a melhor ferramenta (ainda)
@@ -97,7 +97,7 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
 
         (pós-execução, opcional)
  [close_loop] ───────────── ExecutionResult × spec × policy → verify / repair
- [plan_repos] ───────────── mapa-servicos → implementation_plan (ondas)
+ [plan_repos] ───────────── mapa + evidência de código/contratos → implementation_plan (ondas)
  [improve] ──────────────── diagnose → propostas → evals → approved_for_experiment
 ```
 
@@ -1033,10 +1033,13 @@ O adapter Devin (`src/executors/devin.py`) é stub até o ticket E2E da série 2
 
 ### Plano multi-repo (`plan_repos`)
 
+O plano usa **dependências observadas** (OpenAPI clients, imports, URLs, eventos, arquivos de build e contratos do Canonical Spec). Cada aresta tem `from`, `to`, tipo, arquivo/símbolo, confiança e o **motivo**. Topologia por camada permanece só como fallback `origin: heuristic` + `requires_review`. Ciclos, contratos ausentes e repositório compartilhado sem `coordenacao` bloqueiam o scheduler. `ready_for_parallel_execution` exige `--reviewed` e ausência de conflito — a execução concorrente em si é o ticket `13`.
+
 ```bash
 .venv/bin/python -m src.plan_repos
 .venv/bin/python -m src.plan_repos --service gestao-de-ofertas --out runs/plan/
-# → implementation_plan.yaml + .json (ondas, contratos, origin: heuristic, requires_review)
+.venv/bin/python -m src.plan_repos --workspace ~/dev/repos --spec runs/<id>/artifacts/canonical-spec.yaml --reviewed
+# → implementation_plan.yaml + .json (dependencies, ondas, cycles, scheduler_blockers)
 ```
 
 ### Autoaperfeiçoamento (`improve`)
@@ -1052,7 +1055,7 @@ Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`
 
 ```bash
 .venv/bin/pytest -v --tb=short
-# esperado: 97 passed
+# esperado: 125 passed
 ```
 
 Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services) e goldens de artefato derivado em `tests/fixtures/golden/` (`openapi.yaml`, `sequence.mmd`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`. CI em `.github/workflows/ci.yml` (compileall + YAML de profiles + pytest + smoke `plan_repos`).
@@ -1108,7 +1111,7 @@ pipeline/
     ├── validators/                # quality gate
     ├── renderers/                 # história/PRD/OpenAPI/Mermaid a partir do IR
     ├── executors/                 # policy, verify, loop, Devin adapter
-    ├── planning/                  # grafo, camadas, plan
+    ├── planning/                  # grafo observado, camadas (fallback), plan
     └── learning/                  # evals, proposals, accept, failure_patterns
 ```
 
@@ -1252,6 +1255,8 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   na rota casada (`origin: observed`); fora disso permanece `unresolved`
 - Sem `repo_index`, história/PRD declaram *índice não aplicado* e não afirmam
   “sem gaps”; heurística nunca é apresentada como fato
+- Plano multi-repo sem evidência de código cai na topologia por camada
+  (`origin: heuristic`, exige revisão); execução paralela das ondas ainda não roda (ticket `13`)
 - Resumo de docs é **extrativo por regex**, não LLM small (bom custo; pode perder nuance)
 - Estimativa de tokens é heurística (`len/4`), não tokenizer oficial
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
