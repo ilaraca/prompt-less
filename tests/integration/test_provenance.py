@@ -29,6 +29,7 @@ def test_claim_has_source_ref():
     assert src["document"] == "regras.txt"
     assert src.get("content_hash")
     assert src.get("start_line") is not None
+    assert src.get("selected_lines"), "selected_lines identifica o trecho usado"
 
 
 def test_noise_chunk_is_discarded():
