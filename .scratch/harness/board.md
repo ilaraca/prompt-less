@@ -1,7 +1,8 @@
 # Board — Prompt-less Engineering Harness
 
 Fonte: `docs/analise-engenheria-harness` + gaps pós-série 01–07 +
-`docs/propostas-melhoria-limites-atuais.md` (§5, §6, §7).
+`docs/propostas-melhoria-limites-atuais.md` (§5, §6, §7) + revisão de conformidade
+com `prompt-less-roadmap-harness(1).md` em 2026-09-18 (série 4).
 
 ## Série 1 — Fundação (concluída)
 
@@ -91,7 +92,7 @@ Derivada de `docs/propostas-melhoria-limites-atuais.md` (§6 e §7). Issues deta
 | 28-engineering-baseline-v2 | NFR por tipo e criticidade | **Done** | 22, 27 |
 | 29-operations-por-contexto | Recorte de operations por serviço | **Done** | 08 |
 
-### Frontier atual
+### Histórico da frontier — séries 1–3
 
 `origin/main` em 2026-09-18: `aaeb004` (PR
 [#17](https://github.com/ilaraca/prompt-less/pull/17) merged — 24 + 27).
@@ -177,7 +178,7 @@ Riscos residuais aceitos (não reabrir worktree filha):
 merged). `12b` parqueado.
 
 **Onda E** aprovada e **Done** em 2026-09-18 — HEAD `4175436` em
-`feature/parallel-exec`. Frontier ativa do harness **encerrada** salvo
+`feature/parallel-exec`. Frontier das séries 1–3 **encerrada** salvo
 `12b-state-backend-redis` (Todo ⏸ parqueado — futuro).
 
 Riscos residuais aceitos do `13` (não reabrir worktree filha):
@@ -198,7 +199,254 @@ Riscos residuais aceitos do `13` (não reabrir worktree filha):
 | 12b-state-backend-redis | Todo ⏸ | parqueado | futuro |
 | (pai) onda-frontier | — | integra filhas; único PR contra `main` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
-## Dependências (visão)
+## Série 4 — Conformidade com o roadmap (frontier ativa)
+
+Incluída a pedido de Ilara em 2026-09-18, após comparação com
+`prompt-less-roadmap-harness(1).md`. Base auditada:
+[`7f45824`](https://github.com/ilaraca/prompt-less/commit/7f458240193d7df85e93ba6b2dfff5810018b805).
+Validação da revisão: 303 testes passaram, 3 foram ignorados; CI verde.
+Contraexemplos locais confirmaram lacunas que a suíte existente não rejeita.
+Não houve execução real de Devin/LLM nesta revisão.
+
+Os tickets anteriores permanecem **Done** como histórico das entregas e dos
+riscos então aceitos. Os itens abaixo são novos incrementos para fechar as
+garantias do roadmap; não reabrem worktrees antigas. Redis/`12b` continua
+parqueado e proteção da `main` permanece fora do escopo. Os IDs são locais
+ao board, não números de issues do GitHub; o detalhamento desta série está aqui.
+
+| ID | Prioridade | Título | Kanban | Blocked by |
+|----|------------|--------|--------|------------|
+| 30-eval-required-gates | P0.1 | Gates obrigatórios de spec, artefatos e rastreabilidade | Todo | — |
+| 31-eval-run-selection | P0.1 | Seleção de resultados por run e manifesto | Todo | — |
+| 32-eval-typed-http | P0.1 | HTTP tipado por serviço e operação | Todo | — |
+| 33-required-review-gate | P0.2 | Revisão obrigatória bloqueante e auditável | Todo | — |
+| 34-cli-failure-exit | P0.3 | Exit code de falha e bloqueio de consumo | Todo | — |
+| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | Todo | 30, 31, 32, 33, 34 |
+| 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | Todo | 30, 31, 32, 33, 34 |
+| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | Todo | 30, 31, 32, 33, 34 |
+| 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | Todo | 35, 36, 37 |
+| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | Todo | 30, 31, 32 |
+
+### Ordem de implementação e fechamento
+
+1. Fechar P0: 30, 31, 32, 33 e 34; incorporar a parte de regressões por caso
+   do 39 antes de confiar em promoção de candidatos.
+2. Entregar runner com limites (37), coleta independente (35) e reparação
+   limitada (36), validando a integração em uma tarefa pequena.
+3. Evoluir contexto/custo (38) e concluir a parte experimental do 39 somente
+   após evidências do fluxo completo. Os tickets 35–37 são pré-requisitos
+   para declarar o experimento como melhoria do fluxo de implementação.
+
+Dependências nesta tabela são condições para concluir a entrega; não exigem
+execução paralela. O primeiro marco do roadmap continua **pendente** até
+uma tarefa real demonstrar entrada → spec → artefatos → execução → verificação,
+com reparação quando necessária, falha inequívoca e métricas registradas.
+
+### 30 — Gates obrigatórios de avaliação
+
+**Achado:** `score_case()` permite `spec_ok` compensar `art_ok=False`.
+Um caso crítico com sinal na spec passou sem PRD/história; a dimensão de
+artefatos indicava falha. Rastreabilidade só integra o gate em casos críticos.
+
+**Implementar:** separar diagnóstico de aprovação e tornar obrigatórias as
+dimensões exigidas pelo tipo de tarefa: spec validada, todos os artefatos
+esperados, fontes/rastreabilidade válidas e ausência de pendências bloqueantes.
+Casos de bloqueio esperado devem validar também a causa esperada.
+
+**Aceite:**
+
+- [ ] Spec válida com qualquer artefato obrigatório ausente reprova.
+- [ ] Fonte inválida, rastreabilidade quebrada ou serviço incorreto reprova.
+- [ ] Uma dimensão obrigatória falsa nunca é compensada por outra.
+- [ ] Casos negativos entram na suíte e falham pelo motivo esperado.
+
+**Código:** `src/learning/evals.py` e testes de avaliação.
+
+### 31 — Seleção por execução
+
+**Achado:** `_load_specs()` e `_load_final_artifacts()` usam busca recursiva
+sem seleção pelo manifesto. Uma spec em `runs/old` fez uma avaliação de
+`run_id=new` passar no contraexemplo local.
+
+**Implementar:** exigir a identidade da execução e carregar apenas artefatos
+registrados no respectivo manifesto, verificando estado e integridade.
+Espelhos de compatibilidade não participam da seleção automática.
+
+**Aceite:**
+
+- [ ] Uma execução antiga correta não faz a atual passar.
+- [ ] Runs simultâneas com entradas diferentes não misturam evidências.
+- [ ] Manifesto ausente, run divergente ou artefato adulterado reprova.
+- [ ] Run bloqueada pode ser avaliada como bloqueio esperado, mas seus
+      artefatos não são liberados para implementação.
+
+**Código:** `src/learning/evals.py`, integração com `src/runtime/run_store.py`.
+
+### 32 — Contratos HTTP tipados
+
+**Achado:** `collect_spec_statuses()` extrai números de RF/AC/perguntas e
+não usa `operations.success_status`. Campo tipado 201 com texto contendo
+200 produziu o conjunto `{200}` na verificação local.
+
+**Implementar:** comparar método, rota, serviço, sucesso tipado e erros
+vinculados à operação. Texto livre não serve como prova do contrato.
+
+**Aceite:**
+
+- [ ] Status tipado incorreto reprova mesmo com número correto em outra seção.
+- [ ] Status correto em outro serviço/operação não compensa a divergência.
+- [ ] Sucesso ausente ou pendente não recebe valor presumido.
+- [ ] Fixtures declaram expectativas por operação e exercitam esses negativos.
+
+**Código:** `src/learning/evals.py`, fixtures e modelo canônico.
+
+### 33 — Revisão obrigatória bloqueante
+
+**Achado:** `requires_review=True` em vínculo lexical gera apenas warning.
+O teste `test_match_baixa_confianca_exige_revisao_sem_mudar_status` espera
+validação aprovada nessa condição.
+
+**Implementar:** diferenciar aviso informativo de revisão obrigatória e exigir
+decisão explícita vinculada à versão da spec/claim antes de liberar execução.
+Confiança numérica não substitui evidência nem aprovação humana.
+
+**Aceite:**
+
+- [ ] Pendência obrigatória não resolvida bloqueia implementação.
+- [ ] Decisão registra responsável, justificativa e versão revisada.
+- [ ] Alteração da evidência/spec invalida decisão incompatível.
+- [ ] Avisos genuinamente informativos permanecem não bloqueantes.
+- [ ] Teste existente é ajustado ao contrato e cobre aprovação/rejeição.
+
+**Código:** `src/validators/__init__.py`, modelo de revisão e testes de provenance.
+
+### 34 — Falha inequívoca na CLI
+
+**Achado:** `src.run.main()` imprime o resultado e retorna normalmente.
+Teste pontual com `run()` substituído por retorno `status=blocked`
+confirmou saída normal; não foi uma execução E2E da pipeline bloqueada.
+
+**Implementar:** propagar `blocked`/`failed` como exit code não zero e
+manter JSON/diagnóstico legível; consumidores validam identidade e estado.
+
+**Aceite:**
+
+- [ ] Teste de subprocesso real confirma exit code não zero em blocked/failed.
+- [ ] Sucesso válido mantém exit code zero.
+- [ ] Bloqueio impede despacho ao executor e reutilização de história antiga.
+- [ ] Automação recebe estado e motivo coerentes com o manifesto.
+
+**Código:** `src/run.py` e consumidores dos artefatos.
+
+### 35 — Testes e critérios de aceite independentes
+
+**Achado:** `_materialize_test_evidence()` monta JSONL a partir do sidecar do
+agente; `passed=True` pode virar `exit_code=0` sem execução do comando.
+Isso demonstra falta de independência da evidência, não aprovação de todo o
+verificador. AC sem mapeamento também gera apenas warning.
+
+**Implementar:** executar verificações por runner controlado pelo harness,
+capturar argv, stdout/stderr e exit code reais e vinculá-los a run, repositório,
+commits e hash da spec. Sidecar serve apenas como sugestão. Verificar cada
+aceite obrigatório com evidência de comportamento adequada.
+
+**Aceite:**
+
+- [ ] Relato `passed=True` sozinho nunca cria evidência suficiente.
+- [ ] Log ausente, incompleto, adulterado ou de outra run reprova.
+- [ ] AC obrigatório sem comprovação bloqueia; arquivo existente não basta.
+- [ ] Uma falha conhecida é detectada e uma correção real passa na reexecução.
+- [ ] E2E real fica registrado separadamente de stubs e testes ignorados.
+
+**Código:** `src/executors/devin.py`, `evidence.py`, `verify.py`.
+
+### 36 — Política completa no reparo
+
+**Achado:** `build_repair_request()` filtra padrões protegidos, mas não reaplica
+a política completa. Um `TEST_FAILED` com `../outside.py` entrou em
+`editable_surface` no teste pontual; não houve escrita nesse caminho.
+
+**Implementar:** validar todo caminho proposto contra perfil, tarefa e raiz
+autorizada, incluindo resolução real/symlinks. Reaplicar antes de cada tentativa.
+
+**Aceite:**
+
+- [ ] Caminhos externos, absolutos indevidos e escapes por symlink são negados.
+- [ ] Caminho de diagnóstico só entra se autorizado pela política da tarefa.
+- [ ] Arquivos a reverter ficam separados dos editáveis; IDs de RF/AC não
+      são interpretados como caminhos.
+- [ ] Tentativas permanecem limitadas e falha persistente termina não resolvida.
+- [ ] Nova verificação completa ocorre após a correção.
+
+**Código:** `src/executors/loop.py`, `policy.py`, `close_loop.py`.
+
+### 37 — Limites efetivos do executor
+
+**Achado:** a invocação Devin usa `profile=None`; o caminho inspecionado não
+demonstra controle dos comandos internos nem isolamento de rede, credenciais
+e recursos. Verificação posterior não impede efeitos durante a execução.
+
+**Implementar:** aplicar limites no runner/ambiente e documentar o contrato
+com adaptadores externos. Worktree e `shell=False` não equivalem a sandbox.
+Sem capacidade de aplicar limites exigidos, bloquear o despacho.
+
+**Aceite:**
+
+- [ ] Tarefa autorizada altera arquivo permitido, executa teste e entrega diff.
+- [ ] Tentativas equivalentes fora de arquivos/comandos/argumentos permitidos
+      são impedidas durante a execução.
+- [ ] Rede, credenciais, processos, tempo e recursos seguem os limites
+      declarados, com testes de enforcement.
+- [ ] Comandos internos relevantes são coletados pelo mecanismo confiável.
+- [ ] Integração externa explicita quais garantias aplica e apresenta evidências.
+
+**Código:** `src/executors/devin.py`, `safe_exec.py`, `policy.py` e runner.
+
+### 38 — Contexto crítico e custo completo
+
+**Achado:** `_fit_to_budget()` corta template e consolidado por comprimento,
+sem proteger explicitamente requisitos críticos. Tokenizer e recuperação
+existem, mas isso não garante preservação semântica.
+
+**Implementar:** reservar orçamento para requisitos/contratos/aceites/evidências,
+registrar omissões e permitir recuperação; dividir ou bloquear quando o mínimo
+crítico não couber. Medir custo e duração incluindo validação e reparos,
+diferenciando estimativa de uso/cobrança observados.
+
+**Aceite:**
+
+- [ ] Conteúdo crítico não desaparece silenciosamente ao reduzir orçamento.
+- [ ] Excesso do mínimo crítico gera divisão ou bloqueio com diagnóstico.
+- [ ] Omissões têm motivo e referência recuperável.
+- [ ] Cobertura crítica permanece no conjunto de avaliação.
+- [ ] Métricas da tarefa incluem tentativas e não apresentam estimativa como fatura.
+
+**Código:** `src/context_builder.py`, compressão/recuperação e telemetria.
+
+### 39 — Regressões por caso e aprendizado controlado
+
+**Achado:** a troca de um caso não crítico aprovado por reprovado, compensada
+por melhora em outro, manteve `decision=accept` e `regression=False`.
+Os estados individuais aparecem no relatório, mas a regressão não é marcada.
+
+**Implementar:** identificar regressão em todo caso/dimensão, impedir compensação
+silenciosa e exigir conjuntos comparáveis; casos ausentes não são ignorados.
+Na etapa P3, separar casos reservados, comparar candidatos realmente distintos
+sob condições equivalentes e proteger política, verificador e avaliações.
+
+**Aceite:**
+
+- [ ] Caso aprovado → reprovado é explicitamente marcado mesmo com taxa igual.
+- [ ] Regressão crítica bloqueia; qualquer tolerância não crítica é explícita,
+      justificada e registrada, nunca compensação silenciosa.
+- [ ] Caso removido ou conjunto incompatível impede comparação conclusiva.
+- [ ] Experimento registra referência, candidato, diff, condições e casos reservados.
+- [ ] Promoção exige benefício demonstrável, sem depender de jitter de latência.
+- [ ] Avaliador e dados de avaliação não são alterados pelo candidato avaliado.
+
+**Código:** `src/learning/evals.py`, `accept.py`, workspaces e apply/rollback.
+
+## Dependências (visão histórica — séries 1–3)
 
 ```
 02 Done
