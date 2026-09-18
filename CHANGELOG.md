@@ -59,6 +59,16 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   bloqueante e aparecem como `x-unresolved-operations` no OpenAPI
 - PRD lista ações com o status de sucesso do IR ou `unresolved` explícito
 
+### Fixed
+
+- **Operações por contexto no IR** (`29-operations-por-contexto`): o Canonical
+  Spec deixa de copiar o conjunto inteiro de actions da UI para cada serviço.
+  `Operation.owner` é resolvido por evidência (campo explícito na UI ou
+  keywords/path do mapa); `--context` / `--all-contexts` só emitem as ops do
+  serviço; `ERR-*` acompanha a operação dona e erro órfão fica `unresolved`
+  (não é copiado). OpenAPI, Mermaid e futuros consumidores leem o mesmo
+  `spec.operations` — o recorte não vive em cada renderer
+
 ### Planejado (série 2)
 
 - Modo `--live` (OpenAI / Claude)
