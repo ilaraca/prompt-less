@@ -222,7 +222,7 @@ Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
 |---|---|---|---|
 | 35-independent-test-evidence | **In progress** | filha (ajuste) | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
 | 36-repair-policy | **Done** | filha, HEAD `fb4f0bc` | `.worktrees/36-repair-policy` · `feature/repair-policy` |
-| 37-executor-enforcement | **In progress** | filha (ajuste) | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
+| 37-executor-enforcement | **Feedback** | filha, HEAD `a6c8f76` | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
 | 39-case-regression-gates | **Todo** | filha, HEAD `e453a3d` | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
 | (pai) onda-frontier | — | P1 integrado @ `b8f9b7d` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
@@ -260,7 +260,7 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 | 34-cli-failure-exit | P0.3 | Exit code de falha e bloqueio de consumo | **Done** | — |
 | 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **In progress** | 30, 31, 32, 33, 34 |
 | 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Done** | 30, 31, 32, 33, 34 |
-| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **In progress** | 30, 31, 32, 33, 34 |
+| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Feedback** | 30, 31, 32, 33, 34 |
 | 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | **Todo** | 35, 36, 37 |
 | 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **Todo** | 30, 31, 32 |
 
@@ -472,13 +472,13 @@ autorizada, incluindo resolução real/symlinks. Reaplicar antes de cada tentati
 
 ### 37 — Limites efetivos do executor
 
-**Status atual: Todo — reaberto para ajustes a pedido de Ilara.**
+**Status atual: Feedback — ajuste pós-reabertura entregue; aguarda review humana.**
 
 **Revisão de 2026-09-18 — ajustes pendentes:** processo autorizado pelo runner escreveu um marcador fora do repositório temporário e terminou com exit zero. `apply_write()` não contém escritas dos processos filhos. Ao invocar Devin com `EnforcedRunner`, o adapter troca para `run_argv`, removendo os limites dessa via.
 
-- [ ] Impor contenção efetiva aos processos filhos e só declarar capacidades verificadas; bloquear quando não disponíveis.
-- [ ] Não substituir o runner com limites por execução irrestrita na invocação do agente.
-- [ ] Corrigir o contrato de chamada com o adapter (em conjunto com 35) e verificar arquivos, comandos, rede e recursos durante a execução.
+- [x] Impor contenção efetiva aos processos filhos e só declarar capacidades verificadas; bloquear quando não disponíveis.
+- [x] Não substituir o runner com limites por execução irrestrita na invocação do agente.
+- [x] Corrigir o contrato de chamada com o adapter (em conjunto com 35) e verificar arquivos, comandos, rede e recursos durante a execução.
 
 **Achado:** a invocação Devin usa `profile=None`; o caminho inspecionado não
 demonstra controle dos comandos internos nem isolamento de rede, credenciais
@@ -490,15 +490,18 @@ Sem capacidade de aplicar limites exigidos, bloquear o despacho.
 
 **Aceite:**
 
-- [ ] Tarefa autorizada altera arquivo permitido, executa teste e entrega diff.
-- [ ] Tentativas equivalentes fora de arquivos/comandos/argumentos permitidos
+- [x] Tarefa autorizada altera arquivo permitido, executa teste e entrega diff.
+- [x] Tentativas equivalentes fora de arquivos/comandos/argumentos permitidos
       são impedidas durante a execução.
-- [ ] Rede, credenciais, processos, tempo e recursos seguem os limites
+- [x] Rede, credenciais, processos, tempo e recursos seguem os limites
       declarados, com testes de enforcement.
-- [ ] Comandos internos relevantes são coletados pelo mecanismo confiável.
-- [ ] Integração externa explicita quais garantias aplica e apresenta evidências.
+- [x] Comandos internos relevantes são coletados pelo mecanismo confiável.
+- [x] Integração externa explicita quais garantias aplica e apresenta evidências.
 
 **Código:** `src/executors/devin.py`, `safe_exec.py`, `policy.py` e runner.
+
+**Kanban:** Feedback · HEAD filha `a6c8f76` · ver
+`issues/37-executor-enforcement.md` § Implementation note.
 
 ### 38 — Contexto crítico e custo completo
 
