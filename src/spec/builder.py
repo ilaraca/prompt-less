@@ -26,6 +26,7 @@ from src.domain.spec import (
     SchemaField,
     SpecError,
 )
+from src.spec.evidence import bind_code_evidence, questions_from_conflicts
 
 _SUCCESS_STATUS_RE = re.compile(r"\b(2\d{2})\b")
 
@@ -411,21 +412,6 @@ def build_canonical_spec(
         if not success.resolved:
             unresolved.append("success_status")
 
-        for missing in ("method", "path"):
-            if missing in unresolved:
-                open_questions.append(
-                    OpenQuestion(
-                        id=f"Q-{qn:03d}",
-                        text=(
-                            f"Operação {op_id} ({op_name}) sem {missing} declarado "
-                            f"na UI — definir antes de gerar contrato"
-                        ),
-                        blocking=False,
-                        source_claims=[],
-                    )
-                )
-                qn += 1
-
         operations.append(
             Operation(
                 id=op_id,
@@ -433,6 +419,8 @@ def build_canonical_spec(
                 owner=service_id,
                 method=method,
                 path=path,
+                method_origin="declared" if method else None,
+                path_origin="declared" if path else None,
                 success_status=success,
                 error_ids=[e.id for e in errors],
                 request_schema=_schema_from_ui(op_name, ui.get("inputs") or [], "Request"),
@@ -442,6 +430,33 @@ def build_canonical_spec(
                 unresolved=unresolved,
             )
         )
+
+    indice = None
+    if isinstance(svc, dict) and "indice" in svc:
+        indice = svc.get("indice") or {}
+    current_state, gaps, code_evidence, conflict_texts = bind_code_evidence(
+        operations=operations,
+        errors=errors,
+        indice=indice,
+    )
+
+    for op in operations:
+        for missing in ("method", "path"):
+            if missing in op.unresolved:
+                open_questions.append(
+                    OpenQuestion(
+                        id=f"Q-{qn:03d}",
+                        text=(
+                            f"Operação {op.id} ({op.name}) sem {missing} declarado "
+                            f"na UI — definir antes de gerar contrato"
+                        ),
+                        blocking=False,
+                        source_claims=[],
+                    )
+                )
+                qn += 1
+    extra_qs, qn = questions_from_conflicts(conflict_texts, start=qn)
+    open_questions.extend(extra_qs)
 
     nfrs: list[Requirement] = []
     if eng.get("resiliencia"):
@@ -475,4 +490,7 @@ def build_canonical_spec(
         errors=errors,
         nfrs=nfrs,
         open_questions=open_questions,
+        current_state=current_state,
+        gaps=gaps,
+        code_evidence=code_evidence,
     )
