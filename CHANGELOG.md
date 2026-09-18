@@ -26,6 +26,22 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Testes adversariais (`tests/integration/test_safe_run_storage.py`): traversal,
   symlink, colisão de id, interrupção no commit da escrita e duas runs
   concorrentes
+- **Proveniência contextual** (`19-contextual-provenance`): IDs de claim com
+  namespace de contexto (`CLM-<contexto>-0001`), estáveis entre runs
+- Deduplicação de claims por identidade completa (texto, origin, `service_id`,
+  `chunk_id`, sources); colisão de id com fingerprint distinto é fail-safe
+  (rename, preserva `local_id`/`context`)
+- `ClaimLink` (método lexical + score) em RF/AC/erro; score < 0.6 marca
+  `requires_review` e emite warning `LOW_CONFIDENCE_CLAIM_MATCH` sem mudar
+  `status`
+- `SourceRef.selected_lines` e `locator` (`$.bloqueios[0]`) para o trecho
+  realmente usado; claims sintéticos ganham `content_hash` + seção
+- Cadeia de hash SHA-256 em `events.jsonl` (`prev_hash`/`hash`) e selo de
+  artefatos em `manifest.integrity`; `verify_run_dir` detecta adulteração
+  (sem HMAC)
+- Testes (`tests/integration/test_contextual_provenance.py`): multi-contexto
+  sem perda, dedup por identidade, adulteração de evento/artefato e match
+  de baixa confiança
 
 ### Changed
 
@@ -36,7 +52,11 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   run (`artifacts/`, `validations/`) e no espelho; o diretório morto
   `runs/<id>/contexts/` deixa de ser criado
 - `EventStore` não cria mais o arquivo no construtor (o diretório da run só
-  nasce no `bootstrap`)
+  nasce no `bootstrap`); cada evento carrega `prev_hash`/`hash`
+- `emit` grava artefatos com write-temp + `os.replace` (digest precisa do
+  arquivo já commitado)
+- História/PRD passam a listar os claims utilizados na seção Proveniência
+- `provenance.json` agrega `spec.claims` (inclui sintéticos `CLM-*-SYN-*`)
 
 ### Planejado (série 2)
 

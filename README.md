@@ -906,8 +906,8 @@ Cada `python -m src.run …` cria um diretório isolado e espelha artefatos em `
 
 | Caminho | Conteúdo |
 |---------|----------|
-| `runs/<id>/manifest.json` | status versionado, objective, timestamps, `status_history` |
-| `runs/<id>/events.jsonl` | trilha append-only de eventos |
+| `runs/<id>/events.jsonl` | trilha append-only com cadeia de hash (`prev_hash` / `hash`) |
+| `runs/<id>/manifest.json` | status versionado, objective, timestamps, `status_history`, `integrity` (selo sha256) |
 | `runs/<id>/artifacts/` | artefatos da run (incl. `canonical-spec.yaml`) |
 | `runs/<id>/artifacts/contextos/<svc>/` | pacotes por serviço (`--all-contexts`) |
 | `runs/<id>/validations/` | `provenance.json`, `spec-validation.json` |
@@ -924,7 +924,8 @@ Cada `python -m src.run …` cria um diretório isolado e espelha artefatos em `
 |----------|------|
 | `run_id` canônico | `[A-Za-z0-9_][A-Za-z0-9_-]*` até 64 chars; `..`, `/`, `\`, espaço, ponto e `latest` são `InvalidRunId` |
 | Sem escape de diretório | `run_dir.resolve()` precisa ficar sob `<root>/runs` (pega até symlink plantado) → `UnsafeRunPath` |
-| Sem JSON parcial | manifest, `state.json`, `provenance.json`, `latest.json`, `canonical-spec.yaml` e pacotes LLM usam write-temp + `os.replace` (`src/runtime/atomic_io.py`) |
+| Sem JSON parcial | manifest, `state.json`, `provenance.json`, `latest.json`, `canonical-spec.yaml` e pacotes LLM usam write-temp + `os.replace` (`src/runtime/atomic_io.py`); `emit` também |
+| Integridade da trilha | cada evento em `events.jsonl` encadeia `prev_hash` → `hash` (SHA-256, sem HMAC); `RunStore.seal_artifacts()` ancora os sha256 de `artifacts/` e `validations/` em `manifest.integrity` **depois** do provenance e **antes** de `finish`; `verify_run_dir(run_dir)` detecta adulteração de evento ou artefato |
 | Colisão de id | `bootstrap()` cria o diretório com `mkdir` exclusivo; id repetido = `RunIdCollision` (retomada explícita: `bootstrap(resume=True)`) |
 | Transição de status | `set_status` valida a transição e usa `version` monotônica; escrita com versão obsoleta = `RunStateConflict`; estado terminal não reabre |
 | Espelho publicado por manifesto | `outputs/.mirror-manifest.json` (run_id + sha256 por arquivo) é o ponto de commit; obsoletos da publicação anterior são removidos depois, symlinks são ignorados e arquivos nunca publicados nunca são apagados |
@@ -933,7 +934,11 @@ O espelho em `outputs/` é **last-writer-wins** por design (compatibilidade com 
 
 ### Provenance e claims
 
-Na compressão RAG, trechos viram **claims** com `SourceRef` (arquivo/linha/origem). Claims sem fonte válida falham o gate (`CLAIM_WITHOUT_SOURCE` / `CLAIM_SOURCE_INVALID`). Descarte é reportado em `validations/provenance.json`. Runs bloqueadas pelo quality gate **preservam** `claims` e `discarded` no payload JSON.
+Na compressão RAG, trechos viram **claims** com `SourceRef` (arquivo, linhas selecionadas, `locator` JSONPath quando não há linha, hash). IDs são namespaced por **contexto/serviço**, não por `run_id`: `CLM-<contexto>-0001` (evals permanecem estáveis entre runs). Claims sem fonte válida falham o gate (`CLAIM_WITHOUT_SOURCE` / `CLAIM_SOURCE_INVALID`).
+
+Agregação multi-contexto (`--all-contexts`) deduplica por **identidade completa** (texto, origin, `service_id`, `chunk_id`, sources), não só por `claim.id`. Colisão de id com fingerprint distinto é fail-safe: o claim é renomeado e preserva `local_id`/`context`. O `provenance.json` inclui `spec.claims` (sintéticos `CLM-*-SYN-*` inclusive). Descarte é reportado no mesmo arquivo. Runs bloqueadas pelo quality gate **preservam** `claims` e `discarded` no payload JSON.
+
+Vínculo claim → RF/AC/erro é um `ClaimLink` (`method`, `score`, `requires_review`). Matching lexical com score < 0.6 emite warning `LOW_CONFIDENCE_CLAIM_MATCH` e marca revisão **sem** mudar o `status` do requisito (`max_unreviewed_inferences` nos evals continua contando só `ResolvedInt`). História e PRD listam os claims utilizados na seção **Proveniência**.
 
 ### Canonical Spec + quality gate
 
