@@ -322,6 +322,7 @@ def context_build(ctx: StageContext) -> None:
     state = slot["state"]
     rag = slot["rag"]
     servico = slot.get("servico")
+    spec = slot.get("spec")
     max_ctx = int(ctx.payload.get("max_ctx") or 2000)
     state_out = {
         **state,
@@ -342,9 +343,67 @@ def context_build(ctx: StageContext) -> None:
             rag=rag,
             template=template,
             budget_tokens=max_ctx,
+            spec=spec,
+            attempts=int(getattr(ctx, "attempt", 1) or 1),
         )
     slot["context_by_tipo"] = by_tipo
     slot["context_pkg"] = by_tipo[ctx.payload["tipo"]]
+    # Excesso do mínimo crítico → bloqueio com diagnóstico (não cortar RF/AC)
+    blocked_pkg = next(
+        (
+            pkg
+            for pkg in by_tipo.values()
+            if pkg.get("budget_status") in {"blocked", "split_required"}
+        ),
+        None,
+    )
+    if blocked_pkg is not None:
+        report = blocked_pkg.get("budget_report") or {}
+        validation = ValidationResult(
+            issues=[
+                ValidationIssue(
+                    code=(
+                        "CRITICAL_BUDGET_SPLIT_REQUIRED"
+                        if blocked_pkg.get("budget_status") == "split_required"
+                        else "CRITICAL_BUDGET_EXCEEDED"
+                    ),
+                    severity="error",
+                    message=str(
+                        report.get("diagnosis")
+                        or "conteúdo crítico não cabe no budget de contexto"
+                    ),
+                    subject_id="context_budget",
+                )
+            ]
+        )
+        val_dir = (
+            ctx.run_ctx.context_validations_dir(ctx.context_id)
+            if ctx.context_id
+            else ctx.run_ctx.validations_dir
+        )
+        val_path = val_dir / "context-budget.json"
+        ctx.write_json(
+            val_path,
+            {
+                "budget_report": report,
+                "validation": validation.to_dict(),
+                "task_metrics": blocked_pkg.get("task_metrics"),
+            },
+        )
+        raise PipelineBlocked(
+            validation,
+            spec if hasattr(spec, "claims") else None,
+            discarded=list(rag.get("discarded") or [])
+            + list(report.get("omissions") or [])
+            + list(report.get("critical_omissions") or []),
+            context=ctx.context_id,
+            reason=(
+                "critical_budget_split_required"
+                if blocked_pkg.get("budget_status") == "split_required"
+                else "critical_budget_exceeded"
+            ),
+            report_path=str(val_path),
+        )
 
 
 def _estimate_from_context(context_pkg: dict[str, Any]) -> TokenEstimate | dict[str, Any] | None:
@@ -558,6 +617,19 @@ def emit_stage(ctx: StageContext) -> None:
             if not payload.get("service_id"):
                 payload["service_id"] = (servico or {}).get("id")
             claims_out.append(stamp_claim_identity(payload, context=ns))
+    token_usage = slot.get("live_token_usage") or context_pkg.get("token_usage")
+    task_metrics = dict(context_pkg.get("task_metrics") or {})
+    if token_usage and isinstance(token_usage, dict):
+        # live preenche billable — recalcula seção de custo sem marcar como fatura
+        from src.task_metrics import build_task_metrics
+
+        task_metrics = build_task_metrics(
+            attempts=int(task_metrics.get("attempts") or getattr(ctx, "attempt", 1) or 1),
+            duration_ms=task_metrics.get("duration_ms") or {},
+            token_usage=token_usage,
+            cost_usd=token_usage.get("cost_usd"),
+            phases=task_metrics.get("phases") or {},
+        )
     slot["result"] = {
         "context": ctx.context_id,
         "servico": {k: v for k, v in (servico or {}).items() if k != "indice"} or None,
@@ -567,7 +639,11 @@ def emit_stage(ctx: StageContext) -> None:
         "llm_packages": packages,
         "est_tokens": context_pkg.get("est_tokens"),
         "est_tokens_method": context_pkg.get("est_tokens_method"),
-        "token_usage": slot.get("live_token_usage") or context_pkg.get("token_usage"),
+        "token_usage": token_usage,
+        "budget_report": context_pkg.get("budget_report"),
+        "budget_status": context_pkg.get("budget_status"),
+        "omissions": context_pkg.get("omissions") or [],
+        "task_metrics": task_metrics,
         "rag": context_pkg.get("rag_stats"),
         "claims": claims_out,
         "discarded": list(rag.get("discarded") or []),

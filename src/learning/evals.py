@@ -564,6 +564,58 @@ def _claims_blob_from_result(result: dict[str, Any]) -> str:
     return "\n".join(parts).lower()
 
 
+def _budget_reports_from_result(result: dict[str, Any]) -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
+    if isinstance(result.get("budget_report"), dict):
+        reports.append(result["budget_report"])
+    for ctx in result.get("by_context") or []:
+        if isinstance(ctx.get("budget_report"), dict):
+            reports.append(ctx["budget_report"])
+    return reports
+
+
+def _critical_context_score(
+    result: dict[str, Any], *, critical: bool
+) -> dict[str, Any]:
+    """
+    Cobertura crítica no budget: casos critical exigem report sem omissões silenciosas.
+
+    Sem budget_report (runs antigas) → n/a (não falha o gate).
+    """
+    reports = _budget_reports_from_result(result)
+    if not reports:
+        return {
+            "present": False,
+            "complete": True,  # n/a — cobertura crítica permanece via fixtures critical
+            "silent_critical_loss": False,
+            "statuses": [],
+        }
+    statuses = [str(r.get("status") or "") for r in reports]
+    silent = False
+    complete = True
+    for r in reports:
+        cov = r.get("critical_coverage") or {}
+        if cov and not cov.get("complete", True):
+            complete = False
+        # omissão crítica sem diagnosis/status de split/block = perda silenciosa
+        crit_om = r.get("critical_omissions") or []
+        if crit_om and str(r.get("status") or "") not in {
+            "blocked",
+            "split_required",
+        }:
+            silent = True
+            complete = False
+        if str(r.get("status") or "") in {"blocked", "split_required"}:
+            # explícito — não é silencioso; complete=False é esperado
+            complete = False
+    return {
+        "present": True,
+        "complete": complete,
+        "silent_critical_loss": silent,
+        "statuses": statuses,
+    }
+
+
 def score_case(
     expected: dict[str, Any],
     result: dict[str, Any],
@@ -860,6 +912,7 @@ def score_case(
             "errors": selection_errors,
             "files_used": list(selection.files_used) if selection else [],
         },
+        "critical_context": _critical_context_score(result, critical=critical),
     }
 
     return CaseScore(

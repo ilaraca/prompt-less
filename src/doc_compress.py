@@ -233,6 +233,15 @@ def consolidate_chunk_summaries(
                     "reason": "budget_exceeded",
                     "recoverable": True,
                     "document": s.document,
+                    "ref": {
+                        "source": "doc_compress.chunk",
+                        "chunk_id": s.chunk_id,
+                        "document": s.document,
+                        "section": s.section,
+                        "start_line": s.start_line,
+                        "end_line": s.end_line,
+                        "content_hash": s.content_hash,
+                    },
                 }
             )
             continue
