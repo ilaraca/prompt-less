@@ -220,11 +220,11 @@ Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 35-independent-test-evidence | **Feedback** | filha, HEAD `5b0a663` | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
+| 35-independent-test-evidence | **Done** | filha, HEAD `5b0a663` | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
 | 36-repair-policy | **Done** | filha, HEAD `fb4f0bc` | `.worktrees/36-repair-policy` · `feature/repair-policy` |
-| 37-executor-enforcement | **Feedback** | filha, HEAD `a6c8f76` | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
-| 39-case-regression-gates | **Todo** | filha, HEAD `e453a3d` | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
-| (pai) onda-frontier | — | P1 integrado @ `b8f9b7d` | `.worktrees/onda-merge` · `feature/onda-frontier` |
+| 37-executor-enforcement | **Done** | filha, HEAD `a6c8f76` | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
+| 39-case-regression-gates | **In progress** | filha (ajuste) | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
+| (pai) onda-frontier | — | 35/37 integrados @ `3b3557f` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
 
 ### Onda F — 38 context budget (**integrada** no pai)
@@ -233,7 +233,7 @@ Base: pai `f755cec`.
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 38-critical-context-budget | **Todo** | filha, HEAD `c1c9b11` | `.worktrees/38-critical-context-budget` · `feature/critical-context-budget` |
+| 38-critical-context-budget | **In progress** | filha (ajuste) | `.worktrees/38-critical-context-budget` · `feature/critical-context-budget` |
 | (pai) onda-frontier | — | integra (após Done) | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
 ## Série 4 — Conformidade com o roadmap (frontier ativa)
@@ -258,11 +258,11 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 | 32-eval-typed-http | P0.1 | HTTP tipado por serviço e operação | **Done** | — |
 | 33-required-review-gate | P0.2 | Revisão obrigatória bloqueante e auditável | **Done** | — |
 | 34-cli-failure-exit | P0.3 | Exit code de falha e bloqueio de consumo | **Done** | — |
-| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **Feedback** | 30, 31, 32, 33, 34 |
+| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **Done** | 30, 31, 32, 33, 34 |
 | 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Done** | 30, 31, 32, 33, 34 |
-| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Feedback** | 30, 31, 32, 33, 34 |
-| 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | **Todo** | 35, 36, 37 |
-| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **Todo** | 30, 31, 32 |
+| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Done** | 30, 31, 32, 33, 34 |
+| 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | **In progress** | 35, 36, 37 |
+| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **In progress** | 30, 31, 32 |
 
 ### Reabertura após revisão de 2026-09-18
 
@@ -416,7 +416,7 @@ manter JSON/diagnóstico legível; consumidores validam identidade e estado.
 
 ### 35 — Testes e critérios de aceite independentes
 
-**Status atual: Feedback — ajuste pós-reabertura (`5b0a663`).**
+**Status atual: Done — ajuste pós-reabertura integrado no pai (`5b0a663` → `3b3557f`).**
 
 **Revisão de 2026-09-18 — ajustes pendentes:** `git diff`, classificado pelo sidecar como unitário e associado aos ACs por `covers`, terminou com verificação `passed` sem executar teste comportamental. Na integração com `EnforcedRunner`, a coleta falhou com `'EnforcedRunner' object is not callable`.
 
@@ -444,7 +444,7 @@ aceite obrigatório com evidência de comportamento adequada.
 
 **Código:** `src/executors/devin.py`, `evidence.py`, `verify.py`.
 
-**Kanban:** Feedback · HEAD filha `5b0a663` · ver
+**Kanban:** Done · HEAD filha `5b0a663` · integrado no pai · ver
 `issues/35-independent-test-evidence.md` § Implementation note.
 
 ### 36 — Política completa no reparo
@@ -472,7 +472,7 @@ autorizada, incluindo resolução real/symlinks. Reaplicar antes de cada tentati
 
 ### 37 — Limites efetivos do executor
 
-**Status atual: Feedback — ajuste pós-reabertura entregue; aguarda review humana.**
+**Status atual: Done — ajuste pós-reabertura integrado no pai (`a6c8f76` → `3b3557f`).**
 
 **Revisão de 2026-09-18 — ajustes pendentes:** processo autorizado pelo runner escreveu um marcador fora do repositório temporário e terminou com exit zero. `apply_write()` não contém escritas dos processos filhos. Ao invocar Devin com `EnforcedRunner`, o adapter troca para `run_argv`, removendo os limites dessa via.
 
@@ -500,12 +500,12 @@ Sem capacidade de aplicar limites exigidos, bloquear o despacho.
 
 **Código:** `src/executors/devin.py`, `safe_exec.py`, `policy.py` e runner.
 
-**Kanban:** Feedback · HEAD filha `a6c8f76` · ver
+**Kanban:** Done · HEAD filha `a6c8f76` · integrado no pai · ver
 `issues/37-executor-enforcement.md` § Implementation note.
 
 ### 38 — Contexto crítico e custo completo
 
-**Status atual: Todo — reaberto para ajustes a pedido de Ilara.**
+**Status atual: In progress — ajuste pós-reabertura.**
 
 **Revisão de 2026-09-18 — ajuste pendente:** com `critical_coverage.complete=False` e `silent_critical_loss=True`, o avaliador ainda retornou `passed=True`. O diagnóstico existe em `layer_scores`, mas não integra os gates obrigatórios.
 
@@ -536,7 +536,7 @@ diferenciando estimativa de uso/cobrança observados.
 
 ### 39 — Regressões por caso e aprendizado controlado
 
-**Status atual: Todo — reaberto para ajustes a pedido de Ilara.**
+**Status atual: In progress — ajuste pós-reabertura.**
 
 **Revisão de 2026-09-18 — ajuste pendente (inspeção de código):** comparação por caso foi corrigida, mas `improve_from_verify()` só registra resultados reservados; a decisão de promoção usa a comparação dos demais casos.
 
