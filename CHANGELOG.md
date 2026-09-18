@@ -9,6 +9,13 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Tokenizer oficial pluggable** (`src/tokenizer.py`): budget e telemetria usam a
+  estratégia do `models.provider` / `models.name`; OpenAI via `tiktoken`
+  (`method=official`); demais providers ou lib ausente falham aberto para
+  `chars÷4` com `method=heuristic` — o fallback nunca é tratado como exato
+- `token_usage` no resultado da run e no `llm_package.meta`, com hook
+  `observe_billable` para o live (09) persistir estimado vs tokens cobrados
+- Testes de budget no limite (`== teto` cabe; `teto+1` corta template)
 - **Storage seguro da run** (`18-safe-run-storage`): `src/runtime/atomic_io.py`
   com write-temp + `os.replace`, cópia atômica e contenção de caminho
   (`resolve_within`)
@@ -44,6 +51,9 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- Budget (`context_build`) e telemetria (`est_tokens`, calculadora) passam a
+  contar com o tokenizer ativo em vez de `len/4` fixo; recorte de consolidado
+  ainda usa tokens×4 só como clip em caracteres
 - `manifest.json`, `state.json`, `provenance.json`, `latest.json`,
   `canonical-spec.yaml`, `spec-validation.json` e `llm_package_*.json` passam a
   ser gravados atomicamente
@@ -64,7 +74,7 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Modo `--live` (OpenAI / Claude)
 - Devin CLI real no `close_loop`
 - Orquestração declarativa via `pipeline.yaml` (stages)
-- Tokenizer oficial + Redis opcional
+- Redis opcional (state backend)
 - Execução concorrente por ondas
 - Apply de propostas + rollback
 - Hardening profundo (debugger, injection, recovery, golden recall)

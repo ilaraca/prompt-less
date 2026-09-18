@@ -246,7 +246,7 @@ Evolução natural (próximo passo): manter `doc_compress` / budget e trocar só
    - `contexto_comprimido` (saída do RAG)
    - `template` (esqueleto; se estourar budget, trunca o template)
 
-Estimativa de tokens: `len(texto) // 4` (heurística, não tokenizer oficial).
+Estimativa de tokens: tokenizer do provider configurado em `models.provider` / `models.name` (`tiktoken` para OpenAI). Se a lib oficial não estiver disponível, fail-open para `chars÷4` com `method=heuristic` — o fallback **não** é contagem exata.
 
 ### 7. `reason` (`src/reason.py`)
 
@@ -1111,6 +1111,8 @@ Parâmetros principais de budget:
 | `consolidated_summary_max_tokens` | 200 | Tamanho do consolidado RAG/docs |
 | `rag_chunk_max_tokens` | 120 | Influencia tamanho do resumo por chunk |
 | `doc_lines_per_chunk` | 40 | Granularidade do fatiamento de docs |
+| `models.provider` | `openai` | Estratégia de tokenizer (`openai` / `anthropic` / `google`) |
+| `models.name` | `gpt-4o` | Modelo cuja encoding oficial é usada (OpenAI → tiktoken) |
 
 Artefatos e encadeamento:
 
@@ -1135,6 +1137,7 @@ Ajuste o budget conforme o provedor (janela, preço de cache) e o risco de “co
 - `PyYAML`
 - `python-docx` (`.docx`)
 - `pytest` (suíte de integração / evals)
+- `tiktoken` (tokenizer oficial OpenAI; opcional em runtime — sem ele, fallback heurístico)
 - macOS: `textutil` nativo para `.doc` legado  
   Linux: `antiword` (opcional) para `.doc`
 
@@ -1146,7 +1149,9 @@ Cada execução imprime JSON com:
 
 - `output` / `outputs` — caminho principal e mapa de todos os arquivos emitidos (ex.: `historia` + `prd`)
 - `llm_package` / `llm_packages` — pacotes por tipo
-- `est_tokens` — estimativa do pacote principal (chars/4)
+- `est_tokens` — estimativa do pacote principal (tokenizer oficial ou heurística)
+- `est_tokens_method` — `official` ou `heuristic`
+- `token_usage` — `estimated`, `method`, `billable`/`delta` (preenchidos no live / 09)
 - `rag.raw` / `rag.compressed` — antes/depois da compressão
 - `rag.doc_reduction_pct` — % de redução documental
 - `docs_ingested` — lista de arquivos e linhas
@@ -1218,7 +1223,7 @@ Na amostra incluída (~3000 linhas + microserviços + docx), a calculadora típi
 **Contagem naive (baseline):** docs brutos + figma/regras/engenharia/template + ~2,5k system + ~1,8k tools + ~3k histórico.  
 **Contagem Prompt-less:** pacote de `build_context` (system compacto + state + consolidado + template) + tools compactas — **sem** histórico e **sem** texto bruto.
 
-Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `src/economia.py` se o vendor mudar a lista. Estimativa de tokens continua sendo `chars÷4` (não tokenizer oficial).
+Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `src/economia.py` se o vendor mudar a lista. A contagem usa o tokenizer do `--modelo` (`method=official` via tiktoken no OpenAI). Sem a lib oficial, ou em Anthropic/Gemini, o fallback é `chars÷4` com `method=heuristic` e **não** é apresentado como contagem exata. O campo `token_usage.delta` (estimado vs billable) fica pronto para o modo live.
 
 ---
 
@@ -1234,7 +1239,7 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 - Status de sucesso só é resolvido no caso inequívoco (uma operação + um 2xx
   declarado); fora dele o contrato sai sem resposta de sucesso, por decisão
 - Resumo de docs é **extrativo por regex**, não LLM small (bom custo; pode perder nuance)
-- Estimativa de tokens é heurística (`len/4`), não tokenizer oficial
+- Tokenizer oficial cobre OpenAI via `tiktoken`; Anthropic/Gemini e ausência da lib usam heurística `chars÷4` (`method=heuristic`), nunca como contagem exata
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
 
 **Próximos passos (série 2 — ver CHANGELOG [Unreleased])**
@@ -1242,7 +1247,7 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 1. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`)
 2. Devin CLI real no `close_loop`
 3. Orquestração declarativa via stages em `pipeline.yaml`
-4. Tokenizer oficial + Redis opcional
+4. Redis opcional (state backend)
 5. Execução concorrente por ondas + apply/rollback de propostas
 6. Hardening profundo (debugger, injection, recovery, golden recall)
 7. Consumidor SDD que leia `outputs/PRD.md` e gere architecture/tasks com RF + NFR
