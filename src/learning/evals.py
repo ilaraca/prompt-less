@@ -401,7 +401,8 @@ def collect_operation_contracts(spec: dict[str, Any]) -> list[dict[str, Any]]:
 def collect_spec_statuses(spec: dict[str, Any]) -> set[int]:
     """HTTP statuses tipados no Canonical Spec (sucesso resolvido + erros da op).
 
-    Números em RF/AC/perguntas **não** provam o contrato.
+    Números em RF/AC/perguntas **não** provam o contrato. Erros órfãos
+    (sem `error_ids` na operação) também não entram.
     """
     found: set[int] = set()
     for contract in collect_operation_contracts(spec):

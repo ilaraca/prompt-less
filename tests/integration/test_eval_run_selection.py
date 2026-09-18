@@ -97,7 +97,7 @@ def _seed_run(
     return ctx.run_dir
 
 
-def _spec_ok() -> dict:
+def _typed_op(success: int, *, error_status: int = 400) -> dict:
     return {
         "claims": [{"id": "CLM-0001", "text": "cadastro POST /clientes cpf"}],
         "requirements": [
@@ -108,15 +108,33 @@ def _spec_ok() -> dict:
             }
         ],
         "acceptance_criteria": [],
-        "operations": [],
-        "errors": [{"trigger": "ok", "status": 200}, {"trigger": "cpf", "status": 400}],
+        "operations": [
+            {
+                "id": "OP-1",
+                "name": "salvar",
+                "owner": "ms-cliente",
+                "method": "POST",
+                "path": "/clientes",
+                "success_status": {
+                    "value": success,
+                    "origin": "declared",
+                    "confidence": 1.0,
+                    "requires_review": False,
+                },
+                "error_ids": ["ERR-cpf"],
+            }
+        ],
+        "errors": [{"id": "ERR-cpf", "trigger": "cpf", "status": error_status}],
         "open_questions": [],
     }
 
 
+def _spec_ok() -> dict:
+    return _typed_op(200, error_status=400)
+
+
 def _spec_wrong() -> dict:
-    data = _spec_ok()
-    data["errors"] = [{"trigger": "ok", "status": 500}]
+    data = _typed_op(500, error_status=500)
     data["claims"] = [{"id": "CLM-0001", "text": "sem sinal esperado"}]
     return data
 
@@ -176,9 +194,8 @@ def test_concurrent_runs_do_not_mix_evidence(tmp_path: Path):
         root,
         "run-alpha",
         spec={
-            **_spec_ok(),
+            **_typed_op(201, error_status=400),
             "claims": [{"id": "CLM-0001", "text": "sinal-alpha"}],
-            "errors": [{"status": 201}],
         },
         historia="sinal-alpha",
         prd="sinal-alpha",
@@ -187,9 +204,8 @@ def test_concurrent_runs_do_not_mix_evidence(tmp_path: Path):
         root,
         "run-beta",
         spec={
-            **_spec_ok(),
+            **_typed_op(202, error_status=400),
             "claims": [{"id": "CLM-0001", "text": "sinal-beta"}],
-            "errors": [{"status": 202}],
         },
         historia="sinal-beta",
         prd="sinal-beta",
@@ -200,7 +216,15 @@ def test_concurrent_runs_do_not_mix_evidence(tmp_path: Path):
     def _score(rid: str, signal: str, status: int) -> None:
         try:
             expected = {
-                "http_statuses": [status],
+                "http_operations": [
+                    {
+                        "service": "ms-cliente",
+                        "method": "POST",
+                        "path": "/clientes",
+                        "success_status": status,
+                        "error_statuses": [400],
+                    }
+                ],
                 "http_status_mode": "exact",
                 "services": [],
                 "signals": [signal],
@@ -229,8 +253,8 @@ def test_concurrent_runs_do_not_mix_evidence(tmp_path: Path):
     sa = scores["run-alpha"]
     sb = scores["run-beta"]
     assert sa.passed and sb.passed
-    assert sa.details["actual_spec_statuses"] == [201]
-    assert sb.details["actual_spec_statuses"] == [202]
+    assert sa.details["actual_spec_statuses"] == [201, 400]
+    assert sb.details["actual_spec_statuses"] == [202, 400]
 
 
 def test_missing_manifest_fails(tmp_path: Path):
@@ -294,7 +318,15 @@ def test_blocked_run_scored_but_not_released(tmp_path: Path):
     )
     expected = {
         "expect_blocked": True,
-        "http_statuses": [200, 400],
+        "http_operations": [
+            {
+                "service": "ms-cliente",
+                "method": "POST",
+                "path": "/clientes",
+                "success_status": 200,
+                "error_statuses": [400],
+            }
+        ],
         "http_status_mode": "exact",
         "services": [],
         "signals": ["cpf"],

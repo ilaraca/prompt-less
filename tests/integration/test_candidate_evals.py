@@ -77,6 +77,37 @@ def test_critical_http_defaults_to_exact_equality():
     assert score.details["http_status_mode_explicit"] is False
 
 
+
+def _seal_run(root: Path, run_id: str, payload: dict) -> Path:
+    from src.runtime.atomic_io import sha256_of
+    from src.runtime.integrity import seal_hmac
+    from src.runtime.run_context import RunContext
+    from src.runtime.run_store import RunStore
+
+    ctx = RunContext.create(root=root, objective="historia", run_id=run_id)
+    store = RunStore(ctx)
+    store.bootstrap()
+    ctx.artifacts_dir.mkdir(parents=True, exist_ok=True)
+    spec_path = ctx.artifacts_dir / "canonical-spec.yaml"
+    spec_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    store.finish("completed")
+    integrity = {
+        "algo": "hmac-sha256",
+        "kid": "v1",
+        "events_tip": store.events.tip,
+        "files": [
+            {
+                "path": "artifacts/canonical-spec.yaml",
+                "bytes": spec_path.stat().st_size,
+                "sha256": sha256_of(spec_path),
+            }
+        ],
+        "sealed_at": "2026-09-18T00:00:00Z",
+    }
+    integrity["hmac"] = seal_hmac(integrity)
+    store.write_manifest({"run_id": run_id, "status": "completed", "integrity": integrity})
+    return ctx.run_dir
+
 def _write_spec(spec_dir: Path, payload: dict) -> None:
     spec_dir.mkdir(parents=True, exist_ok=True)
     (spec_dir / "canonical-spec.yaml").write_text(
@@ -262,10 +293,7 @@ def test_critical_http_explicit_subset_rule_allows_extra(tmp_path: Path):
 
 def test_typed_success_ignores_free_text_status_numbers(tmp_path: Path):
     """Status tipado errado reprova mesmo com o número certo em RF/AC."""
-    spec_dir = tmp_path / "out"
-    _write_spec(
-        spec_dir,
-        {
+    payload = {
             "service_id": "ms-cliente",
             "claims": [],
             "requirements": [
@@ -297,8 +325,8 @@ def test_typed_success_ignores_free_text_status_numbers(tmp_path: Path):
             ],
             "errors": [],
             "open_questions": [{"id": "Q-1", "text": "confirmar se HTTP 200 basta"}],
-        },
-    )
+    }
+    run_dir = _seal_run(tmp_path, "typed-free-text", payload)
     expected = {
         "http_operations": [
             {
@@ -314,8 +342,15 @@ def test_typed_success_ignores_free_text_status_numbers(tmp_path: Path):
     }
     score = score_case(
         expected,
-        {"status": "completed", "contexts": [], "by_context": [], "claims": []},
-        output_root=spec_dir,
+        {
+            "status": "completed",
+            "run_id": "typed-free-text",
+            "run_dir": str(run_dir),
+            "contexts": [],
+            "by_context": [],
+            "claims": [],
+        },
+        output_root=tmp_path,
     )
     assert score.expected_status_match is False
     assert score.details["actual_spec_statuses"] == [201]
@@ -326,10 +361,7 @@ def test_typed_success_ignores_free_text_status_numbers(tmp_path: Path):
 
 
 def test_typed_success_on_other_service_does_not_compensate(tmp_path: Path):
-    spec_dir = tmp_path / "out"
-    _write_spec(
-        spec_dir,
-        {
+    payload = {
             "operations": [
                 {
                     "id": "OP-C",
@@ -363,8 +395,8 @@ def test_typed_success_on_other_service_does_not_compensate(tmp_path: Path):
             "errors": [],
             "requirements": [],
             "acceptance_criteria": [],
-        },
-    )
+    }
+    run_dir = _seal_run(tmp_path, "typed-other-svc", payload)
     expected = {
         "http_operations": [
             {
@@ -380,8 +412,15 @@ def test_typed_success_on_other_service_does_not_compensate(tmp_path: Path):
     }
     score = score_case(
         expected,
-        {"status": "completed", "contexts": [], "by_context": [], "claims": []},
-        output_root=spec_dir,
+        {
+            "status": "completed",
+            "run_id": "typed-other-svc",
+            "run_dir": str(run_dir),
+            "contexts": [],
+            "by_context": [],
+            "claims": [],
+        },
+        output_root=tmp_path,
     )
     assert score.expected_status_match is False
     assert any(
@@ -392,10 +431,7 @@ def test_typed_success_on_other_service_does_not_compensate(tmp_path: Path):
 
 
 def test_pending_success_status_is_not_presumed(tmp_path: Path):
-    spec_dir = tmp_path / "out"
-    _write_spec(
-        spec_dir,
-        {
+    payload = {
             "operations": [
                 {
                     "id": "OP-001",
@@ -415,8 +451,8 @@ def test_pending_success_status_is_not_presumed(tmp_path: Path):
             "errors": [{"id": "ERR-1", "status": 400, "trigger": "cpf"}],
             "requirements": [{"text": "sucesso HTTP 200"}],
             "acceptance_criteria": [],
-        },
-    )
+    }
+    run_dir = _seal_run(tmp_path, "typed-pending", payload)
     expected = {
         "http_operations": [
             {
@@ -432,8 +468,15 @@ def test_pending_success_status_is_not_presumed(tmp_path: Path):
     }
     score = score_case(
         expected,
-        {"status": "completed", "contexts": [], "by_context": [], "claims": []},
-        output_root=spec_dir,
+        {
+            "status": "completed",
+            "run_id": "typed-pending",
+            "run_dir": str(run_dir),
+            "contexts": [],
+            "by_context": [],
+            "claims": [],
+        },
+        output_root=tmp_path,
     )
     assert score.expected_status_match is False
     assert score.details["actual_spec_statuses"] == [400]

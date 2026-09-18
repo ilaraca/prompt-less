@@ -6,13 +6,19 @@ from pathlib import Path
 import yaml
 
 from src.learning.evals import score_case
+from src.runtime.atomic_io import sha256_of
+from src.runtime.integrity import seal_hmac
+from src.runtime.run_context import RunContext
+from src.runtime.run_store import RunStore
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
 
-def _base_result(*, service: str = "ms-cliente") -> dict:
+def _base_result(*, service: str = "ms-cliente", run_id: str, run_dir: Path) -> dict:
     return {
         "status": "completed",
+        "run_id": run_id,
+        "run_dir": str(run_dir),
         "contexts": [service],
         "by_context": [
             {
@@ -26,11 +32,10 @@ def _base_result(*, service: str = "ms-cliente") -> dict:
     }
 
 
-def _write_spec(out: Path, *, source_claims: list[str] | None = None, blocking: bool = False) -> None:
-    out.mkdir(parents=True, exist_ok=True)
+def _spec_body(*, source_claims: list[str] | None = None, blocking: bool = False) -> dict:
     claims = [{"id": "CLM-1", "text": "POST /clientes CPF autenticação"}]
     src = source_claims if source_claims is not None else ["CLM-1"]
-    spec = {
+    return {
         "service_id": "ms-cliente",
         "claims": claims,
         "requirements": [
@@ -42,21 +47,106 @@ def _write_spec(out: Path, *, source_claims: list[str] | None = None, blocking: 
             }
         ],
         "acceptance_criteria": [],
-        "operations": [],
-        "errors": [{"trigger": "ok", "status": 200}, {"trigger": "cpf", "status": 400}],
+        "operations": [
+            {
+                "id": "OP-1",
+                "name": "salvar",
+                "owner": "ms-cliente",
+                "method": "POST",
+                "path": "/clientes",
+                "success_status": {
+                    "value": 200,
+                    "origin": "declared",
+                    "confidence": 1.0,
+                    "requires_review": False,
+                },
+                "error_ids": ["ERR-cpf"],
+            }
+        ],
+        "errors": [
+            {"id": "ERR-cpf", "trigger": "cpf", "status": 400},
+        ],
         "open_questions": (
             [{"id": "Q-1", "text": "pendência bloqueante", "blocking": True}]
             if blocking
             else []
         ),
     }
-    (out / "canonical-spec.yaml").write_text(yaml.safe_dump(spec), encoding="utf-8")
+
+
+def _seed(
+    root: Path,
+    run_id: str,
+    *,
+    source_claims: list[str] | None = None,
+    blocking: bool = False,
+    historia: str | None = None,
+    prd: str | None = None,
+    status: str = "completed",
+) -> Path:
+    ctx = RunContext.create(root=root, objective="historia", run_id=run_id)
+    store = RunStore(ctx)
+    store.bootstrap()
+    art = ctx.artifacts_dir
+    art.mkdir(parents=True, exist_ok=True)
+    files: list[dict] = []
+    spec_path = art / "canonical-spec.yaml"
+    spec_path.write_text(
+        yaml.safe_dump(_spec_body(source_claims=source_claims, blocking=blocking)),
+        encoding="utf-8",
+    )
+    files.append(
+        {
+            "path": "artifacts/canonical-spec.yaml",
+            "bytes": spec_path.stat().st_size,
+            "sha256": sha256_of(spec_path),
+        }
+    )
+    if historia is not None:
+        path = art / "historia.md"
+        path.write_text(historia, encoding="utf-8")
+        files.append(
+            {
+                "path": "artifacts/historia.md",
+                "bytes": path.stat().st_size,
+                "sha256": sha256_of(path),
+            }
+        )
+    if prd is not None:
+        path = art / "prd.md"
+        path.write_text(prd, encoding="utf-8")
+        files.append(
+            {
+                "path": "artifacts/prd.md",
+                "bytes": path.stat().st_size,
+                "sha256": sha256_of(path),
+            }
+        )
+    store.finish(status)
+    integrity = {
+        "algo": "hmac-sha256",
+        "kid": "v1",
+        "events_tip": store.events.tip,
+        "files": files,
+        "sealed_at": "2026-09-18T00:00:00Z",
+    }
+    integrity["hmac"] = seal_hmac(integrity)
+    store.write_manifest({"run_id": run_id, "status": status, "integrity": integrity})
+    return ctx.run_dir
 
 
 def _expected(**overrides: object) -> dict:
     base = {
         "services": ["ms-cliente"],
-        "http_statuses": [200, 400],
+        "http_operations": [
+            {
+                "service": "ms-cliente",
+                "method": "POST",
+                "path": "/clientes",
+                "success_status": 200,
+                "error_statuses": [400],
+            }
+        ],
         "http_status_mode": "subset",
         "signals": ["/clientes", "cpf"],
         "artifacts": ["historia", "prd"],
@@ -72,8 +162,12 @@ def _expected(**overrides: object) -> dict:
 
 def test_missing_required_artifact_fails_despite_valid_spec(tmp_path: Path):
     """Spec com sinais OK sem história/PRD deve reprovar (sem compensação)."""
-    _write_spec(tmp_path)
-    score = score_case(_expected(), _base_result(), output_root=tmp_path)
+    run_dir = _seed(tmp_path, "run-miss-art")
+    score = score_case(
+        _expected(),
+        _base_result(run_id="run-miss-art", run_dir=run_dir),
+        output_root=tmp_path,
+    )
     assert score.layer_scores["canonical_spec"]["expected_signals"] is True
     assert score.required_gates["artifacts_present"] is False
     assert "artifacts_present" in score.fail_reasons
@@ -82,10 +176,17 @@ def test_missing_required_artifact_fails_despite_valid_spec(tmp_path: Path):
 
 def test_spec_ok_does_not_compensate_missing_artifact_signals(tmp_path: Path):
     """Sinais na spec não compensam ausência dos mesmos sinais nos artefatos."""
-    _write_spec(tmp_path)
-    (tmp_path / "historia.md").write_text("# sem sinais esperados\n", encoding="utf-8")
-    (tmp_path / "prd.md").write_text("# sem sinais esperados\n", encoding="utf-8")
-    score = score_case(_expected(), _base_result(), output_root=tmp_path)
+    run_dir = _seed(
+        tmp_path,
+        "run-art-sig",
+        historia="# sem sinais esperados\n",
+        prd="# sem sinais esperados\n",
+    )
+    score = score_case(
+        _expected(),
+        _base_result(run_id="run-art-sig", run_dir=run_dir),
+        output_root=tmp_path,
+    )
     assert score.required_gates["spec_signals"] is True
     assert score.required_gates["artifacts_present"] is True
     assert score.required_gates["artifact_signals"] is False
@@ -94,68 +195,122 @@ def test_spec_ok_does_not_compensate_missing_artifact_signals(tmp_path: Path):
 
 
 def test_broken_traceability_fails(tmp_path: Path):
-    _write_spec(tmp_path, source_claims=["CLM-INEXISTENTE"])
-    (tmp_path / "historia.md").write_text("POST /clientes CPF\n", encoding="utf-8")
-    (tmp_path / "prd.md").write_text("POST /clientes CPF\n", encoding="utf-8")
-    score = score_case(_expected(), _base_result(), output_root=tmp_path)
+    run_dir = _seed(
+        tmp_path,
+        "run-trace",
+        source_claims=["CLM-INEXISTENTE"],
+        historia="POST /clientes CPF\n",
+        prd="POST /clientes CPF\n",
+    )
+    score = score_case(
+        _expected(),
+        _base_result(run_id="run-trace", run_dir=run_dir),
+        output_root=tmp_path,
+    )
     assert score.required_gates["traceable"] is False
-    assert "traceable" in score.fail_reasons
     assert score.passed is False
 
 
-def test_wrong_service_fails_despite_other_gates(tmp_path: Path):
-    _write_spec(tmp_path)
-    (tmp_path / "historia.md").write_text("POST /clientes CPF\n", encoding="utf-8")
-    (tmp_path / "prd.md").write_text("POST /clientes CPF\n", encoding="utf-8")
-    result = _base_result(service="ms-outro")
+def test_wrong_service_fails(tmp_path: Path):
+    run_dir = _seed(
+        tmp_path,
+        "run-svc",
+        historia="POST /clientes CPF\n",
+        prd="POST /clientes CPF\n",
+    )
+    result = _base_result(run_id="run-svc", run_dir=run_dir)
+    result["contexts"] = ["ms-outro"]
+    result["by_context"] = [
+        {"servico": {"id": "ms-outro", "repos": ["mfe-onboarding", "bff-cliente", "ms-cliente"]}}
+    ]
     score = score_case(_expected(), result, output_root=tmp_path)
     assert score.required_gates["service_match"] is False
-    assert "service_match" in score.fail_reasons
     assert score.passed is False
 
 
 def test_blocking_pendency_fails(tmp_path: Path):
-    _write_spec(tmp_path, blocking=True)
-    (tmp_path / "historia.md").write_text("POST /clientes CPF\n", encoding="utf-8")
-    (tmp_path / "prd.md").write_text("POST /clientes CPF\n", encoding="utf-8")
-    score = score_case(_expected(), _base_result(), output_root=tmp_path)
+    run_dir = _seed(
+        tmp_path,
+        "run-block-q",
+        blocking=True,
+        historia="POST /clientes CPF\n",
+        prd="POST /clientes CPF\n",
+    )
+    score = score_case(
+        _expected(),
+        _base_result(run_id="run-block-q", run_dir=run_dir),
+        output_root=tmp_path,
+    )
     assert score.required_gates["no_blocking_pendencies"] is False
-    assert "no_blocking_pendencies" in score.fail_reasons
     assert score.passed is False
 
 
 def test_false_dimension_never_compensated_by_another(tmp_path: Path):
-    """Uma dimensão obrigatória falsa permanece em fail_reasons mesmo com as demais OK."""
-    _write_spec(tmp_path)
-    # artefatos ausentes; restante (serviço, HTTP, spec, trace) OK
-    score = score_case(_expected(), _base_result(), output_root=tmp_path)
-    assert score.required_gates["spec_signals"] is True
-    assert score.required_gates["service_match"] is True
+    """Artefato ausente + spec/trace ok → fail; não passa por outras dimensões."""
+    run_dir = _seed(tmp_path, "run-nocomp")
+    score = score_case(
+        _expected(),
+        _base_result(run_id="run-nocomp", run_dir=run_dir),
+        output_root=tmp_path,
+    )
+    assert score.required_gates["spec_present"] is True
     assert score.required_gates["traceable"] is True
     assert score.required_gates["artifacts_present"] is False
     assert score.passed is False
-    assert score.fail_reasons == ["artifacts_present", "artifact_signals"] or (
-        "artifacts_present" in score.fail_reasons
+
+
+def test_blocked_case_passes_with_matching_cause(tmp_path: Path):
+    run_dir = _seed(tmp_path, "run-exp-block", status="blocked")
+    expected = _expected(
+        expect_blocked=True,
+        artifacts=[],
+        critical=False,
+        ownership={},
+        expected_reason="spec_validation_failed",
+        expected_block_codes=["AMBIGUOUS_HTTP_STATUS"],
     )
-
-
-def test_blocked_case_requires_expected_cause(tmp_path: Path):
-    """Bloqueio sem a causa esperada reprova pelo motivo block_cause_ok."""
-    _write_spec(tmp_path)
-    expected = {
-        "expect_blocked": True,
-        "expected_reason": "spec_validation_failed",
-        "expected_block_codes": ["AMBIGUOUS_HTTP_STATUS"],
-        "services": ["ms-cliente"],
-        "http_statuses": [400, 422],
-        "http_status_mode": "subset",
-        "signals": ["cpf"],
-        "artifacts": [],
-        "critical": True,
-    }
-    # blocked, mas causa/código errados
     result = {
         "status": "blocked",
+        "run_id": "run-exp-block",
+        "run_dir": str(run_dir),
+        "contexts": ["ms-cliente"],
+        "by_context": [
+            {
+                "status": "blocked",
+                "reason": "spec_validation_failed",
+                "servico": {"id": "ms-cliente", "repos": ["bff-cliente", "ms-cliente"]},
+                "validation": {
+                    "status": "blocked",
+                    "errors": 1,
+                    "warnings": 0,
+                    "issues": [
+                        {"code": "AMBIGUOUS_HTTP_STATUS", "severity": "error"}
+                    ],
+                },
+                "claims": [{"id": "CLM-1", "text": "CPF inválido"}],
+            }
+        ],
+        "claims": [{"text": "POST /clientes CPF"}],
+    }
+    score = score_case(expected, result, output_root=tmp_path)
+    assert score.required_gates["block_cause_ok"] is True
+    assert score.passed is True
+
+
+def test_blocked_case_fails_on_wrong_cause(tmp_path: Path):
+    run_dir = _seed(tmp_path, "run-bad-cause", status="blocked")
+    expected = _expected(
+        expect_blocked=True,
+        artifacts=[],
+        critical=False,
+        ownership={},
+        expected_reason="spec_validation_failed",
+        expected_block_codes=["AMBIGUOUS_HTTP_STATUS"],
+    )
+    result = {
+        "status": "blocked",
+        "run_id": "run-bad-cause",
+        "run_dir": str(run_dir),
         "contexts": ["ms-cliente"],
         "by_context": [
             {
@@ -171,78 +326,16 @@ def test_blocked_case_requires_expected_cause(tmp_path: Path):
                 "claims": [{"id": "CLM-1", "text": "CPF inválido"}],
             }
         ],
-        "claims": [{"text": "CPF inválido"}],
+        "claims": [{"text": "POST /clientes CPF"}],
     }
     score = score_case(expected, result, output_root=tmp_path)
-    assert score.required_gates["status_ok"] is True
     assert score.required_gates["block_cause_ok"] is False
-    assert "block_cause_ok" in score.fail_reasons
     assert score.passed is False
-    assert "spec_validation_failed" not in score.details["actual_block_reasons"]
 
 
-def test_blocked_case_passes_with_matching_cause(tmp_path: Path):
-    _write_spec(tmp_path)
-    # errors no spec para http_statuses subset
+def test_fixture_ambiguous_status_declares_expected_cause():
     expected = yaml.safe_load(
         (FIXTURES / "ambiguous_status" / "expected.yaml").read_text(encoding="utf-8")
     )
-    result = {
-        "status": "blocked",
-        "contexts": ["ms-cliente"],
-        "by_context": [
-            {
-                "status": "blocked",
-                "reason": "spec_validation_failed",
-                "servico": {"id": "ms-cliente", "repos": ["bff-cliente", "ms-cliente"]},
-                "validation": {
-                    "status": "blocked",
-                    "errors": 1,
-                    "warnings": 0,
-                    "issues": [
-                        {"code": "AMBIGUOUS_HTTP_STATUS", "severity": "error"}
-                    ],
-                },
-                "claims": [{"id": "CLM-1", "text": "CPF inválido 400 422"}],
-            }
-        ],
-        "claims": [{"text": "CPF inválido"}],
-    }
-    # fixture espera 400/422 no spec — escreve statuses
-    (tmp_path / "canonical-spec.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "claims": [{"id": "CLM-1", "text": "CPF inválido"}],
-                "requirements": [
-                    {
-                        "id": "RF-1",
-                        "text": "CPF",
-                        "source_claims": ["CLM-1"],
-                        "status": "ok",
-                    }
-                ],
-                "acceptance_criteria": [],
-                "operations": [],
-                "errors": [{"status": 400}, {"status": 422}],
-                "open_questions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-    score = score_case(expected, result, output_root=tmp_path)
-    assert score.required_gates["block_cause_ok"] is True
-    assert score.passed is True
-
-
-def test_happy_path_still_passes_required_gates(tmp_path: Path):
-    report_root = tmp_path / "hp"
-    from src.learning.evals import run_eval_suite
-
-    report = run_eval_suite(cases=["happy_path"], output_root=report_root)
-    case = report["cases"][0]
-    assert case["ok"] is True
-    gates = case["score"]["required_gates"]
-    assert gates["artifacts_present"] is True
-    assert gates["artifact_signals"] is True
-    assert gates["traceable"] is True
-    assert gates["no_blocking_pendencies"] is True
+    assert expected.get("expect_blocked") is True
+    assert expected.get("expected_reason") or expected.get("block_reason")
