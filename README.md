@@ -45,7 +45,7 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 | **Gate antes de implementar** | Canonical Spec bloqueia ambiguidade (ex.: HTTP indefinido) com `PipelineBlocked` |
 | **Verify pós-executor** | `close_loop` confere o que ocorreu no Git e nos logs do adapter (não o payload) vs spec + policy |
 | **Promoção com aprovação humana** | `src.approval` vincula ator + spec + relatório + commit; HMAC detecta adulteração |
-| **Plano coordenado multi-repo** | `plan_repos` gera ondas/contratos a partir do mapa de serviços |
+| **Plano coordenado multi-repo** | `plan_repos` gera ondas/contratos a partir de dependências observadas (código + Canonical Spec); camada é fallback revisável |
 | **Melhoria sem regressão silenciosa** | `improve` aplica a proposta só no candidato, compara evals distintas e só então promove status |
 
 ### Onde *não* é a melhor ferramenta (ainda)
@@ -94,12 +94,12 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
         │
         ▼
     [emit] ──────────────── artifacts/ + espelho outputs/
-                            openapi | sequence.mmd | historia.md | PRD.md | canonical-spec.yaml
+                            openapi | sequence.mmd | historia.md | PRD.md | sdd-package.yaml | canonical-spec.yaml
 
         (pós-execução, opcional)
  [close_loop] ───────────── Git diff × adapter log × spec × policy → verify / repair
  [approval] ─────────────── request-approval → approve|reject → promote (HMAC)
- [plan_repos] ───────────── mapa-servicos → implementation_plan (ondas)
+ [plan_repos] ───────────── mapa + evidência de código/contratos → implementation_plan (ondas)
  [improve] ──────────────── diagnose → apply no candidato → evals distintas → accepted / approved_for_experiment / rejected
 ```
 
@@ -259,7 +259,7 @@ Estimativa de tokens: tokenizer do provider configurado em `models.provider` / `
   - `claude`: `system` com `cache_control: ephemeral` + `messages` + as mesmas tools
   - `tools`: contrato neutro das duas functions de recovery sobre claims da run
 - Antes de montar o pacote, o estágio `reason` varre inputs não confiáveis (secrets, PII heurística, instruções suspeitas). Achado `error` **bloqueia** a run (`reason: input_scan_failed`) e grava `validations/input-scan.json` — não engole o achado.
-- **`src/renderers/`**: com Canonical Spec disponível, os quatro artefatos são renderizados do IR (`render_historia`, `render_prd`, `render_openapi`, `render_mermaid`).
+- **`src/renderers/`**: com Canonical Spec disponível, os artefatos são renderizados do IR (`render_historia`, `render_prd`, `render_openapi`, `render_mermaid`, `render_sdd`).
 - **`dry_run_scaffold`**: fallback legado (sem IR) que preenche o template localmente, sem API.
 - Na história/PRD, o render usa o IR + **`engenharia`** + `consolidated` (RF/AC + stack/NFR + handoff SDD). Estado atual e gaps saem de `current_state` / `gaps` do Canonical Spec — sem índice a seção declara *índice não aplicado*, nunca “sem gaps”.
 - **`--live`**: slot ainda não implementado — deve consumir o pacote já comprimido.
@@ -268,8 +268,8 @@ Estimativa de tokens: tokenizer do provider configurado em `models.provider` / `
 
 **Papel:** gravar o arquivo do tipo pedido em `outputs/` (+ `llm_package_*.json`).
 
-- Um tipo → um arquivo principal (`openapi.yaml`, `sequence.mmd`, `historia.md`, `PRD.md`).
-- Exceção: `historia` declara `also_emit: [prd]` em `config/pipeline.yaml` — `run.py` gera **história e PRD** na mesma execução (mesmo contexto comprimido, dois templates).
+- Um tipo → um arquivo principal (`openapi.yaml`, `sequence.mmd`, `historia.md`, `PRD.md`, `sdd-package.yaml`).
+- Exceção: `historia` declara `also_emit: [prd, sdd]` em `config/pipeline.yaml` — `run.py` gera **história, PRD e pacote SDD** na mesma execução. `prd` também emite o SDD.
 
 ### Diagrama de dados (o que viaja vs o que para)
 
@@ -284,7 +284,7 @@ state/workflow.json ◄── só metadados                               contex
                                                                             ▼
                                                                    llm_package_*.json
                                                                    + artefato(s) em outputs/
-                                                                   (historia → também PRD.md)
+                                                                   (historia → também PRD.md + sdd-package.yaml)
 ```
 
 ---
@@ -295,10 +295,11 @@ state/workflow.json ◄── só metadados                               contex
 |---------|----------|--------|
 | `openapi` | `templates/openapi.skeleton.yaml` | `outputs/openapi.yaml` derivado do IR (+ `canonical-spec.yaml` na run) |
 | `mermaid` | `templates/mermaid.skeleton.md` | `outputs/sequence.mmd` derivado do IR |
-| `historia` | `templates/historia.skeleton.md` | `outputs/historia.md` **+** `outputs/PRD.md` |
-| `prd` | `templates/prd.skeleton.md` | `outputs/PRD.md` |
+| `historia` | `templates/historia.skeleton.md` | `outputs/historia.md` **+** `outputs/PRD.md` **+** `outputs/sdd-package.yaml` |
+| `prd` | `templates/prd.skeleton.md` | `outputs/PRD.md` **+** `outputs/sdd-package.yaml` |
+| `sdd` | `templates/sdd.skeleton.yaml` | `outputs/sdd-package.yaml` derivado do Canonical Spec |
 
-Toda run também grava **`canonical-spec.yaml`** e validações em `runs/<run_id>/` (espelhadas conforme o layout da execução). `historia` emite também o **PRD** (`also_emit` em `config/pipeline.yaml`): a história é o recorte de implementação (**BDD funcional + DoD NFR**); o PRD é o documento canônico para um **SDD** futuro (arquitetura, contrato, tasks, NFR-R/O/S/D).
+Toda run também grava **`canonical-spec.yaml`** e validações em `runs/<run_id>/` (espelhadas conforme o layout da execução). `historia` emite também o **PRD** e o **pacote SDD** (`also_emit` em `config/pipeline.yaml`): a história é o recorte de implementação (**BDD funcional + DoD NFR**); o PRD documenta RF/AC/NFR; o SDD é o pacote rastreável (arquitetura, API decisions, tasks) para revisão humana.
 
 Além do artefato, a pipeline grava o **pacote LLM** (contexto já comprimido):
 
@@ -321,13 +322,29 @@ O `PRD.md` nasce com:
 - seção **Handoff para SDD** (o que o próximo estágio deve gerar)
 - contexto comprimido do Prompt-less (sem texto bruto)
 
-Fluxo sugerido:
+O consumidor SDD **não lê o PRD como fonte de verdade**. Ele lê o **Canonical Spec** (`contract_operations()`, RF/AC/NFR, `current_state`/`gaps`, perguntas abertas) e emite `sdd-package.yaml`:
+
+- **architecture** — serviço, repos, operations contratuais, estado/gaps do IR; topologia reutiliza o grafo multi-repo (ainda heurístico por camada se o 24 não descobriu deps)
+- **api_decisions** — só `spec.contract_operations()`; method/path/status/origem vêm do IR (zero decisão crítica inventada pelo renderer)
+- **tasks** — uma por (nó do grafo × operação contratual), cada uma com RF, AC, NFR, serviço e evidência; `depends_on` copia as arestas do plano
+- **perguntas** — `blocking` só marca as tasks cujo recorte (OP/ERR/trigger) casa; pergunta sem escopo fica em `review.unscoped_questions`
+- **revisão** — `executor_dispatch: false` e `ready_for_executor: false`; o pacote não chama executor
+
+A saída passa por `validate_sdd_package` (schema em `config/sdd-package.schema.yaml`). Divergência bloqueia o emit (`reason: derived_artifact_divergence`).
+
+```bash
+.venv/bin/python -m src.run sdd --dry-run
+.venv/bin/python -m src.run sdd --all-contexts --dry-run
+# → outputs/sdd-package.yaml  (ou contextos/<svc>/sdd-package.yaml)
+```
+
+Fluxo:
 
 ```
 Figma + regras + docs
-        → Prompt-less (historia + PRD + opcionalmente openapi/mermaid)
-                → SDD consome PRD.md
-                        → architecture / api / tasks
+        → Prompt-less (Canonical Spec)
+                → SDD consome o IR
+                        → architecture / api_decisions / tasks (pending_review)
 ```
 
 ### Regras de tradução
@@ -362,6 +379,14 @@ Figma + regras + docs
 - RF/AC rastreáveis; dados da UI; regras → erros HTTP
 - NFR-R / NFR-O / NFR-S / NFR-D a partir do baseline de engenharia
 - Handoff SDD lista artefatos esperados + rastreio RF/AC/NFR
+
+**SDD** (`render_sdd(spec)` / `run sdd`)
+
+- Fonte primária: Canonical Spec, não o markdown do PRD
+- `operations` já fatiadas no IR (`contract_operations()`); o consumidor não recorta de novo
+- Tasks 100% ligadas a pelo menos um RF e um AC; NFR, serviço e evidência sempre presentes no registro
+- Dependências = grafo `build_implementation_plan` (camadas heurísticas até o 24 evoluir)
+- Nenhuma task vai a executor neste estágio
 
 ---
 
@@ -548,11 +573,11 @@ export PROMPTLESS_INTEGRITY_KID=v1
 O repositório já traz `inputs/figma.json`, `inputs/regras.yaml`, `inputs/engenharia.yaml` e docs de amostra.
 
 ```bash
-# História técnica (BDD + NFR) + PRD (insumo para SDD)
+# História técnica (BDD + NFR) + PRD + pacote SDD
 .venv/bin/python -m src.run historia --dry-run
 
 # Ver saídas (seção NFR na história e no PRD)
-ls outputs/historia.md outputs/PRD.md
+ls outputs/historia.md outputs/PRD.md outputs/sdd-package.yaml
 sed -n '/## Não-funcionais/,/## Dependências/p' outputs/historia.md
 ```
 
@@ -562,7 +587,8 @@ Saída esperada no terminal (resumo):
 {
   "outputs": {
     "historia": ".../outputs/historia.md",
-    "prd": ".../outputs/PRD.md"
+    "prd": ".../outputs/PRD.md",
+    "sdd": ".../outputs/sdd-package.yaml"
   },
   "est_tokens": 580,
   "rag": { "raw": 48000, "compressed": 150, "doc_reduction_pct": 99.8 }
@@ -584,15 +610,15 @@ Artefatos:
 | `outputs/openapi.yaml` | Contrato derivado do Canonical Spec |
 | `outputs/sequence.mmd` | Sequência Frontend → BFF → API derivada do Canonical Spec |
 | `outputs/historia.md` | História BFF/MFE (BDD) |
-| `outputs/PRD.md` | PRD canônico para SDD |
+| `outputs/PRD.md` | PRD canônico (RF/AC/NFR + handoff) |
+| `outputs/sdd-package.yaml` | Pacote SDD para revisão humana (arquitetura, API, tasks) |
 
-### 3. Só o PRD (sem reemitir a história)
-
-Útil quando a história já existe e você quer regenerar o handoff SDD:
+### 3. Só o PRD / só o SDD
 
 ```bash
 .venv/bin/python -m src.run prd --dry-run
-cat outputs/PRD.md
+.venv/bin/python -m src.run sdd --dry-run
+cat outputs/sdd-package.yaml
 ```
 
 ### 4. Colocar seus próprios insumos
@@ -607,8 +633,8 @@ cp ~/Downloads/spec-produto.docx inputs/
 # 2) Rode o artefato desejado
 .venv/bin/python -m src.run historia --dry-run
 
-# 3) Encaminhe o PRD ao estágio SDD
-cp outputs/PRD.md ../sdd/inbox/PRD.md
+# 3) Revise o pacote SDD (não envie a executor ainda)
+cat outputs/sdd-package.yaml
 ```
 
 Formato mínimo de `figma.json`, `regras.yaml` e `engenharia.yaml`: ver seção [Insumos suportados](#insumos-suportados).
@@ -658,10 +684,9 @@ print('claude_cache:', p['claude']['system'][0].get('cache_control'))
 .venv/bin/python -m src.run openapi --dry-run
 .venv/bin/python -m src.run mermaid --dry-run
 
-# C) O SDD consome o frontmatter de outputs/PRD.md
-#    campos: artifacts.* e sdd.expected
-#    → architecture.md, sequence_refined.mmd, api_contract.yaml, tasks.md
-grep -A20 '^---' outputs/PRD.md | head -25
+# C) Pacote SDD já sai de `run historia` / `run sdd` a partir do Canonical Spec
+#    (não do frontmatter do PRD). Revisar tasks antes de qualquer executor.
+grep -E 'source:|executor_dispatch:|status:' outputs/sdd-package.yaml | head
 ```
 
 ### 8. Ajustar budget e reexecutar
@@ -1043,7 +1068,7 @@ no spec (aí o `success_status` guarda `origin: declared` e os `source_claims`).
 
 Com `--context <svc>` ou `--all-contexts`, o Canonical Spec é fatiado **no IR**:
 `spec.operations` só contém as ações cujo `owner` é aquele serviço (e os `ERR-*`
-ancorados nela). OpenAPI, Mermaid e futuros consumidores (SDD) leem o mesmo
+ancorados nela). OpenAPI, Mermaid e o consumidor SDD leem o mesmo
 conjunto — o renderer não adivinha fronteira de microsserviço. Operação sem dono
 e erro órfão ficam `unresolved` (pergunta aberta não bloqueante) e **não** viram
 path/status no contrato de outro serviço.
@@ -1135,10 +1160,13 @@ Fora deste ticket: scan de dependência no CI (`25`), cadeia tamper-evident (`19
 
 ### Plano multi-repo (`plan_repos`)
 
+O plano usa **dependências observadas** (OpenAPI clients, imports, URLs, eventos, arquivos de build e contratos do Canonical Spec). Cada aresta tem `from`, `to`, tipo, arquivo/símbolo, confiança e o **motivo**. Topologia por camada permanece só como fallback `origin: heuristic` + `requires_review`. Ciclos, contratos ausentes e repositório compartilhado sem `coordenacao` bloqueiam o scheduler. `ready_for_parallel_execution` exige `--reviewed` e ausência de conflito — a execução concorrente em si é o ticket `13`.
+
 ```bash
 .venv/bin/python -m src.plan_repos
 .venv/bin/python -m src.plan_repos --service gestao-de-ofertas --out runs/plan/
-# → implementation_plan.yaml + .json (ondas, contratos, origin: heuristic, requires_review)
+.venv/bin/python -m src.plan_repos --workspace ~/dev/repos --spec runs/<id>/artifacts/canonical-spec.yaml --reviewed
+# → implementation_plan.yaml + .json (dependencies, ondas, cycles, scheduler_blockers)
 ```
 
 ### Autoaperfeiçoamento (`improve`)
@@ -1173,7 +1201,8 @@ Limites deste slice (não reabrir; o `14` consome o overlay):
 ### Evals e testes
 
 ```bash
-.venv/bin/pytest -q
+# Gate completo (igual ao GitHub Actions). pytest sozinho não é o CI.
+PYTHONPATH=. .venv/bin/python scripts/quality_gates.py
 ```
 
 Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services, **eval_adversarial**, **eval_multi_context**), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`, com métricas de claim recall, traceability, inferências inesperadas, custo e latência. Casos `critical` têm gate individual na comparação baseline × candidate. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
@@ -1235,10 +1264,10 @@ pipeline/
     ├── runtime/                   # RunContext, RunStore, EventStore, atomic_io, approval
     ├── spec/                      # builder do IR
     ├── validators/                # quality gate
-    ├── renderers/                 # história/PRD/OpenAPI/Mermaid a partir do IR
+    ├── renderers/                 # história/PRD/OpenAPI/Mermaid/SDD a partir do IR
     ├── executors/                 # policy, verify, evidence (Git+logs), loop, Devin, safe_exec
     ├── hardening/                 # debugger, input scan, claim tools, recall
-    ├── planning/                  # grafo, camadas, plan
+    ├── planning/                  # grafo observado, camadas (fallback), plan
     └── learning/                  # evals, proposals, accept, failure_patterns
 ```
 
@@ -1267,10 +1296,14 @@ artifacts:
   historia:
     template: templates/historia.skeleton.md
     output: outputs/historia.md
-    also_emit: [prd]          # mesma run → também outputs/PRD.md
+    also_emit: [prd, sdd]     # mesma run → PRD.md + sdd-package.yaml
   prd:
     template: templates/prd.skeleton.md
     output: outputs/PRD.md
+    also_emit: [sdd]
+  sdd:
+    template: templates/sdd.skeleton.yaml
+    output: outputs/sdd-package.yaml
 ```
 
 Ajuste o budget conforme o provedor (janela, preço de cache) e o risco de “cortar demais” sinais.
@@ -1313,6 +1346,13 @@ python -m pip install --require-hashes -r requirements-dev.lock
 ---
 
 ## Gates de qualidade
+
+Local e GitHub rodam **o mesmo comando**: `python scripts/quality_gates.py`
+(compile, ruff, mypy, YAML, secrets, pip-audit, pytest+coverage 70%, smoke).
+`pytest -q` sozinho **não** é o gate — foi isso que fez cada onda voltar a
+falhar no mypy depois do push. Antes de merge no pai / push de
+`feature/onda-frontier`, rode o script. Não silencie módulo novo em
+`pyproject.toml` `[tool.mypy.overrides]`.
 
 O job agregador **`CI`** (depende de `quality-gates` na matriz) é o check estável para exigir no GitHub. Cada célula da matriz publica o artifact `quality-reports-py<versão>` com:
 
@@ -1460,6 +1500,11 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   na rota casada (`origin: observed`); fora disso permanece `unresolved`
 - Sem `repo_index`, história/PRD declaram *índice não aplicado* e não afirmam
   “sem gaps”; heurística nunca é apresentada como fato
+- Plano multi-repo sem evidência de código cai na topologia por camada
+  (`origin: heuristic`, exige revisão); execução paralela das ondas ainda não roda (ticket `13`)
+- O pacote SDD lê o grafo multi-repo observado quando há evidência; fallback
+  heurístico continua `requires_review`. Não classifica NFR por tipo (28)
+- Nenhuma task do SDD é despachada a executor (`10`) nem passa por apply/rollback (`14`)
 - Resumo de docs é **extrativo por regex**, não LLM small (bom custo; pode perder nuance)
 - Tokenizer oficial cobre OpenAI via `tiktoken`; Anthropic/Gemini e ausência da lib usam heurística `chars÷4` (`method=heuristic`), nunca como contagem exata
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
@@ -1477,7 +1522,7 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 2. Devin CLI real no `close_loop`
 3. Redis opcional (state backend)
 4. Execução concorrente por ondas + apply/rollback de propostas em produção (`14`)
-5. Consumidor SDD que leia `outputs/PRD.md` e gere architecture/tasks com RF + NFR
+5. NFR por tipo (resiliência / observabilidade / segurança) no consumidor SDD (`28`)
 6. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
 7. Ligar estágios opcionais de scan/index/marcar no grafo default
 
@@ -1488,4 +1533,4 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 
 > Sistemas LLM em produção funcionam melhor quando o modelo vê a **informação certa**, não a **maior quantidade** de informação.
 
-O **Prompt-less** aplica isso ao domínio de artefatos de tech lead: Figma, regras, engenharia e documentos longos viram um contexto pequeno, estável e auditável — pronto para gerar OpenAPI, Mermaid, histórias (**funcional + NFR**) e **PRD para SDD** com custo previsível, com harness (runtime, provenance, Canonical Spec, verify) entre o sinal comprimido e a implementação.
+O **Prompt-less** aplica isso ao domínio de artefatos de tech lead: Figma, regras, engenharia e documentos longos viram um contexto pequeno, estável e auditável — pronto para gerar OpenAPI, Mermaid, histórias (**funcional + NFR**), **PRD** e **pacote SDD** com custo previsível, com harness (runtime, provenance, Canonical Spec, verify) entre o sinal comprimido e a implementação.

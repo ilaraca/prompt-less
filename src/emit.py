@@ -14,6 +14,7 @@ OUTPUTS = {
     "mermaid": "sequence.mmd",
     "historia": "historia.md",
     "prd": "PRD.md",
+    "sdd": "sdd-package.yaml",
 }
 
 

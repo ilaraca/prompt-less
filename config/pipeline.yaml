@@ -1,4 +1,4 @@
-# Prompt-less — artefatos técnicos com contexto comprimido (OpenAPI | Mermaid | Historia | PRD)
+# Prompt-less — artefatos técnicos com contexto comprimido (OpenAPI | Mermaid | Historia | PRD | SDD)
 # Princípio: nunca enviar bruto se puder comprimir antes.
 # Repo: https://github.com/ilaraca/prompt-less
 
@@ -100,10 +100,17 @@ artifacts:
     output: outputs/historia.md
     also_emit:
       - prd
+      - sdd
   prd:
     template: templates/prd.skeleton.md
     output: outputs/PRD.md
     purpose: Insumo canônico para SDD (Spec-Driven Development)
+    also_emit:
+      - sdd
+  sdd:
+    template: templates/sdd.skeleton.yaml
+    output: outputs/sdd-package.yaml
+    purpose: Pacote SDD (arquitetura, API decisions, tasks) derivado do Canonical Spec
 caching:
   openai:
     strategy: stable_prefix   # system + tools fixos no início

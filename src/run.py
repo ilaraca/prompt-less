@@ -228,7 +228,7 @@ def run(
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Prompt-less — token-efficient tech artifacts")
-    p.add_argument("tipo", choices=["openapi", "mermaid", "historia", "prd"])
+    p.add_argument("tipo", choices=["openapi", "mermaid", "historia", "prd", "sdd"])
     p.add_argument("--dry-run", action="store_true", default=True)
     p.add_argument("--live", action="store_true")
     p.add_argument(

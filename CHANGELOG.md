@@ -9,6 +9,11 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- Quality-gates deixam de divergir entre a máquina e o GitHub: o workflow chama
+  `python scripts/quality_gates.py` (compile, ruff, mypy, YAML, secrets, audit,
+  pytest+coverage). Cada onda que só rodava pytest quebrava no mypy depois do
+  push (`33d1726`, `279267f`, e de novo 24/27). Tipos dos slices 24/27
+  passam no mypy; collect não falha quando o typecheck pula os testes
 - `pip-audit --strict` na matriz 3.10–3.13 deixava de passar: o lock compilado
   em 3.9 pinava `pip` 26.0.1 e `setuptools` 82.0.1, cujos fixes exigem
   Python ≥3.10. A matriz larga o 3.9, o lock recompila no 3.10 (`pip` 26.2.1,
@@ -19,6 +24,26 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Consumidor SDD** (`27-sdd-consumer`): `run sdd` (e `also_emit` de história/PRD)
+  gera `sdd-package.yaml` a partir do Canonical Spec — arquitetura, API decisions
+  e tasks rastreáveis para revisão humana, sem despacho a executor
+- Cada task liga RF, AC, NFR, serviço e evidência; dependências reutilizam o
+  grafo multi-repo (`build_implementation_plan`); perguntas abertas bloqueiam
+  só o recorte afetado (`OP-*` / `ERR-*` / trigger)
+- Gate `validate_sdd_package` (`config/sdd-package.schema.yaml`): source =
+  `canonical-spec`, 100% das tasks com RF/AC, origem de decisão não pode ser
+  `renderer`, `executor_dispatch` permanece false
+- Testes (`tests/integration/test_sdd_consumer.py`): fonte IR, grafo, bloqueio
+  por escopo, isolamento two_services e rejeição de despacho prematuro
+- **Plano multi-repo baseado em evidência** (`24-evidence-based-planning`):
+  dependências observadas (OpenAPI clients, imports, URLs, eventos, arquivos
+  de build e contratos do Canonical Spec) passam a ser a autoridade do
+  `implementation_plan`; cada aresta registra `from`/`to`, tipo, arquivo/símbolo,
+  confiança e o motivo
+- Grafo global detecta repositórios compartilhados e ciclos; fallback por
+  camada fica `origin: heuristic` e `requires_review`;
+  `ready_for_parallel_execution` só fica verdadeiro com plano `--reviewed` e
+  sem conflito (ciclos e contratos ausentes bloqueiam o scheduler)
 - **Evals de candidato** (`23-candidate-evals`): `improve` materializa workspaces
   distintos, aplica a proposta só no candidato e compara evals com gate por
   caso crítico (não só pass rate agregado)
@@ -164,6 +189,9 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- `ready_for_parallel_execution` no relatório do plano exige plano revisado e
+  ausência de conflito (ciclo, contrato ausente, repo compartilhado sem
+  `coordenacao`); topologia por camada deixa de ser autoridade
 - `improve` deixa de comparar a mesma eval duas vezes: baseline e candidate
   são workspaces/commits distintos; `accepted` só existe depois do apply no
   candidato

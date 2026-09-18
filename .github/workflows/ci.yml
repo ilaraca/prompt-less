@@ -43,37 +43,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install --require-hashes -r requirements-dev.lock
 
-      - name: Compile
-        run: python -m compileall -q src tests scripts
-
-      - name: Lint
-        run: ruff check src tests scripts
-
-      - name: Type check
-        run: mypy src
-
-      - name: Validate YAML
-        run: |
-          python scripts/ci_reports.py validate-yaml
-          yamllint -c .yamllint.yaml config inputs templates .github .yamllint.yaml
-
-      - name: Secrets scan
-        run: detect-secrets scan --baseline .secrets.baseline
-
-      - name: pip-audit
-        run: pip-audit --strict -r requirements-dev.lock
-
-      - name: Tests + coverage
-        run: |
-          mkdir -p reports
-          python -m pytest -q --tb=short \
-            --cov=src \
-            --cov-report=term-missing \
-            --cov-report=xml:reports/coverage.xml \
-            --cov-report=json:reports/coverage.json \
-            --cov-report=html:reports/coverage-html \
-            --cov-fail-under=70 \
-            --junitxml=reports/pytest.xml
+      - name: Quality gates
+        run: python scripts/quality_gates.py --reports-dir reports
 
       - name: Collect eval / coverage / verify reports
         if: always()
@@ -86,9 +57,6 @@ jobs:
           name: quality-reports-py${{ matrix.python-version }}
           path: reports/
           if-no-files-found: error
-
-      - name: Smoke plan_repos
-        run: python -m src.plan_repos --help
 
   ci:
     name: CI

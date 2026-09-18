@@ -762,10 +762,390 @@ def validate_mermaid_against_spec(spec: CanonicalSpec, content: str) -> Validati
     return ValidationResult(issues=issues)
 
 
+SDD_REQUIRED_ROOT = (
+    "package_version",
+    "source",
+    "service_id",
+    "review",
+    "architecture",
+    "api_decisions",
+    "tasks",
+    "graph",
+)
+SDD_TASK_REQUIRED = (
+    "id",
+    "rf_ids",
+    "ac_ids",
+    "nfr_ids",
+    "service_id",
+    "evidence",
+    "depends_on",
+    "blocked_by",
+    "status",
+)
+SDD_FORBIDDEN_ORIGIN = {"renderer", "invented", "scaffold", "assumed"}
+SDD_TASK_STATUS = {"pending_review", "blocked"}
+
+
+def validate_sdd_package(spec: CanonicalSpec, doc: Any) -> ValidationResult:
+    """Schema + invariantes do pacote SDD (rastreio, origem, sem despacho)."""
+    from src.renderers.sdd import operations_affected_by_question
+
+    issues: list[ValidationIssue] = []
+    if not isinstance(doc, dict):
+        return ValidationResult(
+            issues=[
+                ValidationIssue(
+                    code="SDD_NOT_OBJECT",
+                    severity="error",
+                    message="pacote SDD não é um objeto YAML",
+                )
+            ]
+        )
+
+    for key in SDD_REQUIRED_ROOT:
+        if key not in doc:
+            issues.append(
+                ValidationIssue(
+                    code="SDD_MISSING_FIELD",
+                    severity="error",
+                    message=f"pacote SDD sem campo obrigatório: {key}",
+                    subject_id=key,
+                )
+            )
+
+    if doc.get("source") != "canonical-spec":
+        issues.append(
+            ValidationIssue(
+                code="SDD_SOURCE_NOT_SPEC",
+                severity="error",
+                message="source do pacote SDD deve ser canonical-spec",
+                subject_id=str(doc.get("source")),
+            )
+        )
+    if doc.get("service_id") != spec.service_id:
+        issues.append(
+            ValidationIssue(
+                code="SDD_SERVICE_MISMATCH",
+                severity="error",
+                message=(
+                    f"service_id do pacote ({doc.get('service_id')!r}) "
+                    f"diverge do IR ({spec.service_id!r})"
+                ),
+                subject_id=str(doc.get("service_id")),
+            )
+        )
+
+    review_raw = doc.get("review")
+    review: dict[str, Any] = review_raw if isinstance(review_raw, dict) else {}
+    if review.get("executor_dispatch") or review.get("ready_for_executor"):
+        issues.append(
+            ValidationIssue(
+                code="SDD_PREMATURE_DISPATCH",
+                severity="error",
+                message="pacote SDD não pode marcar despacho a executor antes da revisão",
+            )
+        )
+    if review.get("status") not in SDD_TASK_STATUS:
+        issues.append(
+            ValidationIssue(
+                code="SDD_INVALID_REVIEW_STATUS",
+                severity="error",
+                message=f"review.status inválido: {review.get('status')!r}",
+            )
+        )
+
+    contract_ids = {op.id for op in spec.contract_operations()}
+    api_decisions = doc.get("api_decisions") or []
+    if not isinstance(api_decisions, list):
+        issues.append(
+            ValidationIssue(
+                code="SDD_MISSING_FIELD",
+                severity="error",
+                message="api_decisions deve ser uma lista",
+                subject_id="api_decisions",
+            )
+        )
+        api_decisions = []
+    seen_ops: set[str] = set()
+    for decision in api_decisions:
+        if not isinstance(decision, dict):
+            issues.append(
+                ValidationIssue(
+                    code="SDD_DECISION_NOT_IN_IR",
+                    severity="error",
+                    message="api_decision não é um objeto",
+                )
+            )
+            continue
+        op_id = decision.get("operation_id")
+        origin = decision.get("origin")
+        if origin in SDD_FORBIDDEN_ORIGIN or not origin:
+            issues.append(
+                ValidationIssue(
+                    code="SDD_RENDERER_DECISION",
+                    severity="error",
+                    message=(
+                        f"decisão crítica com origem inválida "
+                        f"({origin!r}) em {op_id}"
+                    ),
+                    subject_id=str(op_id),
+                )
+            )
+        if op_id not in contract_ids:
+            issues.append(
+                ValidationIssue(
+                    code="SDD_DECISION_NOT_IN_IR",
+                    severity="error",
+                    message=f"api_decision referencia operação ausente do IR contratual: {op_id}",
+                    subject_id=str(op_id),
+                )
+            )
+        else:
+            seen_ops.add(str(op_id))
+            ir_op = next(op for op in spec.contract_operations() if op.id == op_id)
+            if decision.get("method") != ir_op.method or decision.get("path") != ir_op.path:
+                issues.append(
+                    ValidationIssue(
+                        code="SDD_DECISION_NOT_IN_IR",
+                        severity="error",
+                        message=f"{op_id} declara method/path divergente do IR",
+                        subject_id=str(op_id),
+                    )
+                )
+    missing_ops = contract_ids - seen_ops
+    for op_id in sorted(missing_ops):
+        issues.append(
+            ValidationIssue(
+                code="SDD_DECISION_NOT_IN_IR",
+                severity="error",
+                message=f"operação contratual {op_id} sem api_decision",
+                subject_id=op_id,
+            )
+        )
+
+    architecture_raw = doc.get("architecture")
+    architecture: dict[str, Any] = (
+        architecture_raw if isinstance(architecture_raw, dict) else {}
+    )
+    for dec in architecture.get("decisions") or []:
+        if not isinstance(dec, dict):
+            continue
+        origin = dec.get("origin")
+        if origin in SDD_FORBIDDEN_ORIGIN or not origin:
+            issues.append(
+                ValidationIssue(
+                    code="SDD_RENDERER_DECISION",
+                    severity="error",
+                    message=f"decisão de arquitetura com origem inválida ({origin!r})",
+                    subject_id=str(dec.get("id")),
+                )
+            )
+
+    rf_ids = spec.requirement_ids()
+    ac_ids = {a.id for a in spec.acceptance_criteria}
+    nfr_ids = {n.id for n in spec.nfrs}
+    question_ids = {q.id for q in spec.open_questions}
+    tasks = doc.get("tasks") or []
+    if not isinstance(tasks, list) or not tasks:
+        issues.append(
+            ValidationIssue(
+                code="SDD_NO_TRACEABLE_TASKS",
+                severity="error",
+                message="pacote SDD sem tasks rastreáveis",
+            )
+        )
+        tasks = []
+
+    task_ids = {
+        str(t.get("id"))
+        for t in tasks
+        if isinstance(t, dict) and t.get("id")
+    }
+    for task in tasks:
+        if not isinstance(task, dict):
+            issues.append(
+                ValidationIssue(
+                    code="SDD_MISSING_FIELD",
+                    severity="error",
+                    message="task SDD não é um objeto",
+                )
+            )
+            continue
+        tid = str(task.get("id") or "")
+        for key in SDD_TASK_REQUIRED:
+            if key not in task:
+                issues.append(
+                    ValidationIssue(
+                        code="SDD_MISSING_FIELD",
+                        severity="error",
+                        message=f"task {tid or '?'} sem campo {key}",
+                        subject_id=tid or None,
+                    )
+                )
+        task_rfs = [str(x) for x in (task.get("rf_ids") or [])]
+        task_acs = [str(x) for x in (task.get("ac_ids") or [])]
+        if not task_rfs or not task_acs:
+            issues.append(
+                ValidationIssue(
+                    code="SDD_TASK_UNLINKED",
+                    severity="error",
+                    message=f"task {tid} sem RF/AC — 100% das tasks devem ligar a RF e AC",
+                    subject_id=tid,
+                )
+            )
+        unknown_rf = set(task_rfs) - rf_ids
+        unknown_ac = set(task_acs) - ac_ids
+        if unknown_rf or unknown_ac:
+            issues.append(
+                ValidationIssue(
+                    code="SDD_TASK_UNKNOWN_TRACE",
+                    severity="error",
+                    message=(
+                        f"task {tid} referencia RF/AC ausentes no IR: "
+                        f"rf={sorted(unknown_rf)} ac={sorted(unknown_ac)}"
+                    ),
+                    subject_id=tid,
+                )
+            )
+        unknown_nfr = set(str(x) for x in (task.get("nfr_ids") or [])) - nfr_ids
+        if unknown_nfr:
+            issues.append(
+                ValidationIssue(
+                    code="SDD_TASK_UNKNOWN_TRACE",
+                    severity="error",
+                    message=f"task {tid} referencia NFR ausente no IR: {sorted(unknown_nfr)}",
+                    subject_id=tid,
+                )
+            )
+        if task.get("service_id") != spec.service_id:
+            issues.append(
+                ValidationIssue(
+                    code="SDD_SERVICE_MISMATCH",
+                    severity="error",
+                    message=f"task {tid} com service_id divergente do IR",
+                    subject_id=tid,
+                )
+            )
+        if task.get("status") not in SDD_TASK_STATUS:
+            issues.append(
+                ValidationIssue(
+                    code="SDD_INVALID_REVIEW_STATUS",
+                    severity="error",
+                    message=f"task {tid} status inválido: {task.get('status')!r}",
+                    subject_id=tid,
+                )
+            )
+        if task.get("executor_dispatch") or task.get("dispatched") or task.get("executor"):
+            issues.append(
+                ValidationIssue(
+                    code="SDD_PREMATURE_DISPATCH",
+                    severity="error",
+                    message=f"task {tid} marcada para executor antes da revisão",
+                    subject_id=tid,
+                )
+            )
+        if not isinstance(task.get("evidence"), list):
+            issues.append(
+                ValidationIssue(
+                    code="SDD_MISSING_FIELD",
+                    severity="error",
+                    message=f"task {tid} sem evidence (lista)",
+                    subject_id=tid,
+                )
+            )
+        blocked_by = task.get("blocked_by") or []
+        if not isinstance(blocked_by, list):
+            issues.append(
+                ValidationIssue(
+                    code="SDD_MISSING_FIELD",
+                    severity="error",
+                    message=f"task {tid} blocked_by deve ser lista",
+                    subject_id=tid,
+                )
+            )
+            blocked_by = []
+        op_id = task.get("operation_id")
+
+        for item in blocked_by:
+            qid = item.get("id") if isinstance(item, dict) else item
+            if qid not in question_ids:
+                issues.append(
+                    ValidationIssue(
+                        code="SDD_QUESTION_UNKNOWN",
+                        severity="error",
+                        message=f"task {tid} blocked_by pergunta ausente no IR: {qid}",
+                        subject_id=tid,
+                    )
+                )
+                continue
+            question = next(q for q in spec.open_questions if q.id == qid)
+            affected = operations_affected_by_question(question, spec)
+            if affected is not None and op_id and op_id not in affected:
+                issues.append(
+                    ValidationIssue(
+                        code="SDD_QUESTION_OVERBLOCK",
+                        severity="error",
+                        message=(
+                            f"pergunta {qid} bloqueia task {tid} fora do escopo "
+                            f"(operação {op_id})"
+                        ),
+                        subject_id=tid,
+                    )
+                )
+        if task.get("status") == "blocked" and not blocked_by:
+            issues.append(
+                ValidationIssue(
+                    code="SDD_TASK_BLOCKED_WITHOUT_QUESTION",
+                    severity="error",
+                    message=f"task {tid} blocked sem blocked_by",
+                    subject_id=tid,
+                )
+            )
+        for dep in task.get("depends_on") or []:
+            if dep not in task_ids:
+                issues.append(
+                    ValidationIssue(
+                        code="SDD_UNKNOWN_DEPENDENCY",
+                        severity="error",
+                        message=f"task {tid} depends_on id ausente: {dep}",
+                        subject_id=tid,
+                    )
+                )
+
+    graph_raw = doc.get("graph")
+    graph: dict[str, Any] = graph_raw if isinstance(graph_raw, dict) else {}
+    if "waves" not in graph or "source" not in graph:
+        issues.append(
+            ValidationIssue(
+                code="SDD_MISSING_FIELD",
+                severity="error",
+                message="graph deve declarar source e waves do plano multi-repo",
+                subject_id="graph",
+            )
+        )
+
+    return ValidationResult(issues=issues)
+
+
 def validate_derived_artifact(
     tipo: str, content: str, spec: CanonicalSpec
 ) -> ValidationResult:
     """Gate dos artefatos derivados: estrutura + alinhamento com o IR."""
+    if tipo == "sdd":
+        try:
+            doc = yaml.safe_load(content)
+        except yaml.YAMLError as exc:
+            return ValidationResult(
+                issues=[
+                    ValidationIssue(
+                        code="SDD_NOT_PARSEABLE",
+                        severity="error",
+                        message=f"pacote SDD gerado não é YAML válido: {exc}",
+                    )
+                ]
+            )
+        return validate_sdd_package(spec, doc)
     if tipo == "openapi":
         try:
             doc = yaml.safe_load(content)
