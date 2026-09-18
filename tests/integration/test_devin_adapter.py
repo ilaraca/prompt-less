@@ -70,6 +70,7 @@ def test_devin_adapter_execute_persists_json_and_log(tmp_path: Path):
         layer="bff",
         prompt="implemente RF-001",
         timeout=30,
+        require_enforcement=False,
     )
     assert result.base_commit == base
     assert result.result_commit and result.result_commit != base
@@ -98,6 +99,7 @@ def test_devin_adapter_rejects_dirty_worktree_before_run(tmp_path: Path):
             out_dir=tmp_path / "out",
             prompt="x",
             invoke_cli=True,
+            require_enforcement=False,
         )
 
 
@@ -115,6 +117,7 @@ def test_devin_adapter_cli_failure_is_recorded(tmp_path: Path):
             repo_path=repo,
             out_dir=tmp_path / "out",
             prompt="x",
+            require_enforcement=False,
         )
     assert (tmp_path / "out" / "devin-cli.log").is_file()
     assert not (tmp_path / "out" / "execution.json").exists()
@@ -207,6 +210,7 @@ def test_close_loop_after_adapter_writes_verify_report(tmp_path: Path):
         out_dir=out,
         layer="bff",
         prompt="impl",
+        require_enforcement=False,
     )
     assert execution.tests
     assert execution.commands_executed
@@ -258,6 +262,7 @@ def test_devin_adapter_feeds_close_loop_cli_path(tmp_path: Path):
         layer="bff",
         prompt="noop",
         require_cli=False,
+        require_enforcement=False,
     )
     report = close_loop(
         spec_path=spec_path,
@@ -299,6 +304,7 @@ def test_devin_e2e_optional_live_cli(tmp_path: Path):
         prompt_file=prompt,
         timeout=120,
         auto_commit=True,
+        require_enforcement=False,
     )
     assert result.base_commit
     assert result.result_commit

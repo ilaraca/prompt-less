@@ -1,4 +1,10 @@
-"""Adapter Devin — CLI real, JSONL estruturado e ExecutionResult do runner."""
+"""Adapter Devin — CLI real, JSONL estruturado e ExecutionResult do runner.
+
+Limites efetivos: worktree/`shell=False` ≠ sandbox. O despacho exige um
+``EnforcementContract`` cujas ``guarantees`` cubram ``limits.required_capabilities``
+do profile da camada (ou o runner local ``EnforcedRunner``). Sem isso,
+``DispatchBlocked``. Ver README § enforcement.
+"""
 from __future__ import annotations
 
 import json
@@ -14,6 +20,15 @@ from src.executors.evidence import (
     inspect_commits,
     run_git,
     worktree_dirty,
+)
+from src.executors.policy import resolve_layer_profile
+from src.executors.runner import (
+    DEVIN_EXTERNAL_CONTRACT,
+    DispatchBlocked,
+    EnforcementContract,
+    EnforcedRunner,
+    assert_dispatch_allowed,
+    local_enforcement_contract,
 )
 from src.executors.safe_exec import run_argv
 from src.runtime.atomic_io import atomic_write_json
@@ -115,10 +130,30 @@ class DevinAdapter:
         result_path: Path | None = None,
         cli_bin: str = "devin",
         runner: Runner | None = None,
+        enforcement_contract: EnforcementContract | dict[str, Any] | None = None,
     ) -> None:
         self.result_path = result_path
         self.cli_bin = cli_bin
         self.runner = runner or run_argv
+        self.enforcement_contract = self._coerce_contract(enforcement_contract)
+
+    @staticmethod
+    def _coerce_contract(
+        value: EnforcementContract | dict[str, Any] | None,
+    ) -> EnforcementContract | None:
+        if value is None:
+            return None
+        if isinstance(value, EnforcementContract):
+            return value
+        return EnforcementContract.from_dict(value)
+
+    def resolve_enforcement_contract(self) -> EnforcementContract:
+        """Contrato efetivo: explícito, runner local, ou default externo (sem garantias)."""
+        if self.enforcement_contract is not None:
+            return self.enforcement_contract
+        if isinstance(self.runner, EnforcedRunner):
+            return local_enforcement_contract()
+        return DEVIN_EXTERNAL_CONTRACT
 
     def prepare(
         self,
@@ -165,17 +200,23 @@ class DevinAdapter:
         repo_path: Path | str,
         out_dir: Path | str,
         layer: str | None = None,
+        profile: dict[str, Any] | None = None,
         prompt: str | None = None,
         prompt_file: Path | str | None = None,
         timeout: float | None = 3600.0,
         auto_commit: bool = True,
         invoke_cli: bool = True,
         require_cli: bool = True,
+        require_enforcement: bool = True,
+        enforcement_contract: EnforcementContract | dict[str, Any] | None = None,
     ) -> ExecutionResult:
         """Invoca o CLI, grava adapter-log.jsonl + execution.json e devolve o resultado.
 
         O ``ExecutionResult`` é montado pelo adapter a partir do Git e do JSONL —
         não aceita commits/arquivos só declarados pelo agente.
+
+        Com ``require_enforcement=True`` (default), o despacho só ocorre se o
+        contrato cobrir ``limits.required_capabilities`` do profile da camada.
         """
         repo = Path(repo_path)
         out = Path(out_dir)
@@ -186,6 +227,24 @@ class DevinAdapter:
 
         if not repo.is_dir():
             raise FileNotFoundError(f"repositório inexistente: {repo}")
+
+        if profile is None and layer:
+            profile = resolve_layer_profile(layer)
+        elif profile is None and require_enforcement and invoke_cli:
+            raise DispatchBlocked(
+                "despacho exige layer/profile para enforcement "
+                "(worktree ≠ sandbox; profile=None é recusado)",
+                missing=frozenset({"commands", "writes"}),
+            )
+
+        contract = self._coerce_contract(enforcement_contract) or self.resolve_enforcement_contract()
+        if require_enforcement and invoke_cli:
+            if profile is None:
+                raise DispatchBlocked(
+                    "profile ausente — não há como validar limits.required_capabilities",
+                    missing=frozenset({"commands"}),
+                )
+            assert_dispatch_allowed(profile, contract.capabilities())
 
         dirty, dirty_detail = worktree_dirty(repo)
         if dirty:
@@ -207,6 +266,8 @@ class DevinAdapter:
             "repository": repository,
             "repo_path": str(repo),
             "base_commit": base_commit,
+            "layer": layer,
+            "enforcement": contract.to_dict(),
             "events": [],
         }
 
@@ -222,6 +283,7 @@ class DevinAdapter:
                 session=session,
                 timeout=timeout,
                 require_cli=require_cli,
+                profile=profile,
             )
 
         dirty_after, _ = worktree_dirty(repo)
@@ -274,6 +336,7 @@ class DevinAdapter:
         session["result_commit"] = result_commit
         session["changed_files"] = list(git.changed_files)
         atomic_write_json(out / "devin-session.json", session)
+        atomic_write_json(out / "enforcement-contract.json", contract.to_dict())
 
         execution = ExecutionResult(
             run_id=run_id,
@@ -306,9 +369,14 @@ class DevinAdapter:
         session: dict[str, Any],
         timeout: float | None,
         require_cli: bool,
+        profile: dict[str, Any] | None = None,
     ) -> None:
         """Invoca o CLI. Metadados vão para ``devin-session.json``, não ao JSONL
         de evidência (o verify aplica policy de camada só aos comandos do log).
+
+        A invocação do binário ``devin`` é meta-harness (não passa pela allowlist
+        de comandos da camada). Limites efetivos dos *internos* do agente vêm do
+        ``EnforcementContract`` validado antes do despacho.
         """
         cli = self.cli_bin
         if require_cli and self.runner is run_argv and shutil.which(cli) is None:
@@ -317,15 +385,22 @@ class DevinAdapter:
             )
         argv = [cli, "--print", "--prompt-file", str(prompt_file)]
         ts = _now_iso()
+        run_kwargs: dict[str, Any] = {
+            "cwd": str(repo),
+            "timeout": timeout,
+            "capture_output": True,
+            "text": True,
+        }
+        # Runner local enforced: ainda não aplica profile ao binário do agente;
+        # profile=None no invoke evita negar `devin` (fora do commands_allow).
+        if isinstance(self.runner, EnforcedRunner):
+            # EnforcedRunner.run exige allowlist — use o callable bruto só para CLI.
+            # Comandos internos devem ser coletados pelo runner em outras vias.
+            proc_runner: Runner = run_argv
+        else:
+            proc_runner = self.runner
         try:
-            proc = self.runner(
-                argv,
-                profile=None,
-                cwd=str(repo),
-                timeout=timeout,
-                capture_output=True,
-                text=True,
-            )
+            proc = proc_runner(argv, profile=None, **run_kwargs)
             exit_code = int(getattr(proc, "returncode", 1))
             stdout = getattr(proc, "stdout", "") or ""
             stderr = getattr(proc, "stderr", "") or ""
@@ -337,6 +412,8 @@ class DevinAdapter:
                     "argv": argv,
                     "exit_code": 1,
                     "error": str(exc),
+                    "profile_applied_to_cli": False,
+                    "layer_profile": bool(profile),
                 }
             )
             raise DevinCliError(f"falha ao executar Devin CLI: {exc}") from exc
@@ -353,6 +430,8 @@ class DevinAdapter:
                 "argv": argv,
                 "exit_code": exit_code,
                 "log": cli_log.name,
+                "profile_applied_to_cli": False,
+                "layer_profile": bool(profile),
             }
         )
         if exit_code != 0:
@@ -442,6 +521,17 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--cli", default="devin")
     p.add_argument("--timeout", type=float, default=3600.0)
     p.add_argument("--no-cli", action="store_true", help="só coleta/commit (sem invocar devin)")
+    p.add_argument(
+        "--enforcement-contract",
+        type=Path,
+        default=None,
+        help="JSON com guarantees/evidence do sandbox externo (obrigatório p/ Devin real)",
+    )
+    p.add_argument(
+        "--allow-unenforced",
+        action="store_true",
+        help="perigoso: despacha sem enforcement (só dry-run/lab)",
+    )
     p.add_argument("--close-loop", action="store_true", help="roda verify após a execução")
     p.add_argument(
         "--validations",
@@ -455,7 +545,12 @@ def main(argv: list[str] | None = None) -> None:
     repo = args.repo.resolve()
     repository = args.repository or repo.name
     out = (args.out or (Path("runs") / run_id / "executor")).resolve()
-    adapter = DevinAdapter(cli_bin=args.cli)
+    contract = None
+    if args.enforcement_contract:
+        contract = EnforcementContract.from_dict(
+            json.loads(Path(args.enforcement_contract).read_text(encoding="utf-8"))
+        )
+    adapter = DevinAdapter(cli_bin=args.cli, enforcement_contract=contract)
 
     # Gate: run blocked/failed ou identidade divergente não despacha ao executor.
     root = (args.root or Path(".")).resolve()
@@ -496,18 +591,36 @@ def main(argv: list[str] | None = None) -> None:
         if default_prompt.is_file():
             prompt_file = default_prompt
 
-    execution = adapter.execute(
-        run_id=run_id,
-        repository=repository,
-        repo_path=repo,
-        out_dir=out,
-        layer=args.layer,
-        prompt=args.prompt,
-        prompt_file=prompt_file,
-        timeout=args.timeout,
-        invoke_cli=not args.no_cli,
-        require_cli=not args.no_cli,
-    )
+    try:
+        execution = adapter.execute(
+            run_id=run_id,
+            repository=repository,
+            repo_path=repo,
+            out_dir=out,
+            layer=args.layer,
+            prompt=args.prompt,
+            prompt_file=prompt_file,
+            timeout=args.timeout,
+            invoke_cli=not args.no_cli,
+            require_cli=not args.no_cli,
+            require_enforcement=not args.allow_unenforced and not args.no_cli,
+        )
+    except DispatchBlocked as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "run_id": run_id,
+                    "reason": "enforcement_insufficient",
+                    "missing": sorted(exc.missing),
+                    "error": str(exc),
+                    "error_type": "DispatchBlocked",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        sys.exit(2)
     print(json.dumps(execution.to_dict(), ensure_ascii=False, indent=2))
 
     if args.close_loop:

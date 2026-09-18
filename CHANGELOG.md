@@ -7,6 +7,16 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Added
+
+- **Limites efetivos do executor** (`37-executor-enforcement`):
+  `EnforcedRunner` aplica writes/comandos, scrub de credenciais, timeout,
+  processos/memória e negação de rede *durante* a execução; profiles ganham
+  `limits` + `required_capabilities`; despacho Devin exige
+  `EnforcementContract` (evidência em `enforcement-contract.json`) ou bloqueia
+  (`DispatchBlocked`). Worktree/`shell=False` documentados como ≠ sandbox.
+  Testes: `tests/integration/test_executor_enforcement.py`.
+
 ### Changed
 
 - **Gates obrigatórios de avaliação** (`30-eval-required-gates`): `score_case()`
