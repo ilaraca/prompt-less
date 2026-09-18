@@ -1169,11 +1169,14 @@ executor é relato: `changed_files` sai de `git diff` entre `base_commit` e
 precisa ter sido **executado pelo harness** (`executed_by=harness`) com
 comando, `exit_code`, timestamp, artefato/log e binding
 (`run_id`/repositório/commits/`spec_hash`). `passed=True` do sidecar do
-agente **não** basta. Divergência entre relato e evidência é erro
-(`EVIDENCE_DIVERGENCE`). Log ausente, incompleto, adulterado ou de outra run
-reprova (`TEST_NOT_EVIDENCED` / `TEST_EVIDENCE_TAMPERED` /
-`TEST_EVIDENCE_BINDING`). AC obrigatório exige prova comportamental — locator
-de arquivo sozinho gera `AC_WITHOUT_BEHAVIORAL_EVIDENCE`. O
+agente **não** basta — e `kind`/`covers` também não: o comando precisa ser
+um runner de teste reconhecido (pytest, `./mvnw test`, etc.); `git diff` ou
+outra inspeção autorizada com exit 0 **não** prova aceite. Divergência entre
+relato e evidência é erro (`EVIDENCE_DIVERGENCE`). Log ausente, incompleto,
+adulterado ou de outra run reprova (`TEST_NOT_EVIDENCED` /
+`TEST_EVIDENCE_TAMPERED` / `TEST_EVIDENCE_BINDING`). AC obrigatório exige
+prova comportamental — locator de arquivo sozinho gera
+`AC_WITHOUT_BEHAVIORAL_EVIDENCE`. O
 `verify-report.json` inclui `evidence_hashes` (SHA-256 do diff, do log e dos
 artefatos de teste, com HMAC reusando `PROMPTLESS_INTEGRITY_KEY`) e
 `test_kinds` separando `e2e` / `unit` / `stub_or_skip`.
@@ -1210,8 +1213,9 @@ Pedido de reparo (`build_repair_request` / `--attempt`):
 
 O adapter Devin materializa evidência de teste **reexecutando** as sugestões
 do sidecar (`docs/prompt-less/execution-result.json`) via o mesmo runner
-controlado pelo harness; stub/skip são registrados mas não contam como
-passe.
+controlado pelo harness (`run_argv` ou `EnforcedRunner`, ambos invocáveis
+com a mesma forma); stub/skip e comandos sem runner de teste são
+registrados mas não contam como passe.
 
 ### Aprovação auditável (`src.approval`)
 
