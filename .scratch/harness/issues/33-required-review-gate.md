@@ -1,8 +1,9 @@
 # 33-required-review-gate
 
-**Kanban:** Feedback  
+**Kanban:** Done  
 
-> Ajuste pós-reabertura (2026-09-18). Aguardando review humana → Done.
+> Aprovado por humano em 2026-09-18 (`pode seguir`). Ajuste pós-reabertura
+> integrado no pai. Não reabre worktree filha.
 **Blocked by:** —  
 **Prioridade:** P0.2
 
@@ -12,9 +13,9 @@
 
 ## Comportamento
 
-`requires_review=True` exige decisão humana explícita. A decisão inclui
-fingerprint do **conteúdo** do RF/AC/erro (além de claim + versão de
-schema); mudança de texto com mesmos IDs invalida (`REQUIRED_REVIEW_STALE`).
+`requires_review=True` exige decisão humana. A decisão inclui fingerprint do
+**conteúdo** do RF/AC/erro; mudança de texto com mesmos IDs →
+`REQUIRED_REVIEW_STALE`.
 
 ## Aceite
 
@@ -26,31 +27,23 @@ schema); mudança de texto com mesmos IDs invalida (`REQUIRED_REVIEW_STALE`).
 
 ## Código
 
-`src/domain/review.py`, `src/validators/__init__.py`, testes de provenance.
-README + CHANGELOG.
+`src/domain/review.py`, `src/validators/__init__.py`, testes. README + CHANGELOG.
 
 ## Implementation note
 
-**HEAD:** `4db3fa1` · `feature/required-review-gate` · worktree
-`.worktrees/33-required-review-gate` (rebaseada em `origin/main` `221e032`).
-Sem push / sem PR da filha.
+**HEAD:** `4db3fa1` · `feature/required-review-gate`. Integrado no pai
+(`edd976b`). Sem push / sem PR da filha.
 
 **O que shipou (ajuste)**
-- `ReviewDecision.reviewed_subject_fingerprint` — hash do texto do
-  requisito/aceite/erro revisado.
-- Alterar conteúdo com mesmos IDs/claim/`spec.version` →
-  `REQUIRED_REVIEW_STALE`.
-- Teste de regressão em `test_contextual_provenance.py`.
-- README + CHANGELOG `[Unreleased]` atualizados.
+- `reviewed_subject_fingerprint` no `ReviewDecision`.
+- Conteúdo alterado com mesmos IDs/claim/`spec.version` → STALE.
+- README + CHANGELOG atualizados.
 
 **Como verificar**
 
 ```bash
-cd .worktrees/33-required-review-gate
+cd .worktrees/onda-merge
 PROMPTLESS_INTEGRITY_KEY=test-integrity-key-not-for-prod \
   PYTHONPATH=. ../../pipeline/.venv/bin/python -m pytest \
   tests/integration/test_contextual_provenance.py -q
-# → 20 passed
 ```
-
-**Pare.** Aguardando review humana → Done. Depois: merge no pai; liberar 35/37.

@@ -1,8 +1,9 @@
 # 30-eval-required-gates
 
-**Kanban:** Feedback  
+**Kanban:** Done  
 
-> Ajuste pós-reabertura (2026-09-18). Aguardando review humana → Done.
+> Aprovado por humano em 2026-09-18 (`pode seguir`). Ajuste pós-reabertura
+> integrado no pai. Não reabre worktree filha.
 **Blocked by:** —  
 **Prioridade:** P0.1
 
@@ -30,28 +31,19 @@ Separar diagnóstico de aprovação em `score_case()`: dimensões obrigatórias
 ## Implementation note
 
 **HEAD:** `3cf8149` · `feature/eval-required-gates`
-(worktree `.worktrees/30-eval-required-gates`, rebaseada em `origin/main`
-`221e032`). Sem push / sem PR da filha.
+(worktree `.worktrees/30-eval-required-gates`). Integrado no pai
+(`ae897b6` / `edd976b`). Sem push / sem PR da filha.
 
 **O que shipou (ajuste)**
-- Gate `traceable`: `_source_ref_valid` / `_claim_has_valid_sources` —
-  `document` não vazio e `start_line` ≤ `end_line`.
-- Regressões: claim sem fonte e fonte inválida com manifesto íntegro →
-  `passed=False`, `fail_reasons` inclui `traceable`.
-- README + CHANGELOG `[Unreleased]` atualizados.
+- Gate `traceable`: SourceRef com `document` não vazio e linhas válidas.
+- Regressões: claim sem fonte / fonte inválida + manifesto íntegro →
+  `passed=False`.
+- README + CHANGELOG atualizados.
 
 **Como verificar**
 
 ```bash
-cd .worktrees/30-eval-required-gates
+cd .worktrees/onda-merge
 PYTHONPATH=. ../../pipeline/.venv/bin/python -m pytest \
-  tests/integration/test_eval_required_gates.py \
-  tests/integration/test_eval_run_selection.py \
-  tests/integration/test_candidate_evals.py \
-  tests/integration/test_learning.py -q
-# → 52 passed (focado required_gates: 11 passed)
+  tests/integration/test_eval_required_gates.py -q
 ```
-
-**Residual:** `pip_audit` neste ambiente (Python 3.9 vs `build==1.6.1`).
-
-**Pare.** Aguardando review humana → Done. Depois: merge no pai; liberar 35/37/39.

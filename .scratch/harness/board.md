@@ -207,12 +207,12 @@ Os HEADs registrados preservam o histórico da entrega inicial.
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 30-eval-required-gates | **Feedback** | filha, HEAD `3cf8149` | `.worktrees/30-eval-required-gates` · `feature/eval-required-gates` |
+| 30-eval-required-gates | **Done** | filha, HEAD `3cf8149` | `.worktrees/30-eval-required-gates` · `feature/eval-required-gates` |
 | 31-eval-run-selection | **Done** | filha, HEAD `78c763a` | `.worktrees/31-eval-run-selection` · `feature/eval-run-selection` |
 | 32-eval-typed-http | **Done** | filha, HEAD `59b7e87` | `.worktrees/32-eval-typed-http` · `feature/eval-typed-http` |
-| 33-required-review-gate | **Feedback** | filha, HEAD `4db3fa1` | `.worktrees/33-required-review-gate` · `feature/required-review-gate` |
+| 33-required-review-gate | **Done** | filha, HEAD `4db3fa1` | `.worktrees/33-required-review-gate` · `feature/required-review-gate` |
 | 34-cli-failure-exit | **Done** | filha, HEAD `addea9a` | `.worktrees/34-cli-failure-exit` · `feature/cli-failure-exit` |
-| (pai) onda-frontier | — | P0 integrado @ `87487fd` | `.worktrees/onda-merge` · `feature/onda-frontier` |
+| (pai) onda-frontier | — | ajustes 30/33 @ `edd976b` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
 ### Onda F — Série 4 P1 / regressão (**integrada** no pai)
 
@@ -220,9 +220,9 @@ Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 35-independent-test-evidence | **Todo** | filha, HEAD `36bcbc3` | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
+| 35-independent-test-evidence | **In progress** | filha (ajuste) | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
 | 36-repair-policy | **Done** | filha, HEAD `fb4f0bc` | `.worktrees/36-repair-policy` · `feature/repair-policy` |
-| 37-executor-enforcement | **Todo** | filha, HEAD `e4d458b` | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
+| 37-executor-enforcement | **In progress** | filha (ajuste) | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
 | 39-case-regression-gates | **Todo** | filha, HEAD `e453a3d` | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
 | (pai) onda-frontier | — | P1 integrado @ `b8f9b7d` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
@@ -253,14 +253,14 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 
 | ID | Prioridade | Título | Kanban | Blocked by |
 |----|------------|--------|--------|------------|
-| 30-eval-required-gates | P0.1 | Gates obrigatórios de spec, artefatos e rastreabilidade | **Feedback** | — |
+| 30-eval-required-gates | P0.1 | Gates obrigatórios de spec, artefatos e rastreabilidade | **Done** | — |
 | 31-eval-run-selection | P0.1 | Seleção de resultados por run e manifesto | **Done** | — |
 | 32-eval-typed-http | P0.1 | HTTP tipado por serviço e operação | **Done** | — |
-| 33-required-review-gate | P0.2 | Revisão obrigatória bloqueante e auditável | **Feedback** | — |
+| 33-required-review-gate | P0.2 | Revisão obrigatória bloqueante e auditável | **Done** | — |
 | 34-cli-failure-exit | P0.3 | Exit code de falha e bloqueio de consumo | **Done** | — |
-| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **Todo** | 30, 31, 32, 33, 34 |
+| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **In progress** | 30, 31, 32, 33, 34 |
 | 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Done** | 30, 31, 32, 33, 34 |
-| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Todo** | 30, 31, 32, 33, 34 |
+| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **In progress** | 30, 31, 32, 33, 34 |
 | 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | **Todo** | 35, 36, 37 |
 | 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **Todo** | 30, 31, 32 |
 
@@ -299,7 +299,7 @@ com reparação quando necessária, falha inequívoca e métricas registradas.
 
 ### 30 — Gates obrigatórios de avaliação
 
-**Status atual: Feedback — ajuste pós-reabertura (`3cf8149`).**
+**Status atual: Done — ajuste pós-reabertura integrado no pai (`3cf8149` → `edd976b`).**
 
 **Revisão de 2026-09-18 — ajuste pendente:** o gate de artefatos foi corrigido, mas uma execução selada com claim sem `SourceRef` ainda recebeu `passed=True`. Validar integralmente a spec e as fontes; existência do ID do claim não basta.
 
@@ -323,7 +323,7 @@ Casos de bloqueio esperado devem validar também a causa esperada.
 
 **Código:** `src/learning/evals.py` e testes de avaliação.
 
-**Kanban:** Feedback · HEAD filha `3cf8149` · ver
+**Kanban:** Done · HEAD filha `3cf8149` · integrado no pai · ver
 `issues/30-eval-required-gates.md` § Implementation note.
 
 ### 31 — Seleção por execução
@@ -366,7 +366,7 @@ vinculados à operação. Texto livre não serve como prova do contrato.
 
 ### 33 — Revisão obrigatória bloqueante
 
-**Status atual: Feedback — ajuste pós-reabertura (`4db3fa1`).**
+**Status atual: Done — ajuste pós-reabertura integrado no pai (`4db3fa1` → `edd976b`).**
 
 **Revisão de 2026-09-18 — ajuste pendente:** após aprovar os vínculos, alterar o texto do requisito manteve a validação sem erros. `spec.version` permanece `1.0` e o fingerprint do claim não cobre o conteúdo do requisito.
 
@@ -391,7 +391,7 @@ Confiança numérica não substitui evidência nem aprovação humana.
 
 **Código:** `src/validators/__init__.py`, modelo de revisão e testes de provenance.
 
-**Kanban:** Feedback · HEAD filha `4db3fa1` · ver
+**Kanban:** Done · HEAD filha `4db3fa1` · integrado no pai · ver
 `issues/33-required-review-gate.md` § Implementation note.
 
 ### 34 — Falha inequívoca na CLI
