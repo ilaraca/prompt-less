@@ -1,0 +1,8 @@
+fluxo: Cadastro de Cliente
+bloqueios:
+  - trigger: CPF inválido
+    status: 400
+    code: CPF_INVALIDO
+decisoes:
+  - quando: cliente ativo e payload válido
+    entao: persistir e retornar 200

@@ -47,6 +47,27 @@ def test_compare_evals_detects_regression():
     assert cmp2["regression"] is True
 
 
+def test_compare_evals_rejects_critical_case_regression():
+    baseline = {
+        "summary": {"pass_rate": 0.5, "avg_est_tokens": 100, "claim_recall": 1.0},
+        "cases": [
+            {"case_id": "happy_path", "ok": False, "critical": False},
+            {"case_id": "access_denied", "ok": True, "critical": True},
+        ],
+    }
+    candidate = {
+        "summary": {"pass_rate": 0.5, "avg_est_tokens": 90, "claim_recall": 1.0},
+        "cases": [
+            {"case_id": "happy_path", "ok": True, "critical": False},
+            {"case_id": "access_denied", "ok": False, "critical": True},
+        ],
+    }
+    cmp = compare_evals(baseline, candidate)
+    assert cmp["critical_regression"] is True
+    assert cmp["decision"] == "reject"
+    assert any("access_denied" in r for r in cmp["reasons"])
+
+
 def test_decide_rejects_on_regression(tmp_path: Path):
     proposals = [
         {
@@ -57,14 +78,23 @@ def test_decide_rejects_on_regression(tmp_path: Path):
         }
     ]
     comparison = {"regression": True, "decision": "reject", "reasons": ["pass_rate_decreased"]}
-    result = decide_proposals(proposals, comparison, root=tmp_path)
+    result = decide_proposals(
+        proposals,
+        comparison,
+        root=tmp_path,
+        apply_result={"status": "applied", "applied_ids": ["PROP-1"], "diff": "--- a\n+++ b\n"},
+    )
     assert result["accepted"] == []
+    assert result["approved_for_experiment"] == []
     assert result["rejected"]
+    assert result["applied_to_candidate"]
     hist = load_history(tmp_path)
     assert len(hist["rejected"]) >= 1
+    assert hist["rejected"][0].get("diff")
+    assert "metrics" in hist["rejected"][0]
 
 
-def test_decide_accepts_low_risk_without_regression(tmp_path: Path):
+def test_decide_unapplied_never_gets_proven_status(tmp_path: Path):
     proposals = [
         {
             "id": "PROP-2",
@@ -73,13 +103,57 @@ def test_decide_accepts_low_risk_without_regression(tmp_path: Path):
             "change": {"key": "approval.auto", "value": False},
         }
     ]
-    comparison = {"regression": False, "decision": "accept", "reasons": []}
+    comparison = {
+        "regression": False,
+        "critical_regression": False,
+        "improved": True,
+        "decision": "accept",
+        "reasons": [],
+        "metrics": {"claim_recall": {"baseline": 0.5, "candidate": 1.0, "delta": 0.5}},
+    }
     result = decide_proposals(proposals, comparison, root=tmp_path)
-    assert len(result["approved_for_experiment"]) == 1
-    assert result["approved_for_experiment"][0]["status"] == "approved_for_experiment"
-    assert result["rejected"] == []
-    # alias legado
+    assert result["accepted"] == []
+    assert result["approved_for_experiment"] == []
+    assert result["rejected"][0]["status"] == "rejected"
+    assert "proposal_not_applied" in result["rejected"][0]["reason"]
+
+
+def test_decide_accepts_applied_low_risk_with_improvement(tmp_path: Path):
+    proposals = [
+        {
+            "id": "PROP-2",
+            "playbook": "human_gate",
+            "risk": "low",
+            "change": {"key": "approval.auto", "value": False},
+        }
+    ]
+    comparison = {
+        "regression": False,
+        "critical_regression": False,
+        "improved": True,
+        "decision": "accept",
+        "reasons": [],
+        "metrics": {"claim_recall": {"baseline": 0.5, "candidate": 1.0, "delta": 0.5}},
+        "workspaces": {
+            "baseline": {"path": "/b", "workspace_commit": "aaa"},
+            "candidate": {"path": "/c", "workspace_commit": "bbb"},
+            "distinct": True,
+        },
+    }
+    result = decide_proposals(
+        proposals,
+        comparison,
+        root=tmp_path,
+        apply_result={"status": "applied", "applied_ids": ["PROP-2"], "diff": "+overlay"},
+    )
     assert len(result["accepted"]) == 1
+    assert result["accepted"][0]["status"] == "accepted"
+    assert result["applied_to_candidate"][0]["status"] == "applied_to_candidate"
+    assert result["evaluated"][0]["status"] == "evaluated"
+    assert result["rejected"] == []
+    hist = load_history(tmp_path)
+    assert hist["accepted"][0]["diff"] == "+overlay"
+    assert hist["accepted"][0]["metrics"]["claim_recall"]["delta"] == 0.5
 
 
 def test_eval_suite_smoke(tmp_path: Path):

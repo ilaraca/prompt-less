@@ -1,0 +1,5 @@
+## Serviço: ms-cliente
+REGRA — cliente ativo com payload válido → HTTP 200
+endpoint POST /clientes requestBody nome email cpf
+Dado cliente autenticado Quando cadastro válido Então status 200
+bloqueio CPF inválido → HTTP 400

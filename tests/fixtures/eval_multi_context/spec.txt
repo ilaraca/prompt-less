@@ -1,0 +1,10 @@
+## Serviço: ms-cliente
+REGRA bloqueio — CPF inválido retornar HTTP 400
+endpoint POST /clientes requestBody nome cpf
+Dado cliente ativo Quando cadastro válido Então status 200
+
+## Serviço: ms-pagamento
+REGRA — saldo negativo → HTTP 422
+endpoint POST /pagamentos pix
+Dado pagamento pendente Quando confirmar PIX Então status 200
+auth ausente → HTTP 401

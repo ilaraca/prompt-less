@@ -1,6 +1,7 @@
 case_id: ambiguous_status
 tipo: historia
 split: true
+critical: true
 expect_blocked: true
 services:
   - ms-cliente
