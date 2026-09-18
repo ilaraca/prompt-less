@@ -1218,7 +1218,7 @@ Fora deste ticket: scan de dependência no CI (`25`), cadeia tamper-evident (`19
 
 ### Plano multi-repo (`plan_repos`)
 
-O plano usa **dependências observadas** (OpenAPI clients, imports, URLs, eventos, arquivos de build e contratos do Canonical Spec). Cada aresta tem `from`, `to`, tipo, arquivo/símbolo, confiança e o **motivo**. Topologia por camada permanece só como fallback `origin: heuristic` + `requires_review`. Ciclos, contratos ausentes e repositório compartilhado sem `coordenacao` bloqueiam o scheduler. `ready_for_parallel_execution` exige `--reviewed` e ausência de conflito — a execução concorrente em si é o ticket `13`.
+O plano usa **dependências observadas** (OpenAPI clients, imports, URLs, eventos, arquivos de build e contratos do Canonical Spec). Cada aresta tem `from`, `to`, tipo, arquivo/símbolo, confiança e o **motivo**. Topologia por camada permanece só como fallback `origin: heuristic` + `requires_review`. Ciclos, contratos ausentes e repositório compartilhado sem `coordenacao` bloqueiam o scheduler. `ready_for_parallel_execution` exige `--reviewed` e ausência de conflito.
 
 ```bash
 .venv/bin/python -m src.plan_repos
@@ -1226,6 +1226,26 @@ O plano usa **dependências observadas** (OpenAPI clients, imports, URLs, evento
 .venv/bin/python -m src.plan_repos --workspace ~/dev/repos --spec runs/<id>/artifacts/canonical-spec.yaml --reviewed
 # → implementation_plan.yaml + .json (dependencies, ondas, cycles, scheduler_blockers)
 ```
+
+#### Execução por ondas (`parallel_exec`)
+
+Com o plano revisado, o scheduler consome `waves` e roda até N adapters em paralelo
+(semáforo configurável). Relatório agregado por repositório; falha numa task **não**
+apaga os resultados das irmãs da mesma onda. O state em arquivo aceita
+compare-and-set + lock (Redis continua parqueado em `12b`).
+
+```bash
+# inspeciona ondas sem executar
+.venv/bin/python -m src.parallel_exec --plan runs/plan/implementation_plan.json --dry-run
+
+# smoke do scheduler (runner stub; não chama Devin)
+.venv/bin/python -m src.parallel_exec --plan runs/plan/implementation_plan.json \
+  --stub --max-concurrency 2 --out runs/parallel/ --state state/parallel-exec.json
+# → runs/parallel/parallel-report.json
+```
+
+Injeção de adapter real: `run_plan_waves(plan, adapter=…, max_concurrency=N)` em
+`src.executors.scheduler` (ex.: wrapping do `DevinAdapter` do ticket `10`).
 
 ### Autoaperfeiçoamento (`improve`)
 
@@ -1312,19 +1332,21 @@ pipeline/
     ├── apply.py                   # apply em config + snapshot/rollback
     ├── run.py                     # pipeline + Canonical Spec + runtime
     ├── close_loop.py              # verify por evidência (Git + logs) / repair
+    ├── parallel_exec.py           # scheduler CLI: ondas + semáforo + relatório
     ├── approval.py                # request-approval / approve / promote (HMAC)
     ├── plan_repos.py              # implementation_plan multi-repo
     ├── improve.py                 # diagnose → propose → eval → gate
     ├── ingest.py / docs_ingest.py / preprocess.py / engenharia.py
     ├── servicos.py / marcar.py / repo_index.py
-    ├── state_store.py / doc_compress.py / rag_compress.py
+    ├── state_store.py             # workflow state + CAS/lock (file; redis=12b)
+    ├── doc_compress.py / rag_compress.py
     ├── context_builder.py / reason.py / emit.py / economia.py
     ├── domain/                    # Claim, SourceRef, DocumentChunk, CanonicalSpec
     ├── runtime/                   # RunContext, RunStore, EventStore, atomic_io, approval
     ├── spec/                      # builder do IR
     ├── validators/                # quality gate
     ├── renderers/                 # história/PRD/OpenAPI/Mermaid/SDD a partir do IR
-    ├── executors/                 # policy, verify, evidence (Git+logs), loop, Devin, safe_exec
+    ├── executors/                 # policy, verify, evidence, loop, Devin, scheduler, safe_exec
     ├── hardening/                 # debugger, input scan, claim tools, recall
     ├── planning/                  # grafo observado, camadas (fallback), plan
     └── learning/                  # evals, proposals, accept, failure_patterns
@@ -1573,7 +1595,8 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 - Sem `repo_index`, história/PRD declaram *índice não aplicado* e não afirmam
   “sem gaps”; heurística nunca é apresentada como fato
 - Plano multi-repo sem evidência de código cai na topologia por camada
-  (`origin: heuristic`, exige revisão); execução paralela das ondas ainda não roda (ticket `13`)
+  (`origin: heuristic`, exige revisão); o scheduler de ondas (`13`) já roda com
+  adapter injetável / `--stub` — wiring Devin-por-task no CLI ainda é manual
 - O pacote SDD lê o grafo multi-repo observado quando há evidência; fallback
   heurístico continua `requires_review`. NFRs são selecionados por camada +
   criticidade (`28`); tasks recebem o subconjunto da sua `layer`
@@ -1581,11 +1604,12 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   por substring — falso positivo/negativo possível; gap `GAP-NFR-*` marca origem
   `heuristic` quando o baseline exige e o código não mostra sinal (`28`)
 - Alertas/ADRs/bulkhead ainda não entram no catálogo v2
-- Tasks do SDD ainda não são despachadas automaticamente pelo grafo de ondas
-  (`13`); o handoff Devin é via script/CLI do `10`
+- Tasks do SDD usam o grafo de ondas no pacote; despacho Devin automático por
+  task no CLI de `parallel_exec` ainda exige adapter injetado (não o stub)
 - Resumo de docs é **extrativo por regex**, não LLM small (bom custo; pode perder nuance)
 - Tokenizer oficial cobre OpenAI via `tiktoken`; Anthropic/Gemini e ausência da lib usam heurística `chars÷4` (`method=heuristic`), nunca como contagem exata
-- State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
+- State backend: **arquivo** com compare-and-set/lock (`13`); `redis` previsto no
+  YAML permanece parqueado (`12b`)
 - Branch protection em `main` **não** está ligada no GitHub (ver [Gates de qualidade](#gates-de-qualidade)); o workflow já é required-ready
 - Timeout de estágio é best-effort (thread); o handler pode continuar em background após o teto
 - Estágios opcionais (`repos_scan`, `repo_index`, `marcar`) existem no YAML mas ficam desligados no default
@@ -1594,8 +1618,8 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 
 **Próximos passos (série 2 — ver CHANGELOG [Unreleased])**
 
-1. Redis opcional (state backend) (`12b`)
-2. Execução concorrente por ondas (`13`)
+1. Redis opcional (state backend) (`12b`) — CAS/lock no file já entregue no `13`
+2. Wiring Devin-por-task no CLI de `parallel_exec` (além de `--stub` / adapter injetado)
 3. Client `--live` para Gemini / endurecer o agent loop de tools
 4. Embeddings opcionais na 2ª camada de retrieval (hoje sinônimos locais)
 5. Alertas / ADRs / bulkhead no catálogo de engenharia (extensão do `28`)

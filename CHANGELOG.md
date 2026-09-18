@@ -9,6 +9,16 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Execução concorrente por ondas** (`13-parallel-exec`): scheduler
+  `src/executors/scheduler.py` consome `waves` do `implementation_plan`, limita
+  N tasks com semáforo (`--max-concurrency`) e agrega `ExecutionResult` + verify
+  por repositório; falha numa task **não** apaga resultados das irmãs da onda
+- CLI `python -m src.parallel_exec --plan … [--max-concurrency N] [--dry-run|--stub]`
+  grava `parallel-report.json`; state file backend ganha compare-and-set + lock
+  (`FileStateBackend`, sem Redis/`12b`)
+- Testes com adapter fake paralelo:
+  `tests/integration/test_parallel_exec.py`
+
 - **Devin CLI real no close_loop** (`10-devin-e2e`): `DevinAdapter.execute`
   invoca `devin --print --prompt-file …`, grava `adapter-log.jsonl` (comandos
   de build/teste) + `devin-session.json` (metadados da sessão), commit automático
