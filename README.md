@@ -253,8 +253,10 @@ Estimativa de tokens: `len(texto) // 4` (heurística, não tokenizer oficial).
 **Papel:** preparar a geração, sem prosa na saída.
 
 - **`build_llm_package`**: gera JSON dual:
-  - `openai`: `instructions` + `input` + `store: true` (encadeamento futuro via `previous_response_id`)
-  - `claude`: `system` com `cache_control: ephemeral` + `messages`
+  - `openai`: `instructions` + `input` + `store: true` + tools `search_claims` / `get_claim`
+  - `claude`: `system` com `cache_control: ephemeral` + `messages` + as mesmas tools
+  - `tools`: contrato neutro das duas functions de recovery sobre claims da run
+- Antes de montar o pacote, o estágio `reason` varre inputs não confiáveis (secrets, PII heurística, instruções suspeitas). Achado `error` **bloqueia** a run (`reason: input_scan_failed`) e grava `validations/input-scan.json` — não engole o achado.
 - **`src/renderers/`**: com Canonical Spec disponível, os quatro artefatos são renderizados do IR (`render_historia`, `render_prd`, `render_openapi`, `render_mermaid`).
 - **`dry_run_scaffold`**: fallback legado (sem IR) que preenche o template localmente, sem API.
 - Na história/PRD, o render usa o IR + **`engenharia`** + `consolidated` (RF/AC + stack/NFR + handoff SDD).
@@ -1030,13 +1032,31 @@ Fecha o loop **spec × ExecutionResult × policy de camada**:
 
 Policy (`config/permission_profiles.yaml` + `src/executors/policy.py`):
 
-- writes/comandos allow/deny por camada (`bff`, `api`, `mfe`, …)
-- comandos parseados como argv (`shlex`); `&&` / `;` / `||` negam
-- paths normalizados (`normalize_repo_path`) — rejeita absoluto e `..`
+- writes/comandos allow/deny por camada (`bff`, `api`, `mfe`, `gtw`, `worker`, `batch`)
+- camada ausente no YAML → fail-closed (`UNKNOWN_EXECUTION_LAYER`)
+- comandos parseados como argv (`shlex`); `&&` / `;` / `||` / backticks negam
+- allowlist **semântica**: tokens exatos do executable + args; path extra passa por `realpath`/normalize
+- paths: `normalize_repo_path` rejeita absoluto e `..`; com `repo_root`, symlink que escapa o repo é recusado
+- execução nova vai por `src/executors/safe_exec.run_argv` — `shell=True` é erro
 - verify fail-closed para layer desconhecido; `NO_TESTS_REPORTED` é error em code change
 - `FILE_OUT_OF_SCOPE` → `required_reverts` (não amplia `editable_surface`)
 
+O `close_loop` também grava `debugger.json` ao lado do `verify-report.json` (e a pipeline grava `runs/<id>/validations/debugger.json` em blocked/failed). Campos: `failure`, `agent_behavior`, `harness_component`, `root_cause`.
+
 O adapter Devin (`src/executors/devin.py`) é stub até o ticket E2E da série 2.
+
+### Hardening (`src/hardening/`)
+
+Camada de confiança da run, **antes** do `--live`:
+
+| Peça | Onde | Efeito |
+|---|---|---|
+| Agent Debugger | `validations/debugger.json` | separa falha do executor, da spec e do harness |
+| Scan de inputs | `validations/input-scan.json` | secrets / PII / injection; error = fail-closed |
+| Recovery de claims | tools no `llm_package` | `search_claims(query, service_id?)`, `get_claim(claim_id)` |
+| Golden recall | `tests/fixtures/golden/expected_claims.yaml` | o teste falha se o recall dos claims anotados cair |
+
+Fora deste ticket: scan de dependência no CI (`25`), cadeia tamper-evident (`19`), clientes OpenAI/Claude (`09`).
 
 ### Plano multi-repo (`plan_repos`)
 
@@ -1058,11 +1078,11 @@ Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`
 ### Evals e testes
 
 ```bash
-.venv/bin/pytest -v --tb=short
-# esperado: 97 passed
+.venv/bin/pytest -q --tb=short
+# esperado: 150 passed
 ```
 
-Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services) e goldens de artefato derivado em `tests/fixtures/golden/` (`openapi.yaml`, `sequence.mmd`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`. CI em `.github/workflows/ci.yml` (compileall + YAML de profiles + pytest + smoke `plan_repos`).
+Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`. CI em `.github/workflows/ci.yml` (compileall + YAML de profiles + pytest + smoke `plan_repos`).
 
 ---
 
@@ -1114,7 +1134,8 @@ pipeline/
     ├── spec/                      # builder do IR
     ├── validators/                # quality gate
     ├── renderers/                 # história/PRD/OpenAPI/Mermaid a partir do IR
-    ├── executors/                 # policy, verify, loop, Devin adapter
+    ├── executors/                 # policy, verify, loop, Devin adapter, safe_exec
+    ├── hardening/                 # debugger, input scan, claim tools, recall
     ├── planning/                  # grafo, camadas, plan
     └── learning/                  # evals, proposals, accept, failure_patterns
 ```
@@ -1278,17 +1299,21 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
 - Timeout de estágio é best-effort (thread); o handler pode continuar em background após o teto
 - Estágios opcionais (`repos_scan`, `repo_index`, `marcar`) existem no YAML mas ficam desligados no default
+- Scan de inputs é heurístico (regex); não substitui secret manager nem DLP
+- PII de baixa confiança (e-mail/telefone) só registra warning — não bloqueia sozinha
+- Cadeia tamper-evident de provenance não entra aqui (ticket `19`)
+- CI ainda não faz scan de dependência / supply chain (ticket `25`)
 
 **Próximos passos (série 2 — ver CHANGELOG [Unreleased])**
 
-1. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`)
+1. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`) — consome as tools já no pacote
 2. Devin CLI real no `close_loop`
 3. Tokenizer oficial + Redis opcional
 4. Execução concorrente por ondas + apply/rollback de propostas
-5. Hardening profundo (debugger, injection, recovery, golden recall)
-6. Consumidor SDD que leia `outputs/PRD.md` e gere architecture/tasks com RF + NFR
-7. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
-8. Ligar estágios opcionais de scan/index/marcar no grafo default
+5. Consumidor SDD que leia `outputs/PRD.md` e gere architecture/tasks com RF + NFR
+6. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
+7. Ligar estágios opcionais de scan/index/marcar no grafo default
+8. Gates de produção / supply chain no CI (`25`)
 
 ---
 

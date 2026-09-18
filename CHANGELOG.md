@@ -53,6 +53,19 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - **Golden tests** (`tests/integration/test_derived_artifacts.py`,
   `tests/fixtures/golden/`): falham se IR, história, PRD, OpenAPI e Mermaid
   divergirem, e se um status/campo/path inventado escapar
+- **Hardening profundo** (`15-hardening-deep`): Agent Debugger persistido na run
+  (`validations/debugger.json` com `failure` / `agent_behavior` /
+  `harness_component` / `root_cause`)
+- Scan de inputs (secrets, PII heurística, instruções suspeitas) **antes** de
+  montar o pacote LLM; achado `error` bloqueia (`reason: input_scan_failed`) e
+  grava `validations/input-scan.json`
+- Tools de recovery `search_claims` e `get_claim` no `llm_package` (OpenAI/Claude
+  + contrato neutro), consultando claims da run
+- Golden recall (`tests/fixtures/golden/expected_claims.yaml`): o teste falha se
+  o recall dos claims anotados cair
+- Profiles explícitos `gtw` / `worker` / `batch` + fallback fail-closed;
+  `realpath`/symlink na policy; allowlist semântica de argv; `run_argv` sempre
+  com `shell=False`
 
 ### Changed
 
@@ -81,7 +94,7 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Tokenizer oficial + Redis opcional
 - Execução concorrente por ondas
 - Apply de propostas + rollback
-- Hardening profundo (debugger, injection, recovery, golden recall)
+- Gates de produção / supply chain no CI
 
 ## [0.2.0] - 2026-09-12
 
