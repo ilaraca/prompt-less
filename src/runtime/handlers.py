@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 
 from src.context_builder import build_context
-from src.doc_compress import compress_documents
+from src.hybrid_retrieval import build_query_from_ctx, compress_documents_hybrid
 from src.domain.provenance import stamp_claim_identity
 from src.emit import emit
 from src.ingest import ARTIFACT_TEMPLATES, load_inputs
@@ -229,11 +229,15 @@ def state_write(ctx: StageContext) -> None:
 def doc_compress(ctx: StageContext) -> None:
     slot = ctx.slot()
     slim_ctx = slot.get("slim_ctx") or _prepare_slot(ctx)["slim_ctx"]
-    slot["doc_compressed"] = compress_documents(
+    state_dir = getattr(ctx.run_ctx, "state_dir", None) or (ctx.run_ctx.root / "state")
+    slot["doc_compressed"] = compress_documents_hybrid(
         slim_ctx.get("documents") or [],
+        query=build_query_from_ctx(slim_ctx),
         lines_per_chunk=int(ctx.payload.get("lines_per_chunk") or 40),
         chunk_summary_chars=int(ctx.payload.get("chunk_summary_chars") or 220),
         consolidated_chars=int(ctx.payload.get("consolidated_chars") or 800),
+        enable_semantic=bool(ctx.payload.get("enable_semantic", True)),
+        state_dir=state_dir,
     )
 
 

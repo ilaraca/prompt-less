@@ -110,7 +110,7 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
 | Não reenviar histórico completo | `state/workflow.json` com campos mínimos |
 | Tools compactas | `config/tools.compact.yaml` (assinaturas curtas) |
 | System prompt estável / cache | `prompts/system.compact.txt` + pacote Claude `cache_control` |
-| Comprimir RAG | `rag_compress.py` + `doc_compress.py` |
+| Comprimir RAG | `rag_compress.py` + `hybrid_retrieval.py` / `doc_compress.py` |
 | Compressão hierárquica | chunks → resumos → consolidado |
 | Modelo pequeno no pré-processamento | Extrativo local (regex de sinais); slot para LLM small depois |
 | Encadeamento OpenAI Responses | Pacote com `store: true` (pronto para `previous_response_id`) |
@@ -221,7 +221,7 @@ Esse `consolidated` é o que vai para o campo `contexto_comprimido` do pacote LL
 
 | Recurso típico de RAG “full” | Status aqui |
 |------------------------------|-------------|
-| Embeddings (OpenAI, sentence-transformers, etc.) | Não |
+| Embeddings (OpenAI, sentence-transformers, etc.) | Não (2ª camada = sinônimos locais + TF) |
 | Vector DB (Chroma, Pinecone, pgvector…) | Não |
 | Similarity search / top-k por query | Não |
 | Índice persistente entre execuções | **Sim** — `state/repo_index.json` (código dos repos, ver seção 13) |
@@ -235,7 +235,19 @@ Esse `consolidated` é o que vai para o campo `contexto_comprimido` do pacote LL
 - **RAG desta pipeline:** “pegue estes arquivos desta pasta, fatie, filtre o que parece regra/API, comprima, entregue ao modelo.”
 - **RAG vetorial:** “indexe milhares de docs; para esta pergunta, busque os k trechos mais similares semanticamente.”
 
-Evolução natural (próximo passo): manter `doc_compress` / budget e trocar só o **Retrieve** por embeddings + top-k, sem mudar o resto do pipeline.
+A recuperação documental agora é **híbrida** (`src/hybrid_retrieval.py`, ticket 26):
+
+| Insumo | Estratégia (1ª camada) |
+|--------|------------------------|
+| **structured** (≥2 títulos) | Âncoras de seção via `doc_preface.parse_sections` + TF-IDF |
+| **flat** (ex.: `amostra_3000.txt`) | Chunk 40 linhas + `SIGNAL_RE` (`doc_compress`) |
+
+Segunda camada semântica é **opcional** e limitada por budget (fallback local com sinônimos — sem provider externo). Secrets/PII são scrubados antes. Índice invertido por seção em `state/doc_section_index.json` (como `repo_index`), **não** no prompt.
+
+```bash
+python -m src.hybrid_retrieval inputs/amostra_3000.txt --detect-only
+python -m src.hybrid_retrieval docs/spec.md --query "CPF 400 auth"
+```
 
 ### 6. `context_build` (`src/context_builder.py`)
 
