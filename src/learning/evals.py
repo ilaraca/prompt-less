@@ -25,7 +25,7 @@ DEFAULT_CASES = (
     "eval_adversarial",
     "eval_multi_context",
 )
-# Hold-out P3: não entram na promoção automática; registrados no experimento.
+# Hold-out P3: fora da orientação da mudança; regressão/falha crítica veta promoção.
 RESERVED_CASES = ("eval_adversarial",)
 _ARTIFACT_NAMES = {"historia.md", "prd.md"}
 _SPEC_NAME = "canonical-spec.yaml"
@@ -1433,3 +1433,73 @@ def compare_evals(
         "reported_only_metrics": list(_REPORTED_ONLY),
         "decision": decision,
     }
+
+
+def apply_reserved_gate(
+    comparison: dict[str, Any],
+    reserved_baseline: dict[str, Any],
+    reserved_candidate: dict[str, Any],
+    *,
+    tolerances: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """
+    Veta promoção se o hold-out regredir — sem misturar hold-out na orientação.
+
+    A comparação de desenvolvimento (`comparison`) permanece a fonte de
+    `metrics` / `improved` / `case_gates`. Casos reservados entram só como
+    gate de promoção: regressão crítica (ou não crítica sem tolerância
+    explícita) e conjuntos incomparáveis forçam `decision=reject`.
+    """
+    holdout = compare_evals(
+        reserved_baseline,
+        reserved_candidate,
+        tolerances=tolerances,
+        reserved_cases=(),
+    )
+    # Paths reserved/* são distintos dos evals de desenvolvimento; o distinct
+    # relevante já foi medido no conjunto de orientação.
+    raw_reasons = [
+        r
+        for r in (holdout.get("reasons") or [])
+        if r != "workspaces_not_distinct"
+    ]
+    critical = bool(holdout.get("critical_regression"))
+    comparable = bool(holdout.get("comparable", True))
+    untolerated = [
+        g
+        for g in (holdout.get("case_gates") or [])
+        if g.get("regressed") and not g.get("tolerated")
+    ]
+    blocks = critical or (not comparable) or bool(untolerated) or bool(raw_reasons)
+    prefixed = [f"reserved:{r}" for r in raw_reasons]
+
+    out = dict(comparison)
+    out["reserved_case_gates"] = list(holdout.get("case_gates") or [])
+    reserved_tols = [
+        {**t, "scope": "reserved"} for t in (holdout.get("tolerances_applied") or [])
+    ]
+    out["reserved_comparison"] = {
+        "regression": blocks,
+        "critical_regression": critical,
+        "comparable": comparable,
+        "reasons": prefixed,
+        "tolerances_applied": reserved_tols,
+        "decision": "reject" if blocks else "accept",
+    }
+    if reserved_tols:
+        out["tolerances_applied"] = list(comparison.get("tolerances_applied") or []) + (
+            reserved_tols
+        )
+
+    if blocks:
+        out["regression"] = True
+        if critical:
+            out["critical_regression"] = True
+        merged = list(comparison.get("reasons") or [])
+        for r in prefixed:
+            if r not in merged:
+                merged.append(r)
+        out["reasons"] = merged
+        out["improved"] = False
+        out["decision"] = "reject"
+    return out

@@ -1371,7 +1371,11 @@ Tolerância não crítica só vale com `justification` explícita registrada em
 demonstrável (`claim_recall` / `traceability_rate` / `pass_rate` /
 `unexpected_inferences` / `avg_est_tokens`); **jitter de latência não conta**.
 Experimento (`improve`) grava referência, candidato, diff, condições e
-`reserved_cases` (hold-out default: `eval_adversarial`). O candidato **não**
+`reserved_cases` (hold-out default: `eval_adversarial`). O hold-out **não**
+orienta a mudança (métricas/`case_gates` de promoção vêm do conjunto de
+desenvolvimento), mas regressão ou falha crítica nele **veta** promoção via
+`apply_reserved_gate` (`reserved_case_gates` / `reserved_comparison`); tolerância
+não crítica no hold-out também exige justificativa explícita. O candidato **não**
 pode alterar `failure-patterns`, `playbook` nem `permission_profiles` (superfície
 do avaliador). O gate HTTP das evals compara **contratos tipados por operação**
 (`http_operations` na fixture: serviço, método, rota, `success_status` resolvido

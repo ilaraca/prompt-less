@@ -69,8 +69,9 @@ def decide_proposals(
     produção). Sem apply no candidato, a proposta nunca entra em
     `accepted` nem `approved_for_experiment`.
 
-    Conjuntos incomparáveis, regressão por caso (sem tolerância explícita) ou
-    ausência de benefício demonstrável (latência não conta) bloqueiam promoção.
+    Conjuntos incomparáveis, regressão por caso (sem tolerância explícita),
+    regressão/falha crítica no hold-out (`reserved_case_gates`) ou ausência
+    de benefício demonstrável (latência não conta) bloqueiam promoção.
     """
     history = load_history(root)
     now = _now()
@@ -111,6 +112,7 @@ def decide_proposals(
             "metrics": metrics,
             "workspaces": workspaces,
             "case_gates": comparison.get("case_gates") or [],
+            "reserved_case_gates": comparison.get("reserved_case_gates") or [],
             "tolerances_applied": comparison.get("tolerances_applied") or [],
             "comparable": comparison.get("comparable", True),
         }
