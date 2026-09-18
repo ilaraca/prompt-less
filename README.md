@@ -1314,7 +1314,7 @@ Limites deste slice (não reabrir; o `14` consome o overlay):
 PYTHONPATH=. .venv/bin/python scripts/quality_gates.py
 ```
 
-Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services, **eval_adversarial**, **eval_multi_context**), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`, com métricas de claim recall, traceability, inferências inesperadas, custo e latência. Casos `critical` têm gate individual na comparação baseline × candidate. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
+Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services, **eval_adversarial**, **eval_multi_context**), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada (`ingestion` / `canonical_spec` / `artifacts` / `provenance`) é **diagnóstico**; a aprovação usa `required_gates` em AND — spec, artefatos esperados, rastreabilidade, serviço e pendências bloqueantes **não se compensam**. Casos `expect_blocked` podem declarar `expected_reason` e `expected_block_codes` (ex.: `ambiguous_status` exige `AMBIGUOUS_HTTP_STATUS`). Métricas: claim recall, traceability, inferências inesperadas, custo e latência. Casos `critical` têm gate individual na comparação baseline × candidate. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
 
 
 ---

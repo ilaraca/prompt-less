@@ -7,6 +7,17 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Gates obrigatórios de avaliação** (`30-eval-required-gates`): `score_case()`
+  separa diagnóstico (`layer_scores`) de aprovação (`required_gates` /
+  `fail_reasons`). Dimensões obrigatórias — spec presente/com sinais, artefatos
+  esperados presentes e com sinais, rastreabilidade, serviço, ausência de
+  pendências bloqueantes — entram em AND e **não se compensam** (spec OK não
+  salva artefato ausente). Casos `expect_blocked` validam também
+  `expected_reason` / `expected_block_codes`. Rastreabilidade deixa de ser
+  gate só em `critical`.
+
 ### Added
 
 - **Revisão obrigatória bloqueante** (`33-required-review-gate`): match lexical
