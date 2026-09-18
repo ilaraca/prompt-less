@@ -9,6 +9,7 @@ from src.planning.layers import infer_layer, sort_repos_by_layer
 from src.planning.plan import (
     build_implementation_plan,
     build_plans_from_mapa,
+    integrate_report,
 )
 from src.repo_index import index_repo
 from src.spec.builder import build_canonical_spec
