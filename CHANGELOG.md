@@ -26,20 +26,20 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Testes adversariais (`tests/integration/test_safe_run_storage.py`): traversal,
   symlink, colisão de id, interrupção no commit da escrita e duas runs
   concorrentes
-- **Proveniência contextual** (`19-contextual-provenance`): IDs de claim com
-  namespace de contexto (`CLM-<contexto>-0001`), estáveis entre runs
-- Deduplicação de claims por identidade completa (texto, origin, `service_id`,
-  `chunk_id`, sources); colisão de id com fingerprint distinto é fail-safe
-  (rename, preserva `local_id`/`context`)
+- **Proveniência contextual** (`19-contextual-provenance`): um identificador
+  público `id` (`CLM-0001` / `CLM-R001` / `CLM-SYN-001`); chave multi-contexto
+  `(context, id)`; `resolve_claim` fail-closed se o id for ambíguo
+- Deduplicação de claims por identidade completa (`context`, texto, origin,
+  `service_id`, `chunk_id`, sources); `id` público não é renomeado quando dois
+  contextos repetem `CLM-0001`
 - `ClaimLink` (método lexical + score) em RF/AC/erro; score < 0.6 marca
   `requires_review` e emite warning `LOW_CONFIDENCE_CLAIM_MATCH` sem mudar
   `status`
 - `SourceRef.selected_lines` e `locator` (`$.bloqueios[0]`) para o trecho
   realmente usado; claims sintéticos ganham `content_hash` + seção
-- Cadeia HMAC-SHA256 em `events.jsonl` (`prev_hmac`/`hmac`, chave em
-  `PROMPTLESS_INTEGRITY_KEY`, fail-closed se ausente) e selo HMAC de
-  artefatos em `manifest.integrity`; `verify_run_dir` detecta evento
-  forjado mesmo com `prev_hash` correto
+- Cadeia HMAC-SHA256 em `events.jsonl` com `kid` (`PROMPTLESS_INTEGRITY_KID`,
+  anel `PROMPTLESS_INTEGRITY_KEYS` para rotação); selo depois de `finish`,
+  `events_tip` = HMAC de `run_finished`
 - Testes (`tests/integration/test_contextual_provenance.py`): multi-contexto
   sem perda, dedup por identidade, adulteração de evento/artefato e match
   de baixa confiança

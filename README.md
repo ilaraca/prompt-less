@@ -519,10 +519,11 @@ Workflow GitHub Actions (`.github/workflows/ci.yml`): `compileall` + validação
 
 ## Exemplos de uso
 
-Os exemplos abaixo assumem que você está em `pipeline/` com o venv ativo (ou use o prefixo `.venv/bin/python`). A trilha de eventos é assinada: exporte `PROMPTLESS_INTEGRITY_KEY` (≥16 caracteres) antes de `src.run` — sem ela o bootstrap falha fechado.
+Os exemplos abaixo assumem que você está em `pipeline/` com o venv ativo (ou use o prefixo `.venv/bin/python`). A trilha de eventos é assinada: exporte `PROMPTLESS_INTEGRITY_KEY` (≥16 caracteres) antes de `src.run` — sem ela o bootstrap falha fechado. Rotação: `PROMPTLESS_INTEGRITY_KID=v2` na chave nova e `PROMPTLESS_INTEGRITY_KEYS=v1=<antiga>` para verificar runs velhas.
 
 ```bash
 export PROMPTLESS_INTEGRITY_KEY="$(openssl rand -hex 32)"
+export PROMPTLESS_INTEGRITY_KID=v1
 ```
 
 ### 1. Quickstart com os insumos de exemplo
@@ -929,7 +930,7 @@ Cada `python -m src.run …` cria um diretório isolado e espelha artefatos em `
 | `run_id` canônico | `[A-Za-z0-9_][A-Za-z0-9_-]*` até 64 chars; `..`, `/`, `\`, espaço, ponto e `latest` são `InvalidRunId` |
 | Sem escape de diretório | `run_dir.resolve()` precisa ficar sob `<root>/runs` (pega até symlink plantado) → `UnsafeRunPath` |
 | Sem JSON parcial | manifest, `state.json`, `provenance.json`, `latest.json`, `canonical-spec.yaml` e pacotes LLM usam write-temp + `os.replace` (`src/runtime/atomic_io.py`); `emit` também |
-| Integridade da trilha | cada evento em `events.jsonl` encadeia `prev_hmac` → `hmac` (HMAC-SHA256 de `prev_hmac:hash`). A chave vem de `PROMPTLESS_INTEGRITY_KEY` (≥16 chars), fail-closed se ausente. `RunStore.seal_artifacts()` ancora os sha256 em `manifest.integrity` com o mesmo HMAC **depois** do provenance e **antes** de `finish`. `verify_run_dir(run_dir)` detecta evento forjado (mesmo com `prev_hash` correto), chave errada e artefato adulterado |
+| Integridade da trilha | cada evento em `events.jsonl` encadeia `prev_hmac` → `hmac` (HMAC-SHA256 de `kid:prev_hmac:hash`). Assinatura usa `PROMPTLESS_INTEGRITY_KEY` + `PROMPTLESS_INTEGRITY_KID` (default `v1`). Rotação: `PROMPTLESS_INTEGRITY_KEYS=v1=antiga`. Fail-closed se a chave atual faltar. `seal_artifacts()` roda **depois** de `finish`, sem emitir evento após o selo — `events_tip` é o HMAC de `run_finished`. `verify_run_dir` recusa ponta errada, kid desconhecido, evento forjado e artefato adulterado |
 | Colisão de id | `bootstrap()` cria o diretório com `mkdir` exclusivo; id repetido = `RunIdCollision` (retomada explícita: `bootstrap(resume=True)`) |
 | Transição de status | `set_status` valida a transição e usa `version` monotônica; escrita com versão obsoleta = `RunStateConflict`; estado terminal não reabre |
 | Espelho publicado por manifesto | `outputs/.mirror-manifest.json` (run_id + sha256 por arquivo) é o ponto de commit; obsoletos da publicação anterior são removidos depois, symlinks são ignorados e arquivos nunca publicados nunca são apagados |
@@ -938,9 +939,9 @@ O espelho em `outputs/` é **last-writer-wins** por design (compatibilidade com 
 
 ### Provenance e claims
 
-Na compressão RAG, trechos viram **claims** com `SourceRef` (arquivo, linhas selecionadas, `locator` JSONPath quando não há linha, hash). IDs são namespaced por **contexto/serviço**, não por `run_id`: `CLM-<contexto>-0001` (evals permanecem estáveis entre runs). Claims sem fonte válida falham o gate (`CLAIM_WITHOUT_SOURCE` / `CLAIM_SOURCE_INVALID`).
+Na compressão RAG, trechos viram **claims** com `SourceRef` (arquivo, linhas selecionadas, `locator` JSONPath quando não há linha, hash). Há **um** identificador público: `id` (`CLM-0001`, `CLM-R001`, `CLM-SYN-001`). Em `--all-contexts` o mesmo `id` pode repetir; a chave é o par `(context, id)`. Não existe `uid`. `resolve_claim` é fail-closed se o `id` for ambíguo sem contexto. Referência explícita: `ms-cliente:CLM-0001`. Leitura ainda aceita o formato namespaced residual `CLM-ms-cliente-0001`. Claims sem fonte válida falham o gate (`CLAIM_WITHOUT_SOURCE` / `CLAIM_SOURCE_INVALID`).
 
-Agregação multi-contexto (`--all-contexts`) deduplica por **identidade completa** (texto, origin, `service_id`, `chunk_id`, sources), não só por `claim.id`. Colisão de id com fingerprint distinto é fail-safe: o claim é renomeado e preserva `local_id`/`context`. O `provenance.json` inclui `spec.claims` (sintéticos `CLM-*-SYN-*` inclusive). Descarte é reportado no mesmo arquivo. Runs bloqueadas pelo quality gate **preservam** `claims` e `discarded` no payload JSON.
+Agregação multi-contexto (`--all-contexts`) deduplica por **identidade completa** (`context`, texto, origin, `service_id`, `chunk_id`, sources), não só por `claim.id`. O `provenance.json` inclui `spec.claims` (sintéticos `CLM-SYN-*` inclusive). `claim_links` no spec carrega `context` além de `claim_id`. Campos extras (`hmac`, `kid`, `integrity`) são aditivos. Descarte é reportado no mesmo arquivo. Runs bloqueadas pelo quality gate **preservam** `claims` e `discarded` no payload JSON.
 
 Vínculo claim → RF/AC/erro é um `ClaimLink` (`method`, `score`, `requires_review`). Matching lexical com score < 0.6 emite warning `LOW_CONFIDENCE_CLAIM_MATCH` e marca revisão **sem** mudar o `status` do requisito (`max_unreviewed_inferences` nos evals continua contando só `ResolvedInt`). História e PRD listam os claims utilizados na seção **Proveniência**.
 
