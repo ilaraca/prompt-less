@@ -700,6 +700,11 @@ def test_improve_applies_to_candidate_and_distinguishes_statuses(tmp_path: Path)
     assert not (
         Path(result["workspaces"]["baseline"]["path"]) / "config" / "proposal-overlay.yaml"
     ).exists()
+    experiment = result["experiment"]
+    assert experiment["diff"]
+    assert "reference" in experiment and "candidate" in experiment
+    assert experiment["conditions"]["fixtures_immutable"] is True
+    assert "reserved_cases" in experiment
     decision = result["decision"]
     for key in (
         "proposed",
@@ -712,6 +717,7 @@ def test_improve_applies_to_candidate_and_distinguishes_statuses(tmp_path: Path)
         assert key in decision
     assert decision["applied_to_candidate"]
     assert decision["evaluated"]
+    assert decision.get("experiment")
     terminal = (decision["accepted"] or decision["approved_for_experiment"] or decision["rejected"])
     assert terminal
     assert all(p["status"] != "accepted" for p in decision["proposed"])
@@ -724,3 +730,35 @@ def test_improve_applies_to_candidate_and_distinguishes_statuses(tmp_path: Path)
         (tmp_path / "state" / "knowledge" / "proposals-history.json").read_text(encoding="utf-8")
     )
     assert "applied_to_candidate" in last
+
+
+def test_candidate_cannot_mutate_protected_evaluator_surfaces(tmp_path: Path):
+    from src.learning.workspaces import ProtectedSurfaceError
+
+    pair = materialize_eval_workspaces(source_root=PIPELINE, eval_root=tmp_path)
+    bad = [
+        {
+            "id": "PROP-BAD",
+            "playbook": "enforce_layer_policy",
+            "risk": "low",
+            "change": {"key": "permission_profiles.enforce_deny", "value": False},
+            "status": "proposed",
+        }
+    ]
+    with pytest.raises(ProtectedSurfaceError, match="protegida"):
+        apply_proposals_to_candidate(bad, pair)
+    assert not (pair.candidate.path / "config" / "proposal-overlay.yaml").exists()
+    for key in ("failure-patterns.patterns", "playbook.playbooks"):
+        with pytest.raises(ProtectedSurfaceError):
+            apply_proposals_to_candidate(
+                [
+                    {
+                        "id": "PROP-X",
+                        "playbook": "x",
+                        "risk": "low",
+                        "change": {"key": key, "value": {}},
+                        "status": "proposed",
+                    }
+                ],
+                pair,
+            )

@@ -25,7 +25,12 @@ from src.learning import (  # noqa: E402
     materialize_eval_workspaces,
     run_eval_suite,
 )
-from src.learning.evals import DEFAULT_CASES  # noqa: E402
+from src.learning.evals import (  # noqa: E402
+    DEFAULT_CASES,
+    RESERVED_CASES,
+    build_experiment_record,
+    partition_cases,
+)
 from src.runtime.atomic_io import atomic_write_json  # noqa: E402
 
 
@@ -36,6 +41,8 @@ def improve_from_verify(
     eval_root: Path,
     source_root: Path | None = None,
     cases: list[str] | tuple[str, ...] | None = None,
+    reserved_cases: list[str] | tuple[str, ...] | None = None,
+    tolerances: list[dict] | None = None,
 ) -> dict:
     diagnosis = diagnose_verify_report(verify_report)
     proposals = build_proposals(diagnosis)
@@ -45,27 +52,74 @@ def improve_from_verify(
         source_root=origin, eval_root=eval_root, resume=True
     )
     applied = apply_proposals_to_candidate(proposals, pair)
-    suite_cases = cases if cases is not None else DEFAULT_CASES
+    suite_cases = tuple(cases) if cases is not None else DEFAULT_CASES
+    parts = partition_cases(suite_cases, reserved=reserved_cases)
+    eval_cases = parts["eval_cases"] or suite_cases
+    reserved = parts["reserved_cases"]
 
     baseline = run_eval_suite(
         output_root=eval_root / "baseline",
         workspace=pair.baseline,
-        cases=suite_cases,
+        cases=eval_cases,
         run_id_prefix="eval-b",
     )
     candidate = run_eval_suite(
         output_root=eval_root / "candidate",
         workspace=pair.candidate,
-        cases=suite_cases,
+        cases=eval_cases,
         run_id_prefix="eval-c",
     )
-    comparison = compare_evals(baseline, candidate)
+    # Hold-out: roda casos reservados sob as mesmas condições, sem misturar
+    # no gate de promoção (registrados no experimento).
+    reserved_evals: dict[str, dict] = {}
+    if reserved:
+        reserved_evals["baseline"] = run_eval_suite(
+            output_root=eval_root / "reserved" / "baseline",
+            workspace=pair.baseline,
+            cases=reserved,
+            run_id_prefix="eval-rb",
+        )
+        reserved_evals["candidate"] = run_eval_suite(
+            output_root=eval_root / "reserved" / "candidate",
+            workspace=pair.candidate,
+            cases=reserved,
+            run_id_prefix="eval-rc",
+        )
+
+    comparison = compare_evals(
+        baseline,
+        candidate,
+        tolerances=tolerances,
+        reserved_cases=reserved,
+    )
     comparison["diff"] = applied.diff
+    conditions = {
+        "eval_cases": list(eval_cases),
+        "equivalent": True,
+        "config_surface": "candidate_overlay_only",
+        "evaluator_root": str(ROOT),
+        "fixtures_immutable": True,
+    }
+    experiment = build_experiment_record(
+        baseline=baseline,
+        candidate=candidate,
+        comparison=comparison,
+        diff=applied.diff,
+        conditions=conditions,
+        reserved_cases=reserved,
+    )
+    if reserved_evals:
+        experiment["reserved_summaries"] = {
+            "baseline": (reserved_evals["baseline"].get("summary") or {}),
+            "candidate": (reserved_evals["candidate"].get("summary") or {}),
+        }
+    comparison["experiment"] = experiment
     decision = decide_proposals(
         proposals,
         comparison,
         root=root,
         apply_result=applied.to_dict(),
+        experiment=experiment,
     )
 
     return {
@@ -74,6 +128,7 @@ def improve_from_verify(
         "workspaces": pair.to_dict(),
         "applied": applied.to_dict(),
         "evals": {"baseline": baseline["summary"], "candidate": candidate["summary"]},
+        "experiment": experiment,
         "decision": decision,
     }
 
@@ -87,6 +142,14 @@ def main() -> None:
         "--cases",
         default="",
         help="casos de eval separados por vírgula (default: suíte completa)",
+    )
+    p.add_argument(
+        "--reserved-cases",
+        default="",
+        help=(
+            "casos hold-out separados por vírgula "
+            f"(default: {','.join(RESERVED_CASES)})"
+        ),
     )
     args = p.parse_args()
 
@@ -109,8 +172,16 @@ def main() -> None:
     eval_root = args.out / "evals"
     eval_root.mkdir(parents=True, exist_ok=True)
     cases = tuple(c.strip() for c in str(args.cases).split(",") if c.strip()) or None
+    reserved = (
+        tuple(c.strip() for c in str(args.reserved_cases).split(",") if c.strip())
+        or None
+    )
     result = improve_from_verify(
-        report, root=args.root, eval_root=eval_root, cases=cases
+        report,
+        root=args.root,
+        eval_root=eval_root,
+        cases=cases,
+        reserved_cases=reserved,
     )
     out_file = args.out / "last-improvement.json"
     args.out.mkdir(parents=True, exist_ok=True)

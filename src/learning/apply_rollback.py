@@ -221,11 +221,14 @@ def apply_proposals_with_rollback(
     cases: list[str] | tuple[str, ...] | None = None,
     run_dir: Path | None = None,
     run_id: str | None = None,
+    tolerances: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """
     Aplica propostas em `root/config`, re-avalia e faz rollback se regressão.
 
     Risco `medium+` exige `assert_promotable` em `run_dir`/`run_id`.
+    Regressão por caso (sem tolerância explícita) ou conjuntos incomparáveis
+    também disparam rollback.
     """
     root = Path(root)
     if not proposals:
@@ -297,11 +300,12 @@ def apply_proposals_with_rollback(
             workspace=candidate_id,
             run_id_prefix="apply-c",
         )
-        comparison = compare_evals(baseline, candidate)
+        comparison = compare_evals(baseline, candidate, tolerances=tolerances)
         reject = (
             comparison.get("decision") == "reject"
             or comparison.get("regression")
             or comparison.get("critical_regression")
+            or comparison.get("comparable") is False
         )
 
         history = load_history(root)
@@ -317,6 +321,7 @@ def apply_proposals_with_rollback(
                     "decided_at": now,
                     "snapshot_id": snapshot.snapshot_id,
                     "metrics": comparison.get("metrics") or {},
+                    "case_gates": comparison.get("case_gates") or [],
                     "rolled_back": True,
                 }
                 proposal["status"] = "rejected"
@@ -346,6 +351,7 @@ def apply_proposals_with_rollback(
                 "decided_at": now,
                 "snapshot_id": snapshot.snapshot_id,
                 "metrics": comparison.get("metrics") or {},
+                "case_gates": comparison.get("case_gates") or [],
                 "applied_to_production": True,
             }
             proposal["status"] = "accepted"

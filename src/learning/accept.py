@@ -60,6 +60,7 @@ def decide_proposals(
     *,
     root: Path,
     apply_result: dict[str, Any] | None = None,
+    experiment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Gate de propostas no candidato.
@@ -67,6 +68,9 @@ def decide_proposals(
     `accepted` = melhoria comprovada no workspace candidato (não é apply em
     produção). Sem apply no candidato, a proposta nunca entra em
     `accepted` nem `approved_for_experiment`.
+
+    Conjuntos incomparáveis, regressão por caso (sem tolerância explícita) ou
+    ausência de benefício demonstrável (latência não conta) bloqueiam promoção.
     """
     history = load_history(root)
     now = _now()
@@ -76,6 +80,7 @@ def decide_proposals(
         diff = str(apply_result.get("diff") or "")
     metrics = comparison.get("metrics") or {}
     workspaces = comparison.get("workspaces") or {}
+    experiment_record = experiment or comparison.get("experiment")
 
     proposed: list[dict[str, Any]] = []
     applied: list[dict[str, Any]] = []
@@ -88,6 +93,7 @@ def decide_proposals(
         comparison.get("decision") == "reject"
         or comparison.get("regression")
         or comparison.get("critical_regression")
+        or comparison.get("comparable") is False
     )
     distinct = bool((workspaces.get("distinct") if workspaces else True) is not False)
     if workspaces and workspaces.get("baseline") and workspaces.get("candidate"):
@@ -104,7 +110,12 @@ def decide_proposals(
             "diff": diff,
             "metrics": metrics,
             "workspaces": workspaces,
+            "case_gates": comparison.get("case_gates") or [],
+            "tolerances_applied": comparison.get("tolerances_applied") or [],
+            "comparable": comparison.get("comparable", True),
         }
+        if experiment_record:
+            base["experiment"] = experiment_record
         proposed_item = {**base, "status": "proposed"}
         proposed.append(proposed_item)
         _record("proposed", proposed_item)
@@ -124,6 +135,8 @@ def decide_proposals(
             reasons = ["proposal_not_applied"]
         elif not distinct:
             reasons = ["workspaces_not_distinct"]
+        elif comparison.get("comparable") is False:
+            reasons = list(comparison.get("reasons") or ["incomparable_case_sets"])
         elif reject_cmp:
             reasons = list(comparison.get("reasons") or ["eval_regression"])
         elif (raw.get("risk") or "low") not in {"low"}:
@@ -131,6 +144,7 @@ def decide_proposals(
         elif comparison.get("improved"):
             terminal = "accepted"
         else:
+            # sem benefício demonstrável (ex.: só jitter de latência)
             terminal = "approved_for_experiment"
 
         item = {**base, "status": terminal, "reason": reasons}
@@ -159,4 +173,5 @@ def decide_proposals(
         "rejected": rejected,
         "history_path": str(path),
         "comparison": comparison,
+        "experiment": experiment_record,
     }
