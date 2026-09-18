@@ -46,13 +46,13 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 | **Verify pós-executor** | `close_loop` confere o que ocorreu no Git e nos logs do adapter (não o payload) vs spec + policy |
 | **Promoção com aprovação humana** | `src.approval` vincula ator + spec + relatório + commit; HMAC detecta adulteração |
 | **Plano coordenado multi-repo** | `plan_repos` gera ondas/contratos a partir de dependências observadas (código + Canonical Spec); camada é fallback revisável |
-| **Melhoria sem regressão silenciosa** | `improve` aplica a proposta só no candidato, compara evals distintas e só então promove status |
+| **Melhoria sem regressão silenciosa** | `improve` aplica no candidato; `apply` promove a config versionada com snapshot e rollback |
 
 ### Onde *não* é a melhor ferramenta (ainda)
 
 | Cenário | Motivo |
 |--------|--------|
-| Geração 100% automática em produção sem revisão humana | Dry-run preenche esqueleto; `--live` (API) ainda é slot a plugar; Devin E2E e apply+rollback são série 2 |
+| Geração 100% automática em produção sem revisão humana | Dry-run preenche esqueleto; `--live` (API) ainda é slot a plugar; Devin E2E é série 2; apply em config exige risco `low` ou aprovação (`21`) |
 | Documentos sem sinais lexicais de negócio | Resumo extrativo prioriza termos (regra, HTTP, endpoint…); texto só narrativo pode ser filtrado demais |
 | Extração fiel linha a linha de PDFs jurídicos/contratos | Foco é **sinal para artefato técnico**, não arquivo íntegro |
 | `.doc` legado fora do macOS sem `antiword` | Conversão depende de `textutil` (macOS) ou `antiword` |
@@ -101,6 +101,7 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
  [approval] ─────────────── request-approval → approve|reject → promote (HMAC)
  [plan_repos] ───────────── mapa + evidência de código/contratos → implementation_plan (ondas)
  [improve] ──────────────── diagnose → apply no candidato → evals distintas → accepted / approved_for_experiment / rejected
+ [apply] ────────────────── snapshot → change.key/value em config/ → re-eval → keep ou rollback
 ```
 
 ### Técnicas de economia de tokens (mapeamento do artigo)
@@ -1177,7 +1178,7 @@ O plano usa **dependências observadas** (OpenAPI clients, imports, URLs, evento
 .venv/bin/python -m src.improve --cases happy_path,eval_adversarial --out /tmp/improve
 ```
 
-Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`playbook.yaml`) → **workspaces distintos** (snapshot de `config/` em `evals/workspaces/{baseline,candidate}`) → a proposta é aplicada **somente no candidato** (overlay atômico) → eval suite nos dois lados → decisão.
+Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`playbook.yaml`) → **workspaces distintos** (snapshot de `config/` em `evals/workspaces/{baseline,candidate}`) → a proposta é aplicada **somente no candidato** (overlay atômico) → eval suite nos dois lados (cfg mesclado do workspace) → decisão.
 
 Status:
 
@@ -1190,13 +1191,26 @@ Status:
 | `accepted` | melhoria comprovada **no candidato** (não é apply em produção) |
 | `rejected` | regressão crítica, não aplicada, risco medium+, ou workspaces iguais |
 
-Uma proposta **não aplicada** nunca entra em `accepted` nem `approved_for_experiment`. Regressão em qualquer caso `critical: true` rejeita o candidato mesmo se o pass rate agregado subir. HTTP crítico exige igualdade de status, salvo `http_status_mode` explícito na fixture. O histórico (`state/knowledge/proposals-history.json`) guarda diff e métricas comparadas. Apply em produção continua no ticket `14`.
+Uma proposta **não aplicada** nunca entra em `accepted` nem `approved_for_experiment`. Regressão em qualquer caso `critical: true` rejeita o candidato mesmo se o pass rate agregado subir. HTTP crítico exige igualdade de status, salvo `http_status_mode` explícito na fixture. O histórico (`state/knowledge/proposals-history.json`) guarda diff e métricas comparadas.
 
-Limites deste slice (não reabrir; o `14` consome o overlay):
+### Apply em produção (`apply`)
 
-- O apply grava `config/proposal-overlay.yaml` só no candidato. `src.run` continua lendo `config/pipeline.yaml` do ROOT — a eval prova isolamento e gates, não o efeito da chave do playbook no IR.
-- `two_services` ainda espera HTTP 401 que o spec não materializa (residual do recorte de regras). O gate multi-contexto que passa é `eval_multi_context` (200/400/422 exact).
-- A suíte default inclui `eval_adversarial` e `eval_multi_context`. `--cases` restringe.
+```bash
+.venv/bin/python -m src.apply --root . --proposal-json /tmp/prop.json --cases happy_path
+# risco medium+: exige run já aprovada (src.approval), não close_loop --approve
+.venv/bin/python -m src.apply --root . --proposal-json /tmp/medium.json \
+  --run-dir runs/RUN123 --run-id RUN123 --cases happy_path
+```
+
+Fluxo: gate de risco → snapshot de bytes em `state/knowledge/snapshots/<id>/` → aplica `change.key/value` em arquivos versionados sob `config/` (YAML nomeado quando o prefixo bate, senão `proposal-overlay.yaml`) → re-roda a eval suite com o cfg mesclado (baseline pré-apply × candidate pós-apply) → regressão restaura bytes e marca `rejected`; sem regressão mantém a mudança e registra `accepted` com `applied_to_production`.
+
+`run` / `run_eval_suite` mesclam `config/proposal-overlay.yaml` em `pipeline.yaml`, então baseline e candidate executam sobre configs distintas (corrige o residual do `23`). Rollback restaura **bytes** — não interpreta jitter de `avg_latency_ms` como melhoria comprovada.
+
+Limites deste slice:
+
+- Jitter de latência sozinho não prova melhoria (o gate de produção é anti-regressão).
+- Chaves que só existem no overlay não alteram o IR até um consumidor lê-las; o apply garante persistência versionada + eval isolada.
+- Risco `medium+` consome `assert_promotable` (`src.approval`); `promote` continua sendo só selo, não aplica código.
 
 ### Evals e testes
 
@@ -1256,6 +1270,7 @@ pipeline/
     ├── approval.py                # request-approval / approve / promote (HMAC)
     ├── plan_repos.py              # implementation_plan multi-repo
     ├── improve.py                 # diagnose → propose → eval → gate
+    ├── apply.py                   # apply em config + snapshot/rollback
     ├── ingest.py / docs_ingest.py / preprocess.py / engenharia.py
     ├── servicos.py / marcar.py / repo_index.py
     ├── state_store.py / doc_compress.py / rag_compress.py
@@ -1268,7 +1283,7 @@ pipeline/
     ├── executors/                 # policy, verify, evidence (Git+logs), loop, Devin, safe_exec
     ├── hardening/                 # debugger, input scan, claim tools, recall
     ├── planning/                  # grafo observado, camadas (fallback), plan
-    └── learning/                  # evals, proposals, accept, failure_patterns
+    └── learning/                  # evals, proposals, accept, apply_rollback, failure_patterns
 ```
 
 Leitura recomendada: `run.py` → `spec/builder.py` → `validators/` → `executors/verify.py` → `learning/evals.py`. Para o caminho clássico de tokens: `rag_compress.py` → `doc_compress.py` → `context_builder.py`.
@@ -1490,7 +1505,7 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   worktree limpo antes do close_loop é o `10`
 - Sem `PROMPTLESS_INTEGRITY_KEY`, `evidence_hashes.hmac` fica nulo (SHA-256
   permanece) — **aceito**; selo tamper-evident da aprovação é o `21`
-- `improve` aplica propostas só no workspace candidato e compara evals distintas; apply + rollback em produção continua no ticket `14`
+- `improve` aplica propostas só no workspace candidato; `python -m src.apply` promove a config versionada com snapshot/rollback (`14`)
 - OpenAPI/Mermaid derivam do IR já fatiado por `owner`: `--all-contexts` não
   replica a action de um serviço no contrato de outro; operação sem dono e
   erro órfão ficam `unresolved`
@@ -1504,7 +1519,7 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   (`origin: heuristic`, exige revisão); execução paralela das ondas ainda não roda (ticket `13`)
 - O pacote SDD lê o grafo multi-repo observado quando há evidência; fallback
   heurístico continua `requires_review`. Não classifica NFR por tipo (28)
-- Nenhuma task do SDD é despachada a executor (`10`) nem passa por apply/rollback (`14`)
+- Nenhuma task do SDD é despachada a executor (`10`); apply de propostas é só em config versionada (`14`), não despacha implementação
 - Resumo de docs é **extrativo por regex**, não LLM small (bom custo; pode perder nuance)
 - Tokenizer oficial cobre OpenAI via `tiktoken`; Anthropic/Gemini e ausência da lib usam heurística `chars÷4` (`method=heuristic`), nunca como contagem exata
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
@@ -1521,7 +1536,7 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 1. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`) — consome as tools já no pacote
 2. Devin CLI real no `close_loop`
 3. Redis opcional (state backend)
-4. Execução concorrente por ondas + apply/rollback de propostas em produção (`14`)
+4. Execução concorrente por ondas (`13`)
 5. NFR por tipo (resiliência / observabilidade / segurança) no consumidor SDD (`28`)
 6. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
 7. Ligar estágios opcionais de scan/index/marcar no grafo default

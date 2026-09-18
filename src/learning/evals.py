@@ -364,16 +364,46 @@ def score_case(
     )
 
 
+def _resolve_eval_cfg(
+    workspace: Any | None,
+    config_root: Path | None,
+    cfg: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if cfg is not None:
+        return cfg
+    from src.runtime.config_load import load_merged_cfg
+
+    path: Path | None = None
+    if config_root is not None:
+        path = Path(config_root)
+    elif workspace is not None:
+        to_dict = getattr(workspace, "to_dict", None)
+        payload = to_dict() if callable(to_dict) else workspace
+        if hasattr(workspace, "path"):
+            path = Path(workspace.path)
+        elif isinstance(payload, dict) and payload.get("path"):
+            path = Path(str(payload["path"]))
+    if path is None:
+        return None
+    config_dir = path / "config"
+    if config_dir.is_dir():
+        return load_merged_cfg(path)
+    return None
+
+
 def run_eval_suite(
     *,
     cases: tuple[str, ...] | list[str] = DEFAULT_CASES,
     output_root: Path,
     workspace: Any | None = None,
     run_id_prefix: str | None = None,
+    config_root: Path | None = None,
+    cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     to_dict = getattr(workspace, "to_dict", None)
     ws_payload = to_dict() if callable(to_dict) else workspace
+    eval_cfg = _resolve_eval_cfg(workspace, config_root, cfg)
     prefix = run_id_prefix or "eval"
     for case_id in cases:
         inputs = FIXTURES / case_id
@@ -388,6 +418,7 @@ def run_eval_suite(
             inputs_dir=inputs,
             output_root=out,
             run_id=f"{prefix}-{case_id}"[:64],
+            cfg=eval_cfg,
         )
         latency_ms = round((time.perf_counter() - started) * 1000, 1)
         tokens = []
@@ -461,14 +492,19 @@ def _workspaces_distinct(baseline: dict[str, Any], candidate: dict[str, Any]) ->
     info = {"baseline": b, "candidate": c, "distinct": True}
     if not b and not c:
         return True, info
-    distinct = bool(
-        b.get("path")
-        and c.get("path")
-        and b["path"] != c["path"]
-        and b.get("workspace_commit")
+    path_ok = bool(b.get("path") and c.get("path") and b["path"] != c["path"])
+    commit_ok = bool(
+        b.get("workspace_commit")
         and c.get("workspace_commit")
         and b["workspace_commit"] != c["workspace_commit"]
     )
+    # Apply temporal no mesmo root: paths iguais, mas snapshot/commit mudam.
+    snap_ok = bool(
+        b.get("snapshot_sha256")
+        and c.get("snapshot_sha256")
+        and b["snapshot_sha256"] != c["snapshot_sha256"]
+    )
+    distinct = bool(commit_ok and (path_ok or snap_ok))
     info["distinct"] = distinct
     return distinct, info
 
