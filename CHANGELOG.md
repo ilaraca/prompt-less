@@ -12,6 +12,18 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - **Storage seguro da run** (`18-safe-run-storage`): `src/runtime/atomic_io.py`
   com write-temp + `os.replace`, cópia atômica e contenção de caminho
   (`resolve_within`)
+- **Orquestração via `pipeline.yaml`** (`11-stages-yaml`): `stages` vira DAG
+  executável (`handler`, `depends_on`, `gates`, `foreach: context`);
+  `src/run.py` deixa de hardcodar ingest → preprocess → reason → emit
+- Protocolo `Stage` + registry de handlers, checkpoints com `schema_version`,
+  retry/timeout por estágio, retomada `--resume --run-id` (valida hashes das
+  entradas) e cancelamento com `manifest.status: cancelled`
+- Gate YAML `validation.has_errors → blocked`; handlers recusam escrita fora
+  de `runs/<id>/`; runs antigas sem `checkpoints/` migram a partir de
+  `events.jsonl`
+- Testes em `tests/integration/test_stages_yaml.py`: estágio isolado, falha
+  intermediária preserva `run_id`, resume, hash mismatch, timeout, retry,
+  sandbox e migração
 - `run_id` e id de serviço com formato canônico validado
   (`InvalidRunId` / `InvalidContextId`); `run_dir.resolve()` obrigado a ficar
   sob `<root>/runs` (`UnsafeRunPath`)
@@ -58,12 +70,14 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Método/path ausentes na UI ficam `unresolved`, viram pergunta aberta não
   bloqueante e aparecem como `x-unresolved-operations` no OpenAPI
 - PRD lista ações com o status de sucesso do IR ou `unresolved` explícito
+- `--run-id` e `--resume` na CLI de `src.run`; `cancelled` entra na máquina de
+  status (`failed`/`cancelled` podem voltar a `running` na retomada;
+  `completed`/`blocked` continuam finais)
 
 ### Planejado (série 2)
 
 - Modo `--live` (OpenAI / Claude)
 - Devin CLI real no `close_loop`
-- Orquestração declarativa via `pipeline.yaml` (stages)
 - Tokenizer oficial + Redis opcional
 - Execução concorrente por ondas
 - Apply de propostas + rollback
