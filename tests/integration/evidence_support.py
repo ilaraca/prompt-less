@@ -1,4 +1,4 @@
-"""Helpers para montar um checkout Git + log de adapter nos testes do 20."""
+"""Helpers para montar um checkout Git + log de adapter nos testes de evidência."""
 from __future__ import annotations
 
 import json
@@ -6,6 +6,13 @@ import os
 import subprocess
 from pathlib import Path
 from typing import Any
+
+from src.executors.evidence import (
+    HARNESS_EXECUTED_BY,
+    hash_bytes,
+    make_evidence_binding,
+)
+from src.runtime.atomic_io import sha256_of
 
 TEST_TS = "2026-09-17T12:00:00+00:00"
 MVNW_TEST = "./mvnw test"
@@ -90,34 +97,90 @@ def evidenced_test(
     exit_code: int = 0,
     passed: bool | None = None,
     timestamp: str = TEST_TS,
+    kind: str = "unit",
+    covers: list[str] | None = None,
+    run_id: str = "run-ev-001",
+    repository: str = "bff-cliente",
+    base_commit: str = "base",
+    result_commit: str = "result",
+    spec_hash: str = "",
+    binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Monta teste com execução harness (binding + log real)."""
     log_file.parent.mkdir(parents=True, exist_ok=True)
+    body = f"argv: {command!r}\nexit_code: {exit_code}\n\n{name} exit={exit_code}\n"
     if not log_file.exists():
-        log_file.write_text(f"{name} exit={exit_code}\n", encoding="utf-8")
+        log_file.write_text(body, encoding="utf-8")
+    digest = sha256_of(log_file)
+    bind = binding or make_evidence_binding(
+        run_id=run_id,
+        repository=repository,
+        base_commit=base_commit,
+        result_commit=result_commit,
+        spec_hash=spec_hash,
+    )
+    argv = command.split() if isinstance(command, str) else list(command)
     return {
         "name": name,
+        "kind": kind,
         "passed": (exit_code == 0) if passed is None else passed,
-        "command": command,
+        "command": {"executable": argv[0], "args": argv[1:]},
+        "argv": argv,
         "exit_code": exit_code,
         "timestamp": timestamp,
         "log": log_file.name,
+        "log_sha256": digest,
+        "executed_by": HARNESS_EXECUTED_BY,
+        "covers": list(covers or []),
+        "binding": bind,
     }
 
 
-def mvnw_log_record(*, exit_code: int = 0, log: str | None = None) -> dict[str, Any]:
+def mvnw_log_record(
+    *,
+    exit_code: int = 0,
+    log: str | None = None,
+    name: str = "ClienteServiceTest",
+    kind: str = "unit",
+    run_id: str = "run-ev-001",
+    repository: str = "bff-cliente",
+    base_commit: str = "base",
+    result_commit: str = "result",
+    spec_hash: str = "",
+    binding: dict[str, Any] | None = None,
+    log_sha256: str | None = None,
+) -> dict[str, Any]:
+    bind = binding or make_evidence_binding(
+        run_id=run_id,
+        repository=repository,
+        base_commit=base_commit,
+        result_commit=result_commit,
+        spec_hash=spec_hash,
+    )
+    argv = MVNW_TEST.split()
     rec: dict[str, Any] = {
         "timestamp": TEST_TS,
+        "argv": argv,
         "command": MVNW_TEST,
         "exit_code": exit_code,
+        "executed_by": HARNESS_EXECUTED_BY,
+        "kind": kind,
+        "name": name,
+        "binding": bind,
+        "stdout_sha256": hash_bytes(b""),
+        "stderr_sha256": hash_bytes(b""),
     }
     if log:
         rec["log"] = log
+    if log_sha256:
+        rec["log_sha256"] = log_sha256
     return rec
 
 
 DEFAULT_BASE = {
     "README.md": "# cliente\n",
 }
+
 
 DEFAULT_RESULT = {
     "README.md": "# cliente\n",

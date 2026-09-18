@@ -1154,10 +1154,17 @@ path/status no contrato de outro serviço.
 Fecha o loop **evidência real × spec × policy de camada**. O payload do
 executor é relato: `changed_files` sai de `git diff` entre `base_commit` e
 `result_commit`, comandos vêm do JSONL estruturado do adapter, e cada teste
-precisa de comando, `exit_code`, timestamp e artefato/log. Divergência entre
-relato e evidência é erro (`EVIDENCE_DIVERGENCE`). O `verify-report.json`
-inclui `evidence_hashes` (SHA-256 do diff, do log e dos artefatos de teste,
-com HMAC reusando `PROMPTLESS_INTEGRITY_KEY`).
+precisa ter sido **executado pelo harness** (`executed_by=harness`) com
+comando, `exit_code`, timestamp, artefato/log e binding
+(`run_id`/repositório/commits/`spec_hash`). `passed=True` do sidecar do
+agente **não** basta. Divergência entre relato e evidência é erro
+(`EVIDENCE_DIVERGENCE`). Log ausente, incompleto, adulterado ou de outra run
+reprova (`TEST_NOT_EVIDENCED` / `TEST_EVIDENCE_TAMPERED` /
+`TEST_EVIDENCE_BINDING`). AC obrigatório exige prova comportamental — locator
+de arquivo sozinho gera `AC_WITHOUT_BEHAVIORAL_EVIDENCE`. O
+`verify-report.json` inclui `evidence_hashes` (SHA-256 do diff, do log e dos
+artefatos de teste, com HMAC reusando `PROMPTLESS_INTEGRITY_KEY`) e
+`test_kinds` separando `e2e` / `unit` / `stub_or_skip`.
 
 ```bash
 .venv/bin/python -m src.close_loop \
@@ -1188,6 +1195,11 @@ Pedido de reparo (`build_repair_request` / `--attempt`):
   autorizar escrita; IDs `RF-*` / `AC-*` não são caminhos
 - `FILE_OUT_OF_SCOPE` → só `required_reverts` (separado dos editáveis)
 - `attempt > max` → `status=exhausted`, `unresolved=true` (falha persistente)
+
+O adapter Devin materializa evidência de teste **reexecutando** as sugestões
+do sidecar (`docs/prompt-less/execution-result.json`) via o mesmo runner
+controlado pelo harness; stub/skip são registrados mas não contam como
+passe.
 
 ### Aprovação auditável (`src.approval`)
 
@@ -1645,12 +1657,15 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   IDs Anthropic curtos mapeiam para snapshot pinned; `cost_usd` usa tabela local
   (`economia.MODELOS`), não a fatura do vendor; artefato live ainda passa pelo
   gate `derived_artifact` (saída fora do IR bloqueia — intencional) (`09`)
-- Devin E2E (`10`/`37`): checkout isolado e `shell=False` **não** são sandbox.
-  Sem `EnforcementContract` que ateste os `limits.required_capabilities` do
-  profile (ou `EnforcedRunner` local), o despacho é bloqueado. Comandos
-  internos do Devin CLI externo só entram no JSONL se o sandbox/sidecar os
-  reportar; o runner local grava argv com `"enforced": true`. Testes/build
-  ausentes → verify fail-closed (`NO_TESTS_REPORTED` / `TEST_NOT_EVIDENCED`)
+- Devin E2E (`10`/`35`/`37`): checkout isolado e `shell=False` **não** são
+  sandbox. Sem `EnforcementContract` que ateste os `limits.required_capabilities`
+  do profile (ou `EnforcedRunner` local), o despacho é bloqueado. O sidecar só
+  **sugere** comandos de teste; o harness reexecuta e grava evidência
+  independente (`executed_by=harness`). Sem sugestão executável → verify
+  fail-closed (`NO_TESTS_REPORTED` / `TEST_NOT_EVIDENCED`). AC sem prova
+  comportamental bloqueia (`AC_WITHOUT_BEHAVIORAL_EVIDENCE`). Comandos internos
+  do Devin CLI externo só entram no JSONL se o sandbox/sidecar os reportar; o
+  runner local grava argv com `"enforced": true`
 - `DEVIN_E2E=1` exige CLI Devin autenticado e rede; no CI sem credencial o
   teste live é skip (`10`); live sem contrato usa `--allow-unenforced` só em lab
 - Auto-commit do adapter fica só no checkout isolado — sem push nem abertura

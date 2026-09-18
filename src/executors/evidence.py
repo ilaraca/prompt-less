@@ -25,6 +25,13 @@ from src.runtime.integrity import (
 _GIT_TIMEOUT = 30
 _UNSIGNED_HASH_FIELDS = frozenset({"hmac"})
 
+HARNESS_EXECUTED_BY = "harness"
+NON_BEHAVIORAL_KINDS = frozenset(
+    {"stub", "skip", "skipped", "xfail", "todo", "notimplemented"}
+)
+E2E_KINDS = frozenset({"e2e", "end_to_end", "integration", "acceptance"})
+UNIT_KINDS = frozenset({"unit", "test", "tests", "check"})
+
 
 class GitEvidenceError(RuntimeError):
     """Falha ao inspecionar o repositório Git."""
@@ -587,19 +594,193 @@ def resolve_artifact_path(
     return None
 
 
+def normalize_test_kind(raw: Any) -> str:
+    """Normaliza kind do teste; default ``unit`` quando omitido."""
+    text = str(raw or "").strip().lower().replace("-", "_")
+    if not text:
+        return "unit"
+    if text in {"skipped"}:
+        return "skip"
+    if text in NON_BEHAVIORAL_KINDS:
+        return text
+    if text in E2E_KINDS:
+        return "e2e"
+    if text in UNIT_KINDS:
+        return "unit"
+    return text
+
+
+def is_non_behavioral_kind(kind: Any) -> bool:
+    return normalize_test_kind(kind) in NON_BEHAVIORAL_KINDS
+
+
+def is_e2e_kind(kind: Any) -> bool:
+    return normalize_test_kind(kind) == "e2e"
+
+
+def spec_content_hash(spec: Any) -> str:
+    """Hash estável do Canonical Spec (dict ou objeto com ``to_dict``)."""
+    if hasattr(spec, "to_dict") and callable(spec.to_dict):
+        payload = spec.to_dict()
+    elif isinstance(spec, dict):
+        payload = spec
+    else:
+        payload = {"repr": str(spec)}
+    return canonical_json_hash(payload)
+
+
+def make_evidence_binding(
+    *,
+    run_id: str,
+    repository: str,
+    base_commit: str | None,
+    result_commit: str | None,
+    spec_hash: str | None = None,
+) -> dict[str, Any]:
+    """Vincula evidência de teste a run/repo/commits/(spec)."""
+    payload: dict[str, Any] = {
+        "run_id": str(run_id or ""),
+        "repository": str(repository or ""),
+        "base_commit": str(base_commit or ""),
+        "result_commit": str(result_commit or ""),
+        "spec_hash": str(spec_hash or ""),
+    }
+    payload["fingerprint"] = canonical_json_hash(
+        {k: v for k, v in payload.items() if k != "fingerprint"}
+    )
+    return payload
+
+
+def binding_matches(expected: dict[str, Any], observed: Any) -> tuple[bool, str | None]:
+    """Compara binding observada com a esperada da run atual."""
+    if not isinstance(observed, dict):
+        return False, "binding ausente ou não-objeto"
+    for key in ("run_id", "repository", "base_commit", "result_commit"):
+        exp = str(expected.get(key) or "")
+        got = str(observed.get(key) or "")
+        if not exp:
+            continue
+        if got != exp:
+            return False, f"binding.{key} diverge (esperado={exp[:12]}… obtido={got[:12]}…)"
+    exp_spec = str(expected.get("spec_hash") or "")
+    got_spec = str(observed.get("spec_hash") or "")
+    if exp_spec and got_spec and got_spec != exp_spec:
+        return False, "binding.spec_hash diverge da Canonical Spec da verificação"
+    exp_fp = str(expected.get("fingerprint") or "")
+    got_fp = str(observed.get("fingerprint") or "")
+    if exp_fp and got_fp and got_fp != exp_fp:
+        # Recomputa fingerprint da observada sem confiar no campo declarado.
+        recomputed = canonical_json_hash(
+            {
+                "run_id": str(observed.get("run_id") or ""),
+                "repository": str(observed.get("repository") or ""),
+                "base_commit": str(observed.get("base_commit") or ""),
+                "result_commit": str(observed.get("result_commit") or ""),
+                "spec_hash": str(observed.get("spec_hash") or ""),
+            }
+        )
+        if got_fp != recomputed:
+            return False, "binding.fingerprint adulterado"
+        if recomputed != exp_fp and str(observed.get("run_id") or "") != str(
+            expected.get("run_id") or ""
+        ):
+            return False, "binding de outra run"
+    return True, None
+
+
+def test_covers_acceptance(
+    test: dict[str, Any],
+    ac_id: str,
+    *,
+    locators: list[Any] | None = None,
+) -> bool:
+    """True se o teste declara cobertura do AC ou casa com locator de teste."""
+    covers = test.get("covers") or test.get("acceptance_criteria") or []
+    if isinstance(covers, (str, int)):
+        covers = [covers]
+    if ac_id in {str(c) for c in covers}:
+        return True
+    name = str(test.get("name") or "").strip()
+    if not name:
+        return False
+    for loc in locators or []:
+        path = str(loc).split(":")[0].replace("\\", "/")
+        base = Path(path).name
+        stem = Path(path).stem
+        if name == path or name == base or name == stem or name in path:
+            return True
+    return False
+
+
+def is_harness_behavioral_evidence(test: dict[str, Any]) -> bool:
+    """Evidência comportamental: harness executou, não é stub/skip, exit 0."""
+    if is_non_behavioral_kind(test.get("kind")):
+        return False
+    if str(test.get("executed_by") or "") != HARNESS_EXECUTED_BY:
+        return False
+    if test.get("suggestion_only"):
+        return False
+    exit_code = test.get("exit_code")
+    return isinstance(exit_code, int) and exit_code == 0
+
+
+def classify_tests(tests: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Separa E2E real de unitários e stubs/skips para o relatório."""
+    buckets: dict[str, list[str]] = {"e2e": [], "unit": [], "stub_or_skip": []}
+    for test in tests:
+        if not isinstance(test, dict):
+            continue
+        name = str(test.get("name") or test)
+        kind = normalize_test_kind(test.get("kind"))
+        if is_non_behavioral_kind(kind):
+            buckets["stub_or_skip"].append(name)
+        elif is_e2e_kind(kind) or kind == "e2e":
+            buckets["e2e"].append(name)
+        else:
+            buckets["unit"].append(name)
+    return buckets
+
+
 def test_evidence_errors(
     test: dict[str, Any],
     *,
     adapter: AdapterLog,
     artifact_roots: list[Path],
+    expected_binding: dict[str, Any] | None = None,
 ) -> list[tuple[str, str]]:
-    """Recusa teste apenas declarado, sem execução verificável."""
+    """Recusa teste só declarado, stub/skip como prova, ou log sem binding harness."""
     issues: list[tuple[str, str]] = []
     name = str(test.get("name") or test)
+    kind = normalize_test_kind(test.get("kind"))
+    test["_kind"] = kind
+
+    if is_non_behavioral_kind(kind):
+        # Stubs/skips são registrados, mas nunca contam como evidência de passe.
+        test["_behavioral"] = False
+        if test.get("passed", False):
+            issues.append(
+                (
+                    "TEST_NOT_EVIDENCED",
+                    f"teste `{name}` kind={kind} não é evidência comportamental "
+                    "(stub/skip não prova aceite)",
+                )
+            )
+        return issues
+
+    if str(test.get("executed_by") or "") != HARNESS_EXECUTED_BY:
+        issues.append(
+            (
+                "TEST_NOT_EVIDENCED",
+                f"teste `{name}` sem execução pelo harness "
+                f"(executed_by={test.get('executed_by')!r}; "
+                "passed=True do agente não basta)",
+            )
+        )
+
     command = test.get("command") or test.get("cmd")
     if command is None and isinstance(test.get("argv"), list):
-        argv = [str(a) for a in test["argv"]]
-        command = {"executable": argv[0], "args": argv[1:]} if argv else None
+        argv_list = [str(a) for a in test["argv"]]
+        command = {"executable": argv_list[0], "args": argv_list[1:]} if argv_list else None
     argv = command_argv(command) if command is not None else None
     if argv is None:
         issues.append(
@@ -613,7 +794,7 @@ def test_evidence_errors(
         issues.append(
             (
                 "TEST_NOT_EVIDENCED",
-                f"teste `{name}` sem exit_code inteiro",
+                f"teste `{name}` sem exit_code inteiro capturado pelo harness",
             )
         )
     if parse_timestamp(test.get("timestamp") or test.get("ts")) is None:
@@ -638,23 +819,94 @@ def test_evidence_errors(
         )
     else:
         test["_artifact_path"] = str(artifact)
-        test["_artifact_sha256"] = sha256_of(artifact)
+        digest = sha256_of(artifact)
+        test["_artifact_sha256"] = digest
+        declared = test.get("log_sha256") or test.get("artifact_sha256")
+        if declared and str(declared) != digest:
+            issues.append(
+                (
+                    "TEST_EVIDENCE_TAMPERED",
+                    f"teste `{name}` log adulterado "
+                    f"(sha256 declarado ≠ arquivo)",
+                )
+            )
+        if artifact.stat().st_size == 0:
+            issues.append(
+                (
+                    "TEST_NOT_EVIDENCED",
+                    f"teste `{name}` log incompleto (vazio)",
+                )
+            )
 
+    matched_rec: dict[str, Any] | None = None
     if argv is not None and isinstance(exit_code, int) and adapter.ok:
-        matched = False
         for rec in adapter.records:
             rec_cmd = command_from_log_record(rec)
             rec_argv = command_argv(rec_cmd) if rec_cmd is not None else None
             if rec_argv == argv and rec.get("exit_code") == exit_code:
-                matched = True
+                matched_rec = rec
                 break
-        if not matched:
+        if matched_rec is None:
             issues.append(
                 (
                     "TEST_NOT_EVIDENCED",
                     f"teste `{name}` não aparece no log estruturado do adapter",
                 )
             )
+        else:
+            if str(matched_rec.get("executed_by") or "") != HARNESS_EXECUTED_BY:
+                issues.append(
+                    (
+                        "TEST_NOT_EVIDENCED",
+                        f"teste `{name}` no log sem executed_by=harness",
+                    )
+                )
+            binding = matched_rec.get("binding") or test.get("binding")
+            if expected_binding is not None:
+                ok, reason = binding_matches(expected_binding, binding)
+                if not ok:
+                    code = (
+                        "TEST_EVIDENCE_OTHER_RUN"
+                        if reason and "outra run" in reason
+                        else "TEST_EVIDENCE_BINDING"
+                    )
+                    if reason and "adulterado" in reason:
+                        code = "TEST_EVIDENCE_TAMPERED"
+                    issues.append(
+                        (
+                            code,
+                            f"teste `{name}`: {reason}",
+                        )
+                    )
+            rec_log = matched_rec.get("log")
+            if rec_log and artifact is not None:
+                rec_digest = matched_rec.get("log_sha256")
+                if rec_digest and str(rec_digest) != test.get("_artifact_sha256"):
+                    issues.append(
+                        (
+                            "TEST_EVIDENCE_TAMPERED",
+                            f"teste `{name}` sha256 do log diverge do registro harness",
+                        )
+                    )
+
+    if expected_binding is not None and matched_rec is None:
+        binding = test.get("binding")
+        if binding is None and str(test.get("executed_by") or "") == HARNESS_EXECUTED_BY:
+            issues.append(
+                (
+                    "TEST_EVIDENCE_BINDING",
+                    f"teste `{name}` sem binding run/repo/commits/spec",
+                )
+            )
+        elif binding is not None:
+            ok, reason = binding_matches(expected_binding, binding)
+            if not ok:
+                issues.append(
+                    (
+                        "TEST_EVIDENCE_BINDING",
+                        f"teste `{name}`: {reason}",
+                    )
+                )
 
     passed = bool(test.get("passed", True))
     if isinstance(exit_code, int):
@@ -672,6 +924,9 @@ def test_evidence_errors(
                     f"teste `{name}` relatou passed=false com exit_code=0",
                 )
             )
+    test["_behavioral"] = is_harness_behavioral_evidence(test) and not any(
+        c == "TEST_NOT_EVIDENCED" or c.startswith("TEST_EVIDENCE_") for c, _ in issues
+    )
     return issues
 
 
@@ -680,8 +935,10 @@ def build_evidence_hashes(
     git: GitInspection | None,
     adapter: AdapterLog | None,
     tests: list[dict[str, Any]],
+    binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Hashes reproduzíveis a partir do repo e dos logs; HMAC reusa o selo do 19."""
+    kinds = classify_tests([t for t in tests if isinstance(t, dict)])
     payload: dict[str, Any] = {
         "base_commit": git.base_sha if git else None,
         "result_commit": git.result_sha if git else None,
@@ -694,10 +951,13 @@ def build_evidence_hashes(
             {
                 "name": str(t.get("name") or ""),
                 "sha256": t.get("_artifact_sha256"),
+                "kind": t.get("_kind") or normalize_test_kind(t.get("kind")),
             }
             for t in tests
             if t.get("_artifact_sha256")
         ],
+        "test_kinds": kinds,
+        "binding_fingerprint": (binding or {}).get("fingerprint"),
         "kid": current_kid(),
     }
     try:
