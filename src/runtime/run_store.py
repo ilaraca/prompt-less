@@ -244,6 +244,36 @@ class RunStore:
         self.write_manifest({"integrity": integrity})
         return integrity
 
+    def sealed_file_entries(self) -> list[dict[str, Any]]:
+        """Entradas `integrity.files` do manifesto (registro canônico da run)."""
+        integrity = self.read_manifest().get("integrity")
+        if not isinstance(integrity, dict):
+            return []
+        files = integrity.get("files") or []
+        return [e for e in files if isinstance(e, dict)]
+
+    def resolve_sealed_path(self, rel: str) -> Path:
+        """
+        Resolve um caminho relativo listado no selo, contido em `run_dir`.
+
+        Espelhos (`outputs/`) ficam fora deste contrato — só a árvore da run.
+        """
+        rel = str(rel or "")
+        if not rel or rel.startswith("/") or ".." in Path(rel).parts:
+            raise UnsafePath(f"caminho de selo inválido: {rel!r}")
+        return resolve_within(self.ctx.run_dir, self.ctx.run_dir / rel)
+
+    def verify_sealed_entry(self, entry: dict[str, Any]) -> Path:
+        """Confirma existência + sha256 de uma entrada do manifesto."""
+        rel = str(entry.get("path") or "")
+        path = self.resolve_sealed_path(rel)
+        if not path.is_file() or path.is_symlink():
+            raise FileNotFoundError(f"artefato ausente: {rel}")
+        expected = str(entry.get("sha256") or "")
+        if expected and sha256_of(path) != expected:
+            raise ValueError(f"artefato adulterado: {rel}")
+        return path
+
     def write_debugger(self, report: dict[str, Any]) -> Path:
         """Persiste o Agent Debugger em validations/debugger.json."""
         path = self.ctx.validations_dir / "debugger.json"

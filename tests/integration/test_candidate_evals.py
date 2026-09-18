@@ -78,9 +78,18 @@ def test_critical_http_defaults_to_exact_equality():
 
 
 def test_critical_http_extra_status_is_adversarial_fail(tmp_path: Path):
-    spec_dir = tmp_path / "out"
-    spec_dir.mkdir()
-    (spec_dir / "canonical-spec.yaml").write_text(
+    from src.runtime.atomic_io import sha256_of
+    from src.runtime.integrity import seal_hmac
+    from src.runtime.run_context import RunContext
+    from src.runtime.run_store import RunStore
+
+    run_id = "eval-adv-extra"
+    ctx = RunContext.create(root=tmp_path, objective="historia", run_id=run_id)
+    store = RunStore(ctx)
+    store.bootstrap()
+    spec_path = ctx.artifacts_dir / "canonical-spec.yaml"
+    ctx.artifacts_dir.mkdir(parents=True, exist_ok=True)
+    spec_path.write_text(
         yaml.safe_dump(
             {
                 "claims": [{"id": "CLM-0001", "text": "cadastro POST /clientes"}],
@@ -97,18 +106,37 @@ def test_critical_http_extra_status_is_adversarial_fail(tmp_path: Path):
         ),
         encoding="utf-8",
     )
+    store.finish("completed")
+    integrity = {
+        "algo": "hmac-sha256",
+        "kid": "v1",
+        "events_tip": store.events.tip,
+        "files": [
+            {
+                "path": "artifacts/canonical-spec.yaml",
+                "bytes": spec_path.stat().st_size,
+                "sha256": sha256_of(spec_path),
+            }
+        ],
+        "sealed_at": "2026-09-18T00:00:00Z",
+    }
+    integrity["hmac"] = seal_hmac(integrity)
+    store.write_manifest({"run_id": run_id, "integrity": integrity})
+
     expected = yaml.safe_load(
         (FIXTURES / "eval_adversarial" / "expected.yaml").read_text(encoding="utf-8")
     )
     result = {
         "status": "completed",
+        "run_id": run_id,
+        "run_dir": str(ctx.run_dir),
         "contexts": ["ms-cliente"],
         "by_context": [
             {"servico": {"id": "ms-cliente", "repos": ["mfe-onboarding", "bff-cliente", "ms-cliente"]}}
         ],
         "claims": [{"text": "POST /clientes CPF"}],
     }
-    score = score_case(expected, result, output_root=spec_dir)
+    score = score_case(expected, result, output_root=tmp_path)
     assert score.critical is True
     assert score.details["http_status_mode"] == "exact"
     assert score.expected_status_match is False
@@ -116,9 +144,18 @@ def test_critical_http_extra_status_is_adversarial_fail(tmp_path: Path):
 
 
 def test_critical_http_explicit_subset_rule_allows_extra(tmp_path: Path):
-    spec_dir = tmp_path / "out"
-    spec_dir.mkdir()
-    (spec_dir / "canonical-spec.yaml").write_text(
+    from src.runtime.atomic_io import sha256_of
+    from src.runtime.integrity import seal_hmac
+    from src.runtime.run_context import RunContext
+    from src.runtime.run_store import RunStore
+
+    run_id = "eval-subset-extra"
+    ctx = RunContext.create(root=tmp_path, objective="historia", run_id=run_id)
+    store = RunStore(ctx)
+    store.bootstrap()
+    spec_path = ctx.artifacts_dir / "canonical-spec.yaml"
+    ctx.artifacts_dir.mkdir(parents=True, exist_ok=True)
+    spec_path.write_text(
         yaml.safe_dump(
             {
                 "claims": [],
@@ -131,6 +168,23 @@ def test_critical_http_explicit_subset_rule_allows_extra(tmp_path: Path):
         ),
         encoding="utf-8",
     )
+    store.finish("completed")
+    integrity = {
+        "algo": "hmac-sha256",
+        "kid": "v1",
+        "events_tip": store.events.tip,
+        "files": [
+            {
+                "path": "artifacts/canonical-spec.yaml",
+                "bytes": spec_path.stat().st_size,
+                "sha256": sha256_of(spec_path),
+            }
+        ],
+        "sealed_at": "2026-09-18T00:00:00Z",
+    }
+    integrity["hmac"] = seal_hmac(integrity)
+    store.write_manifest({"run_id": run_id, "integrity": integrity})
+
     expected = {
         "critical": True,
         "http_status_mode": "subset",
@@ -139,10 +193,18 @@ def test_critical_http_explicit_subset_rule_allows_extra(tmp_path: Path):
         "signals": [],
         "expect_blocked": False,
     }
-    result = {"status": "completed", "contexts": [], "by_context": [], "claims": []}
-    score = score_case(expected, result, output_root=spec_dir)
+    result = {
+        "status": "completed",
+        "run_id": run_id,
+        "run_dir": str(ctx.run_dir),
+        "contexts": [],
+        "by_context": [],
+        "claims": [],
+    }
+    score = score_case(expected, result, output_root=tmp_path)
     assert score.details["http_status_mode"] == "subset"
     assert score.expected_status_match is True
+    assert score.selection_ok is True
 
 
 def test_eval_adversarial_and_multi_context_fixtures(tmp_path: Path):
