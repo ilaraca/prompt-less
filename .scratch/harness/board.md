@@ -221,7 +221,7 @@ Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
 |---|---|---|---|
 | 35-independent-test-evidence | **In progress** | filha | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
 | 36-repair-policy | **Feedback** | filha | `.worktrees/36-repair-policy` · `feature/repair-policy` |
-| 37-executor-enforcement | **In progress** | filha | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
+| 37-executor-enforcement | **Feedback** | filha, HEAD `e4d458b` | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
 | 39-case-regression-gates | **In progress** | filha | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
 | (pai) onda-frontier | — | integra filhas | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
@@ -250,7 +250,7 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 | 34-cli-failure-exit | P0.3 | Exit code de falha e bloqueio de consumo | **Done** | — |
 | 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **In progress** | 30, 31, 32, 33, 34 |
 | 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Feedback** | 30, 31, 32, 33, 34 |
-| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **In progress** | 30, 31, 32, 33, 34 |
+| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Feedback** | 30, 31, 32, 33, 34 |
 | 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | Todo | 35, 36, 37 |
 | 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **In progress** | 30, 31, 32 |
 
@@ -430,13 +430,13 @@ Sem capacidade de aplicar limites exigidos, bloquear o despacho.
 
 **Aceite:**
 
-- [ ] Tarefa autorizada altera arquivo permitido, executa teste e entrega diff.
-- [ ] Tentativas equivalentes fora de arquivos/comandos/argumentos permitidos
+- [x] Tarefa autorizada altera arquivo permitido, executa teste e entrega diff.
+- [x] Tentativas equivalentes fora de arquivos/comandos/argumentos permitidos
       são impedidas durante a execução.
-- [ ] Rede, credenciais, processos, tempo e recursos seguem os limites
+- [x] Rede, credenciais, processos, tempo e recursos seguem os limites
       declarados, com testes de enforcement.
-- [ ] Comandos internos relevantes são coletados pelo mecanismo confiável.
-- [ ] Integração externa explicita quais garantias aplica e apresenta evidências.
+- [x] Comandos internos relevantes são coletados pelo mecanismo confiável.
+- [x] Integração externa explicita quais garantias aplica e apresenta evidências.
 
 **Código:** `src/executors/devin.py`, `safe_exec.py`, `policy.py` e runner.
 
