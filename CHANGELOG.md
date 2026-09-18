@@ -9,6 +9,13 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- **EnforcedRunner sitecustomize único**: FS-deny e network-deny passam a
+  viver no mesmo módulo injetado (Python só carrega um `sitecustomize` no
+  `PYTHONPATH`). Com `network=deny` o guard de writes dos filhos voltava a
+  falhar silenciosamente. Guard libera fd (`open(int)`) e `/dev/*` para
+  runtime (pytest/capture). Teste de loop alinhado a `TEST_NOT_EVIDENCED`
+  para `terraform apply` (não é runner comportamental — ticket 35).
+
 - **Perda crítica reprova na eval** (`38-critical-context-budget`):
   `silent_critical_loss` ou `critical_coverage.complete=False` sem
   `blocked`/`split_required` explícito passa a falhar o gate obrigatório

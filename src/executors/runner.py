@@ -85,13 +85,23 @@ _ORIG_UNLINK = Path.unlink
 _ORIG_PATH_OPEN = Path.open
 
 def _allowed(path: object) -> bool:
+    # builtins.open / io.open aceitam fd (int) — já aberto pelo OS.
+    if isinstance(path, int):
+        return True
     try:
         resolved = Path(path).resolve()
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError, ValueError, TypeError):
         return False
+    # Runtime essentials (pytest/capture, sandbox); seatbelt também libera /dev.
+    if resolved.as_posix() in {"/dev/null", "/dev/zero", "/dev/urandom", "/dev/random"}:
+        return True
+    if resolved.as_posix().startswith("/dev/"):
+        return True
     return resolved == _REPO or _REPO in resolved.parents
 
 def _deny_outside(path: object, *, mode: str = "w") -> None:
+    if isinstance(path, int):
+        return
     read_only = isinstance(mode, str) and (
         mode == "r"
         or mode.startswith("r")
@@ -511,6 +521,7 @@ class EnforcedRunner:
             assert_dispatch_allowed(profile, self.capabilities)
         self._net_guard: tempfile.TemporaryDirectory[str] | None = None
         self._fs_guard: tempfile.TemporaryDirectory[str] | None = None
+        self._child_guard: tempfile.TemporaryDirectory[str] | None = None
         self._seatbelt: Path | None = None
         self._seatbelt_dir: tempfile.TemporaryDirectory[str] | None = None
         # Só envolve com sandbox OS se a sonda passou (fail-closed: binário
@@ -524,8 +535,8 @@ class EnforcedRunner:
             _write_seatbelt_profile(self._seatbelt, self.repo_root)
 
     def close(self) -> None:
-        for attr in ("_net_guard", "_fs_guard", "_seatbelt_dir"):
-            tmp = getattr(self, attr)
+        for attr in ("_net_guard", "_fs_guard", "_child_guard", "_seatbelt_dir"):
+            tmp = getattr(self, attr, None)
             if tmp is not None:
                 tmp.cleanup()
                 setattr(self, attr, None)
@@ -745,22 +756,23 @@ class EnforcedRunner:
         env["PYTHONPYCACHEPREFIX"] = str(child_tmp / "pycache")
         env["PROMPTLESS_REPO_ROOT"] = str(self.repo_root)
 
-        # Guard de FS para filhos Python (sempre, se writes declarado).
-        if "writes" in self.capabilities:
-            if self._fs_guard is None:
-                self._fs_guard = _make_guard_dir(
-                    _FS_DENY_SITEMODULE, prefix="promptless-fsdeny-"
+        # Um único sitecustomize: Python só carrega o primeiro no PYTHONPATH.
+        # FS e network no mesmo módulo (FS primeiro — contém `from __future__`).
+        need_fs = "writes" in self.capabilities
+        need_net = self.limits.get("network") == "deny"
+        if need_fs or need_net:
+            parts: list[str] = []
+            if need_fs:
+                parts.append(_FS_DENY_SITEMODULE)
+            if need_net:
+                parts.append(_NETWORK_DENY_SITEMODULE)
+                env["PROMPTLESS_NETWORK"] = "deny"
+                env.pop("PYTHONNOUSERSITE", None)
+            if self._child_guard is None:
+                self._child_guard = _make_guard_dir(
+                    "\n".join(parts), prefix="promptless-guard-"
                 )
-            self._prepend_pythonpath(env, self._fs_guard.name)
-
-        if self.limits.get("network") == "deny":
-            if self._net_guard is None:
-                self._net_guard = _make_guard_dir(
-                    _NETWORK_DENY_SITEMODULE, prefix="promptless-netdeny-"
-                )
-            self._prepend_pythonpath(env, self._net_guard.name)
-            env["PROMPTLESS_NETWORK"] = "deny"
-            env.pop("PYTHONNOUSERSITE", None)
+            self._prepend_pythonpath(env, self._child_guard.name)
         return env
 
     @staticmethod
