@@ -395,20 +395,8 @@ aceite obrigatório com evidência de comportamento adequada.
 
 **Código:** `src/executors/devin.py`, `evidence.py`, `verify.py`.
 
-## Implementation note
-
-- `_materialize_test_evidence` reexecuta sugestões do sidecar via runner do
-  harness; `passed=True` do agente nunca vira `exit_code=0` sem execução.
-  JSONL grava argv/stdout/stderr/exit + binding (`run_id`, repo, commits,
-  `spec_hash`) e `executed_by=harness`.
-- Verify exige harness + binding; códigos novos:
-  `TEST_EVIDENCE_TAMPERED` / `TEST_EVIDENCE_BINDING` /
-  `AC_WITHOUT_BEHAVIORAL_EVIDENCE`. `evidence_hashes.test_kinds` separa
-  e2e / unit / stub_or_skip.
-- README + CHANGELOG atualizados.
-- HEAD filha: `36bcbc3` · branch `feature/independent-test-evidence`.
-- Verificar: `PYTHONPATH=. python -m pytest tests/integration/test_independent_test_evidence.py tests/integration/test_evidence_verify.py -q`
-  e `PYTHONPATH=. python scripts/quality_gates.py` (no pai/`onda-merge` antes do merge).
+**Kanban:** Feedback · HEAD filha `36bcbc3` · ver
+`issues/35-independent-test-evidence.md` § Implementation note.
 
 ### 36 — Política completa no reparo
 

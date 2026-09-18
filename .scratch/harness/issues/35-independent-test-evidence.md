@@ -11,17 +11,25 @@
 
 ## Aceite
 
-Ver checkboxes no board § correspondente (marcados na entrega).
+Checkboxes no board § 35 — todos marcados na entrega.
 
 ## Código
 
 `src/executors/devin.py`, `evidence.py`, `verify.py`. README + CHANGELOG
-atualizados.
+atualizados no mesmo commit da feature.
 
 ## Implementation note
 
-- Sidecar só sugere; harness reexecuta e captura exit/argv/logs + binding.
-- `passed=True` sozinho nunca basta; AC exige prova comportamental.
-- Verificar: pytest `test_independent_test_evidence.py` +
-  `scripts/quality_gates.py` no pai antes do merge.
+- `_materialize_test_evidence` reexecuta sugestões do sidecar via runner do
+  harness; `passed=True` do agente nunca vira `exit_code=0` sem execução.
+  JSONL grava argv/stdout/stderr/exit + binding (`run_id`, repo, commits,
+  `spec_hash`) e `executed_by=harness`.
+- Verify exige harness + binding; códigos novos:
+  `TEST_EVIDENCE_TAMPERED` / `TEST_EVIDENCE_BINDING` /
+  `AC_WITHOUT_BEHAVIORAL_EVIDENCE`. `evidence_hashes.test_kinds` separa
+  e2e / unit / stub_or_skip.
+- HEAD: `36bcbc3` · `feature/independent-test-evidence` (sem push/PR da filha).
+- Verificar:
+  `PYTHONPATH=. python -m pytest tests/integration/test_independent_test_evidence.py tests/integration/test_evidence_verify.py -q`
+  e no pai `PYTHONPATH=. python scripts/quality_gates.py` antes do merge.
 - Parar em Feedback até revisão humana → Done.
