@@ -14,6 +14,16 @@ from src.engenharia import (
     format_seguranca,
     format_stack,
 )
+from src.renderers.mermaid import render_mermaid
+from src.renderers.openapi import build_openapi_document, render_openapi
+
+__all__ = [
+    "build_openapi_document",
+    "render_historia",
+    "render_mermaid",
+    "render_openapi",
+    "render_prd",
+]
 
 
 def _fill(template: str, mapping: dict[str, str]) -> str:
@@ -38,6 +48,18 @@ def _bdd_from_spec(spec: CanonicalSpec) -> str:
 def _rf_from_spec(spec: CanonicalSpec) -> str:
     lines = [f"- **{r.id}** {r.text}" for r in spec.requirements]
     return "\n".join(lines) if lines else "- _(sem RF)_"
+
+
+def _operacao_md(op) -> str:
+    """Ação do PRD alinhada ao IR — sem method/path/status inventado."""
+    if op.method and op.path:
+        linha = f"- **{op.id}** {op.method} {op.path}"
+    else:
+        linha = f"- **{op.id}** {op.name} — _(method/path não resolvidos no IR)_"
+    status = op.resolved_success_status()
+    if status is None:
+        return f"{linha} → sucesso _(unresolved — requer revisão)_"
+    return f"{linha} → HTTP {status}"
 
 
 def _ownership_md(spec: CanonicalSpec) -> str:
@@ -117,9 +139,7 @@ def render_prd(
             "requisitos_funcionais": _rf_from_spec(spec),
             "dados_entrada": "- _(ver UI / operações)_",
             "dados_saida": "- _(ver UI / operações)_",
-            "acoes": "\n".join(
-                f"- **{o.id}** {o.method} {o.path}" for o in spec.operations
-            )
+            "acoes": "\n".join(_operacao_md(o) for o in spec.operations)
             or "- _(sem operações)_",
             "regras_negocio": regras,
             "criterios_bdd": _bdd_from_spec(spec),
