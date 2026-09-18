@@ -7,6 +7,18 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Added
+
+- **Baseline de engenharia v2** (`28-engineering-baseline-v2`): `engenharia.yaml`
+  versionado (`config/engenharia.schema.yaml`); catálogo com circuit breaker,
+  metrics, tracing, idempotência e segurança; NFRs selecionados por camada +
+  criticidade (não o YAML integral no prompt); origem
+  `baseline|declared|observed` por NFR; conflitos com o índice de código viram
+  gaps; templates v1 migram na ingest; história/PRD/tasks SDD compartilham os
+  mesmos IDs `NFR-*`
+- Testes (`tests/integration/test_engineering_baseline_v2.py`): migração v1→v2,
+  seleção por camada/criticidade, IDs alinhados e gaps NFR×código
+
 ### Fixed
 
 - Quality-gates deixam de divergir entre a máquina e o GitHub: o workflow chama

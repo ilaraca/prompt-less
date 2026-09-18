@@ -28,8 +28,9 @@
 ### Arquitetura
 {{arquitetura}}
 
-## Não-funcionais (DoD técnico — baseline v1)
-> Defaults de `inputs/engenharia.yaml`. Só documente deltas neste fluxo.
+## Não-funcionais (DoD técnico — baseline v2)
+> Defaults de `inputs/engenharia.yaml` (schema v2). Só documente deltas neste fluxo.
+> IDs `NFR-*` alinhados ao Canonical Spec / PRD / SDD.
 
 ### Resiliência
 {{resiliencia}}

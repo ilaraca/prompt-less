@@ -19,7 +19,9 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 - prefixo de system/tools **estável e cacheável** (OpenAI / Claude);
 - budget explícito de tokens (alvo ~650; teto ~2000);
 - **PRD.md** gerado junto com a história, como insumo canônico para **SDD**;
-- baseline de engenharia (**stack + NFR v1**: timeout/retry + logs + README/changelog/Javadoc) via `inputs/engenharia.yaml`;
+- baseline de engenharia (**stack + NFR v2**: timeout/retry/circuit breaker/
+  idempotência + logs/metrics/tracing + segurança + README/changelog/Javadoc)
+  via `inputs/engenharia.yaml` (schema versionado; seleção por camada/criticidade);
 - **harness**: runtime por `run_id`, provenance/claims, Canonical Spec + quality gate, ciclo verify/repair, plano multi-repo e melhoria com evals (sem apply automático).
 
 **Princípio:** nunca enviar dados brutos ao modelo se puderem ser filtrados ou comprimidos antes.
@@ -276,7 +278,7 @@ Estimativa de tokens: tokenizer do provider configurado em `models.provider` / `
 ```
 figma.json ──────► preprocess ──► ui {inputs, actions, columns} ──┐
 regras.yaml ─────► preprocess ──► regras {bloqueios, …} ──────────┤
-engenharia.yaml ► preprocess ──► engenharia {stack, NFR v1} ─────┼─► rag_compress ─► consolidated
+engenharia.yaml ► preprocess ──► engenharia {stack, NFR v2 selecionados} ─┼─► rag_compress ─► consolidated
 docs *.txt ──────► doc_compress ─► resumos/consolidado docs ─────┘         │
                                                                             ▼
 state/workflow.json ◄── só metadados                               context_builder
@@ -317,7 +319,7 @@ O `PRD.md` nasce com:
 - **frontmatter YAML** (`id`, `artifacts`, `sdd.expected`, `nfr_ids`) para parsers de SDD
 - RF (`RF-xx`) a partir das regras/UI
 - AC (`AC-xx`) BDD alinhados à história
-- NFR (`NFR-R|O|S|D-xx`) a partir de `engenharia.yaml` (baseline v1)
+- NFR (`NFR-R|O|S|D-xx`) a partir de `engenharia.yaml` (baseline v2, selecionados)
 - contrato de dados (entrada/saída/ações)
 - seção **Handoff para SDD** (o que o próximo estágio deve gerar)
 - contexto comprimido do Prompt-less (sem texto bruto)
@@ -371,7 +373,7 @@ Figma + regras + docs
 - Título, Contexto (1 linha), Critérios BDD (Dado/Quando/Então), Dependências
 - Critérios = tradução das condições de `regras.yaml`
 - Payloads alinhados ao Figma
-- Escopo técnico + DoD NFR a partir de `engenharia.yaml` (baseline v1: timeout/retry + logs + documentação)
+- Escopo técnico + DoD NFR a partir de `engenharia.yaml` (baseline v2)
 
 **PRD**
 
@@ -409,7 +411,8 @@ Coloque os arquivos em `pipeline/inputs/`:
 ### Exemplo mínimo de `engenharia.yaml`
 
 ```yaml
-version: 1
+version: 2
+criticidade: medium   # low | medium | high | critical — corta o catálogo NFR
 stack:
   bff: [Java 17, Spring Boot 3]
   mfe: [TypeScript, React]
@@ -422,13 +425,30 @@ resiliencia:
   retry:
     max_attempts: 2
     backoff: exponential
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    reset_timeout_ms: 30000
+  idempotencia:
+    enabled: true
+    key_header: Idempotency-Key
 observabilidade:
   logs:
     formato: structured_json
     campos_minimos: [timestamp, level, service, correlation_id, message]
     sem_pii: true
+  metrics:
+    enabled: true
+    padrao: red
+    export: prometheus
+  tracing:
+    enabled: true
+    padrao: w3c-tracecontext
+    sampler: parentbased_traceidratio
 seguranca:
   validar_input: true
+  authn: required
+  authz: required
 documentacao:
   readme:
     obrigatorio: true
@@ -452,7 +472,13 @@ documentacao:
       go: godoc
 ```
 
-Baseline **v1**: timeout/retry + logs + segurança mínima + **documentação** (README estruturado, CHANGELOG, docs de API conforme a stack — Javadoc, TSDoc, GoDoc…). Circuit breaker, metrics, tracing, ADRs e alertas ficam comentados/`_(futuro)_` para evoluir sem estourar tokens.
+Baseline **v2** (`config/engenharia.schema.yaml`): timeout/retry/circuit breaker/
+idempotência + logs/metrics/tracing + segurança + documentação. Arquivos
+`version: 1` **migram na ingest** (defaults v2 preenchidos; overrides preservados).
+NFRs entram no IR/história/PRD/SDD com IDs estáveis (`NFR-R-01`…) e origem
+`baseline|declared|observed`; a seleção é por **camada** (api/bff/mfe/…) e
+**criticidade** — o prompt recebe o recorte, não o YAML integral. Conflito ou
+ausência no índice de código gera gap `GAP-NFR-*`.
 
 A seção `documentacao` vira **NFR-D** na história/PRD. O padrão de doc de código é derivado da `stack` (ex.: BFF Java → Javadoc; MFE TypeScript → TSDoc); `por_linguagem` só sobrescreve quando necessário.
 
@@ -1503,8 +1529,13 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 - Plano multi-repo sem evidência de código cai na topologia por camada
   (`origin: heuristic`, exige revisão); execução paralela das ondas ainda não roda (ticket `13`)
 - O pacote SDD lê o grafo multi-repo observado quando há evidência; fallback
-  heurístico continua `requires_review`. Não classifica NFR por tipo (28)
+  heurístico continua `requires_review`. NFRs são selecionados por camada +
+  criticidade (`28`); tasks recebem o subconjunto da sua `layer`
 - Nenhuma task do SDD é despachada a executor (`10`) nem passa por apply/rollback (`14`)
+- Sinais de NFR no índice (CircuitBreaker, MeterRegistry, OTel…) são heurísticos
+  por substring — falso positivo/negativo possível; gap `GAP-NFR-*` marca origem
+  `heuristic` quando o baseline exige e o código não mostra sinal
+- Alertas/ADRs/bulkhead ainda não entram no catálogo v2
 - Resumo de docs é **extrativo por regex**, não LLM small (bom custo; pode perder nuance)
 - Tokenizer oficial cobre OpenAI via `tiktoken`; Anthropic/Gemini e ausência da lib usam heurística `chars÷4` (`method=heuristic`), nunca como contagem exata
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
@@ -1522,9 +1553,8 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 2. Devin CLI real no `close_loop`
 3. Redis opcional (state backend)
 4. Execução concorrente por ondas + apply/rollback de propostas em produção (`14`)
-5. NFR por tipo (resiliência / observabilidade / segurança) no consumidor SDD (`28`)
-6. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
-7. Ligar estágios opcionais de scan/index/marcar no grafo default
+5. Alertas / ADRs / bulkhead no catálogo de engenharia (extensão do `28`)
+6. Ligar estágios opcionais de scan/index/marcar no grafo default
 
 
 ---
