@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.context_builder import build_context  # noqa: E402
+from src.domain.provenance import merge_claims  # noqa: E402
 from src.emit import emit  # noqa: E402
 from src.ingest import ARTIFACT_TEMPLATES, load_inputs  # noqa: E402
 from src.preprocess import preprocess  # noqa: E402
@@ -191,6 +192,7 @@ def _run_single(
         consolidated_chars=consolidated_chars,
         lines_per_chunk=lines_per_chunk,
         chunk_summary_chars=chunk_summary_chars,
+        service_id=(servico or {}).get("id") or context,
     )
 
     spec = build_canonical_spec(
@@ -261,6 +263,15 @@ def _run_single(
         packages[extra] = str(extra_pkg)
     if spec_path is not None:
         outputs["canonical_spec"] = str(spec_path)
+    ns = context or (servico or {}).get("id") or "default"
+    claims_out: list[dict[str, Any]] = []
+    for claim in spec.claims:
+        payload = claim.to_dict()
+        if not payload.get("service_id"):
+            payload["service_id"] = (servico or {}).get("id")
+        payload.setdefault("context", ns)
+        payload.setdefault("local_id", payload.get("id"))
+        claims_out.append(payload)
     return {
         "context": context,
         "servico": {k: v for k, v in (servico or {}).items() if k != "indice"} or None,
@@ -270,7 +281,7 @@ def _run_single(
         "llm_packages": packages,
         "est_tokens": context_pkg["est_tokens"],
         "rag": context_pkg["rag_stats"],
-        "claims": list(rag.get("claims") or []),
+        "claims": claims_out,
         "discarded": list(rag.get("discarded") or []),
         "canonical_spec": str(spec_path) if spec_path else None,
         "validation": validation.to_dict(),
@@ -345,15 +356,10 @@ def run(
             for ctx_result in result["by_context"]:
                 claims.extend(ctx_result.get("claims") or [])
                 discarded.extend(ctx_result.get("discarded") or [])
-        seen: set[str] = set()
-        unique_claims: list[dict[str, Any]] = []
-        for c in claims:
-            cid = str(c.get("id") or "")
-            if cid and cid not in seen:
-                seen.add(cid)
-                unique_claims.append(c)
+        unique_claims = merge_claims(claims)
         prov_path = store.write_provenance(claims=unique_claims, discarded=discarded)
         store.mirror_artifacts_to_outputs(compat_root)
+        store.seal_artifacts()
         store.finish(status, result)
         return {
             **result,
@@ -377,9 +383,14 @@ def run(
             if ctx
             else run_ctx.validations_dir / "spec-validation.json"
         )
-        claims = (
-            [claim.to_dict() for claim in exc.spec.claims] if exc.spec else []
-        )
+        claims: list[dict[str, Any]] = []
+        for claim in (exc.spec.claims if exc.spec else []):
+            payload = claim.to_dict()
+            payload.setdefault("context", ctx)
+            payload.setdefault("local_id", payload.get("id"))
+            if not payload.get("service_id") and exc.spec is not None:
+                payload["service_id"] = exc.spec.service_id
+            claims.append(payload)
         discarded = list(exc.discarded or [])
         return {
             "context": ctx,

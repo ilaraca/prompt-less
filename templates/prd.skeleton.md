@@ -117,3 +117,6 @@ O SDD deve consumir este PRD + artefatos linkados no frontmatter e produzir:
 
 ### Contexto comprimido (Prompt-less)
 {{contexto_comprimido}}
+
+## 16. Proveniência
+{{proveniencia}}

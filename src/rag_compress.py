@@ -5,6 +5,8 @@ from typing import Any
 
 from src.doc_compress import compress_documents
 from src.domain.claim import Claim, ClaimOrigin
+from src.domain.chunk import content_hash
+from src.domain.provenance import claim_namespace, make_claim_id
 from src.domain.source_ref import SourceRef
 from src.engenharia import rag_snippet
 
@@ -67,6 +69,7 @@ def compress_rag(
     consolidated_chars: int = 800,
     lines_per_chunk: int = 40,
     chunk_summary_chars: int = 220,
+    service_id: str | None = None,
 ) -> dict[str, Any]:
     struct_chunks = retrieve_chunks(ctx)
     struct_summaries = summarize_chunks(struct_chunks)
@@ -79,11 +82,13 @@ def compress_rag(
         lines_per_chunk=lines_per_chunk,
         chunk_summary_chars=chunk_summary_chars,
         consolidated_chars=doc_budget,
+        service_id=service_id,
     )
 
     parts = [p for p in (struct_part, docs_part.get("consolidated") or "") if p]
     consolidated = consolidate(parts, max_chars=consolidated_chars)
 
+    ns = claim_namespace(service_id)
     # claims estruturados das regras (declared)
     struct_claims: list[dict] = []
     n = 1
@@ -91,11 +96,19 @@ def compress_rag(
         text = f"block status={b.get('status')} trigger={b.get('trigger')}"
         struct_claims.append(
             Claim(
-                id=f"CLM-R{n:03d}",
+                id=make_claim_id(ns, n, kind="R"),
                 text=text,
                 origin=ClaimOrigin.DECLARED,
                 confidence=1.0,
-                sources=[SourceRef(document="regras.yaml", section=f"bloqueios[{i}]")],
+                service_id=service_id,
+                sources=[
+                    SourceRef(
+                        document="regras.yaml",
+                        section=f"bloqueios[{i}]",
+                        content_hash=content_hash(text),
+                        locator=f"$.bloqueios[{i}]",
+                    )
+                ],
             ).to_dict()
         )
         n += 1

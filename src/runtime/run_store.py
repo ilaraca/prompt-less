@@ -16,6 +16,7 @@ from src.runtime.atomic_io import (
     sha256_of,
 )
 from src.runtime.event_store import EventStore
+from src.runtime.integrity import collect_sealed_files
 from src.runtime.run_context import RunContext
 
 # manifesto do espelho: ponto de commit da publicação em outputs/
@@ -204,6 +205,28 @@ class RunStore:
             discarded=len(discarded),
         )
         return path
+
+    def seal_artifacts(self) -> dict[str, Any]:
+        """
+        Ancora sha256 dos artefatos/validações no manifest, depois do
+        provenance e antes de `finish`. Sem HMAC (não há chave).
+        """
+        files = collect_sealed_files(
+            self.ctx.run_dir, self.ctx.artifacts_dir, self.ctx.validations_dir
+        )
+        integrity = {
+            "algo": "sha256",
+            "events_tip": self.events.tip,
+            "files": files,
+            "sealed_at": _now(),
+        }
+        self.write_manifest({"integrity": integrity})
+        self.events.emit(
+            "artifacts_sealed",
+            files=len(files),
+            events_tip=integrity["events_tip"],
+        )
+        return integrity
 
     # --------------------------------------------------------------- mirror
 

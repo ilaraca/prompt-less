@@ -64,6 +64,34 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                 )
             )
 
+    def _warn_low_confidence(subject_id: str, links: list[Any]) -> None:
+        for link in links:
+            requires = (
+                link.requires_review
+                if hasattr(link, "requires_review")
+                else bool((link or {}).get("requires_review"))
+            )
+            if not requires:
+                continue
+            claim_id = (
+                link.claim_id
+                if hasattr(link, "claim_id")
+                else str((link or {}).get("claim_id") or "")
+            )
+            score = link.score if hasattr(link, "score") else (link or {}).get("score")
+            issues.append(
+                ValidationIssue(
+                    code="LOW_CONFIDENCE_CLAIM_MATCH",
+                    severity="warning",
+                    message=(
+                        f"{subject_id} match lexical de {claim_id} "
+                        f"com score {score} < 0.6 — exige revisão"
+                    ),
+                    subject_id=subject_id,
+                    source_claims=[claim_id] if claim_id else [],
+                )
+            )
+
     def _check_claim_sources(claim) -> None:
         origin = claim.origin.value if hasattr(claim.origin, "value") else str(claim.origin)
         if not claim.sources:
@@ -133,6 +161,7 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                 )
             )
         _check_source_claims(rf.id, list(rf.source_claims))
+        _warn_low_confidence(rf.id, getattr(rf, "claim_links", None) or [])
 
     for ac in spec.acceptance_criteria:
         if ac.requirement_id not in rf_ids:
@@ -145,9 +174,11 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                 )
             )
         _check_source_claims(ac.id, list(ac.source_claims))
+        _warn_low_confidence(ac.id, getattr(ac, "claim_links", None) or [])
 
     for err in spec.errors:
         _check_source_claims(err.id, list(err.source_claims))
+        _warn_low_confidence(err.id, getattr(err, "claim_links", None) or [])
 
     for q in spec.open_questions:
         _check_source_claims(q.id, list(q.source_claims))

@@ -14,6 +14,7 @@ from src.runtime.run_context import (
     validate_run_id,
 )
 from src.runtime.event_store import EventStore
+from src.runtime.integrity import verify_run_dir
 from src.runtime.run_store import (
     InvalidStatusTransition,
     RunIdCollision,
@@ -37,4 +38,5 @@ __all__ = [
     "new_run_id",
     "validate_context_id",
     "validate_run_id",
+    "verify_run_dir",
 ]
