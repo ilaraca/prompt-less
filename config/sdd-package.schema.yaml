@@ -1,0 +1,71 @@
+# Contrato do pacote SDD emitido a partir do Canonical Spec.
+# Validado em src/validators (validate_sdd_package) — sem default inventado.
+title: sdd-package
+type: object
+required:
+  - package_version
+  - source
+  - service_id
+  - review
+  - architecture
+  - api_decisions
+  - tasks
+  - graph
+properties:
+  package_version:
+    type: string
+  source:
+    const: canonical-spec
+  service_id:
+    type: string
+  review:
+    type: object
+    required:
+      - status
+      - executor_dispatch
+      - ready_for_executor
+    properties:
+      status:
+        enum: [pending_review, blocked]
+      executor_dispatch:
+        const: false
+      ready_for_executor:
+        const: false
+  architecture:
+    type: object
+    required:
+      - origin
+      - decisions
+      - repositories
+      - contract_operations
+  api_decisions:
+    type: array
+  tasks:
+    type: array
+    minItems: 1
+    items:
+      type: object
+      required:
+        - id
+        - rf_ids
+        - ac_ids
+        - nfr_ids
+        - service_id
+        - evidence
+        - depends_on
+        - blocked_by
+        - status
+      properties:
+        status:
+          enum: [pending_review, blocked]
+        rf_ids:
+          type: array
+          minItems: 1
+        ac_ids:
+          type: array
+          minItems: 1
+  graph:
+    type: object
+    required:
+      - source
+      - waves

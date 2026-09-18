@@ -16,13 +16,16 @@ from src.engenharia import (
 )
 from src.renderers.mermaid import render_mermaid
 from src.renderers.openapi import build_openapi_document, render_openapi
+from src.renderers.sdd import build_sdd_package, render_sdd
 
 __all__ = [
     "build_openapi_document",
+    "build_sdd_package",
     "render_historia",
     "render_mermaid",
     "render_openapi",
     "render_prd",
+    "render_sdd",
 ]
 
 

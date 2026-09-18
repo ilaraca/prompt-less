@@ -34,6 +34,7 @@ from src.renderers import (  # noqa: E402
     render_mermaid,
     render_openapi,
     render_prd,
+    render_sdd,
 )
 from src.repo_index import load_index, service_evidence  # noqa: E402
 from src.runtime import RunContext, RunStore, context_subdir  # noqa: E402
@@ -167,6 +168,8 @@ def _build_one(
             artifact = render_openapi(canonical_spec, template)
         elif tipo == "mermaid" and canonical_spec is not None:
             artifact = render_mermaid(canonical_spec, template)
+        elif tipo == "sdd" and canonical_spec is not None:
+            artifact = render_sdd(canonical_spec, template)
         else:
             artifact = dry_run_scaffold(
                 tipo,
@@ -508,7 +511,7 @@ def run(
                     f"contexto desconhecido: {context}. Disponíveis: {', '.join(ids)}"
                 )
             targets = [context]
-        elif all_contexts or tipo in {"historia", "prd"}:
+        elif all_contexts or tipo in {"historia", "prd", "sdd"}:
             partitioned = partition_documents(
                 documents, mapa, lines_per_chunk=lines_per_chunk
             )
@@ -627,7 +630,7 @@ def run(
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Prompt-less — token-efficient tech artifacts")
-    p.add_argument("tipo", choices=["openapi", "mermaid", "historia", "prd"])
+    p.add_argument("tipo", choices=["openapi", "mermaid", "historia", "prd", "sdd"])
     p.add_argument("--dry-run", action="store_true", default=True)
     p.add_argument("--live", action="store_true")
     p.add_argument(
