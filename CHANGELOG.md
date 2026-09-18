@@ -9,6 +9,22 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Verificação por evidência** (`20-evidence-backed-verification`): o
+  `close_loop` deixa de confiar em `changed_files` / comandos / testes
+  declarados no payload. `base_commit` e `result_commit` são obrigatórios;
+  o verify confirma ancestralidade no mesmo repositório e calcula o diff
+  com Git
+- Policy avalia o diff real e o realpath (symlink em `src/` apontando para
+  `infra/prod` é `FILE_OUT_OF_SCOPE` / `PATH_ESCAPES_REPO`)
+- Comandos vêm do JSONL estruturado do adapter (`--adapter-log`); testes
+  exigem comando, `exit_code`, timestamp ISO-8601 e artefato/log existente
+- Rastreio RF/AC precisa existir no `result_commit` (arquivo e linha);
+  divergência relato × evidência é `EVIDENCE_DIVERGENCE`
+- `verify-report.json` inclui `evidence_hashes` (SHA-256 do diff, do log e
+  dos artefatos; HMAC reusa `PROMPTLESS_INTEGRITY_KEY` / `seal_hmac` do 19)
+- Testes (`tests/integration/test_evidence_verify.py`): payload forjado não
+  esconde arquivo fora de escopo; teste só declarado é recusado; hashes
+  reproduzíveis a partir do repo e dos logs
 - **Storage seguro da run** (`18-safe-run-storage`): `src/runtime/atomic_io.py`
   com write-temp + `os.replace`, cópia atômica e contenção de caminho
   (`resolve_within`)
@@ -61,6 +77,9 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- `close_loop` / `verify_execution` exigem checkout Git (`--repo`) e log
+  estruturado do adapter; `changed_files` e `commands_executed` do payload
+  só servem para detectar divergência, não como evidência
 - `manifest.json`, `state.json`, `provenance.json`, `latest.json`,
   `canonical-spec.yaml`, `spec-validation.json` e `llm_package_*.json` passam a
   ser gravados atomicamente

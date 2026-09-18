@@ -43,7 +43,7 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 | **Microsserviços / multi-repo** | `scan-repos.sh` lê a pasta de repos → mapa → marcadores → `outputs/contextos/<id>/` |
 | **Pré-processamento barato + raciocínio caro** | Camada local (“modelo pequeno”) + slot para LLM grande |
 | **Gate antes de implementar** | Canonical Spec bloqueia ambiguidade (ex.: HTTP indefinido) com `PipelineBlocked` |
-| **Verify pós-executor** | `close_loop` confere ExecutionResult vs spec + policy de camada |
+| **Verify pós-executor** | `close_loop` confere o que ocorreu no Git e nos logs do adapter (não o payload) vs spec + policy |
 | **Plano coordenado multi-repo** | `plan_repos` gera ondas/contratos a partir do mapa de serviços |
 | **Melhoria sem regressão silenciosa** | `improve` + evals; propostas só `approved_for_experiment` |
 
@@ -96,7 +96,7 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
                             openapi | sequence.mmd | historia.md | PRD.md | canonical-spec.yaml
 
         (pós-execução, opcional)
- [close_loop] ───────────── ExecutionResult × spec × policy → verify / repair
+ [close_loop] ───────────── Git diff × adapter log × spec × policy → verify / repair
  [plan_repos] ───────────── mapa-servicos → implementation_plan (ondas)
  [improve] ──────────────── diagnose → propostas → evals → approved_for_experiment
 ```
@@ -1002,26 +1002,41 @@ quando as decisões declaram um único 2xx e existe uma única operação (aí o
 
 ### Ciclo executor (`close_loop`)
 
-Fecha o loop **spec × ExecutionResult × policy de camada**:
+Fecha o loop **evidência real × spec × policy de camada**. O payload do
+executor é relato: `changed_files` sai de `git diff` entre `base_commit` e
+`result_commit`, comandos vêm do JSONL estruturado do adapter, e cada teste
+precisa de comando, `exit_code`, timestamp e artefato/log. Divergência entre
+relato e evidência é erro (`EVIDENCE_DIVERGENCE`). O `verify-report.json`
+inclui `evidence_hashes` (SHA-256 do diff, do log e dos artefatos de teste,
+com HMAC reusando `PROMPTLESS_INTEGRITY_KEY`).
 
 ```bash
 .venv/bin/python -m src.close_loop \
   --spec runs/<id>/artifacts/canonical-spec.yaml \
   --result tests/fixtures/executor/execution_ok.json \
+  --repo path/para/checkout \
+  --adapter-log path/adapter-log.jsonl \
   --out /tmp/verify
 
 # marcar aprovação / tentativa de reparo
-.venv/bin/python -m src.close_loop --spec ... --result ... --approve
-.venv/bin/python -m src.close_loop --spec ... --result ... --attempt 1 --layer bff
+.venv/bin/python -m src.close_loop --spec ... --result ... --repo ... --approve
+.venv/bin/python -m src.close_loop --spec ... --result ... --repo ... --attempt 1 --layer bff
 ```
+
+`--repo` e os commits são obrigatórios. Sem ancestralidade no mesmo
+repositório, sem log do adapter ou com teste apenas “declarado”, o verify
+falha fechado.
 
 Policy (`config/permission_profiles.yaml` + `src/executors/policy.py`):
 
 - writes/comandos allow/deny por camada (`bff`, `api`, `mfe`, …)
 - comandos parseados como argv (`shlex`); `&&` / `;` / `||` negam
 - paths normalizados (`normalize_repo_path`) — rejeita absoluto e `..`
+- policy avalia o **diff Git** e o **realpath** (symlink para `infra/prod` não
+  passa só porque o path Git está em `src/`)
 - verify fail-closed para layer desconhecido; `NO_TESTS_REPORTED` é error em code change
 - `FILE_OUT_OF_SCOPE` → `required_reverts` (não amplia `editable_surface`)
+- rastreio RF/AC precisa existir no `result_commit` (arquivo e linha)
 
 O adapter Devin (`src/executors/devin.py`) é stub até o ticket E2E da série 2.
 
@@ -1046,7 +1061,7 @@ Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`
 
 ```bash
 .venv/bin/pytest -v --tb=short
-# esperado: 97 passed
+# esperado: 121 passed
 ```
 
 Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services) e goldens de artefato derivado em `tests/fixtures/golden/` (`openapi.yaml`, `sequence.mmd`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`. CI em `.github/workflows/ci.yml` (compileall + YAML de profiles + pytest + smoke `plan_repos`).
@@ -1089,7 +1104,7 @@ pipeline/
 │   └── integration/
 └── src/
     ├── run.py                     # pipeline + Canonical Spec + runtime
-    ├── close_loop.py              # verify / approve / repair
+    ├── close_loop.py              # verify por evidência (Git + logs) / approve / repair
     ├── plan_repos.py              # implementation_plan multi-repo
     ├── improve.py                 # diagnose → propose → eval → gate
     ├── ingest.py / docs_ingest.py / preprocess.py / engenharia.py
@@ -1101,7 +1116,7 @@ pipeline/
     ├── spec/                      # builder do IR
     ├── validators/                # quality gate
     ├── renderers/                 # história/PRD/OpenAPI/Mermaid a partir do IR
-    ├── executors/                 # policy, verify, loop, Devin adapter
+    ├── executors/                 # policy, verify, evidence (Git+logs), loop, Devin
     ├── planning/                  # grafo, camadas, plan
     └── learning/                  # evals, proposals, accept, failure_patterns
 ```
@@ -1237,7 +1252,8 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 **Limitações**
 
 - Modo `--live` (chamada real OpenAI/Claude) ainda não implementado
-- Adapter Devin no `close_loop` é stub (E2E real = série 2)
+- Adapter Devin no `close_loop` é stub (E2E real = série 2); o verify já exige
+  checkout Git (`--repo`), `base_commit`/`result_commit` e log JSONL do adapter
 - `improve` não aplica propostas nem faz rollback — só `approved_for_experiment`
 - OpenAPI/Mermaid derivam do IR, mas as `operations` **não** são fatiadas por
   serviço: com `--all-contexts` cada contexto recebe todas as actions da UI
