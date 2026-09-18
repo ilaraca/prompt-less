@@ -32,9 +32,30 @@ def write_state(data: dict[str, Any], path: Path = DEFAULT_PATH) -> dict[str, An
         "engenharia": {
             "version": (data.get("engenharia") or {}).get("version"),
             "stack": (data.get("engenharia") or {}).get("stack"),
-            "resiliencia": (data.get("engenharia") or {}).get("resiliencia"),
+            "criticidade": (data.get("engenharia") or {}).get("criticidade"),
+            "nfr_ids": [
+                n.get("id") if isinstance(n, dict) else getattr(n, "id", n)
+                for n in (
+                    (data.get("engenharia") or {}).get("nfr_ids")
+                    or (data.get("engenharia") or {}).get("_selected_nfrs")
+                    or []
+                )
+            ]
+            or None,
+            "resiliencia": {
+                "timeout_ms": ((data.get("engenharia") or {}).get("resiliencia") or {}).get(
+                    "timeout_ms"
+                ),
+            },
             "observabilidade": {
-                "logs": ((data.get("engenharia") or {}).get("observabilidade") or {}).get("logs")
+                "logs": {
+                    "formato": (
+                        ((data.get("engenharia") or {}).get("observabilidade") or {}).get(
+                            "logs"
+                        )
+                        or {}
+                    ).get("formato")
+                }
             },
         },
         "documents": docs_meta,  # metadados só — sem texto bruto

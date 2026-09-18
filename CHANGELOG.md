@@ -9,20 +9,15 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
-- **Recuperação híbrida de documentos** (`26-hybrid-document-retrieval`): roteador
-  `structured` | `flat` em `src/hybrid_retrieval.py` — documento com títulos usa
-  âncoras de seção (`doc_preface.parse_sections` + TF-IDF); documento plano mantém
-  `doc_compress` (chunk + `SIGNAL_RE`) sem regressão
-- Segunda camada semântica **opcional**, limitada por budget, com fallback local
-  (sinônimos + cosseno TF) — funciona sem provider externo; secrets/PII são
-  removidos antes dessa camada
-- Cada trecho recuperado carrega `SourceRef`, `score` e `retrieval_strategy`;
-  dedupe preserva diversidade de fontes; índice invertido por seção em
-  `state/doc_section_index.json` (nunca no prompt)
-- Telemetria de custo semântico (`est_tokens_semantic`, `hybrid` em rag_stats);
-  CLI `python -m src.hybrid_retrieval FILE [--query] [--detect-only]`
-- Golden fixtures `hybrid_structured` / `hybrid_synonym` / `hybrid_narrative` +
-  testes em `tests/integration/test_hybrid_retrieval.py`
+- **Baseline de engenharia v2** (`28-engineering-baseline-v2`): `engenharia.yaml`
+  versionado (`config/engenharia.schema.yaml`); catálogo com circuit breaker,
+  metrics, tracing, idempotência e segurança; NFRs selecionados por camada +
+  criticidade (não o YAML integral no prompt); origem
+  `baseline|declared|observed` por NFR; conflitos com o índice de código viram
+  gaps; templates v1 migram na ingest; história/PRD/tasks SDD compartilham os
+  mesmos IDs `NFR-*`
+- Testes (`tests/integration/test_engineering_baseline_v2.py`): migração v1→v2,
+  seleção por camada/criticidade, IDs alinhados e gaps NFR×código
 
 ### Fixed
 
@@ -41,15 +36,6 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
-- **Apply + rollback em config** (`14-apply-rollback`): `python -m src.apply`
-  aplica `change.key/value` em arquivos versionados sob `config/`, grava
-  snapshot de bytes em `state/knowledge/snapshots/`, re-roda a eval suite e
-  restaura o snapshot se houver regressão (`rejected`)
-- Risco `medium+` exige `assert_promotable` via `src.approval` (não
-  `close_loop --approve`); `run` / evals mesclam `proposal-overlay.yaml` para
-  baseline e candidate executarem sobre configs distintas
-- Testes: aceite persiste a mudança; regressão reverte bytes; medium sem
-  aprovação falha fechado
 - **Consumidor SDD** (`27-sdd-consumer`): `run sdd` (e `also_emit` de história/PRD)
   gera `sdd-package.yaml` a partir do Canonical Spec — arquitetura, API decisions
   e tasks rastreáveis para revisão humana, sem despacho a executor

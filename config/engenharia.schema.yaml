@@ -1,0 +1,99 @@
+# Contrato de inputs/engenharia.yaml (baseline NFR v2).
+# Validado em src/engenharia.validate_engenharia_schema — templates v1 migram.
+title: engenharia
+type: object
+required:
+  - version
+properties:
+  version:
+    description: "1 = legado (migrado na ingest); 2 = envelope atual"
+    enum: [1, 2]
+  criticidade:
+    enum: [low, medium, high, critical]
+    default: medium
+  stack:
+    type: object
+    additionalProperties: true
+  padroes:
+    type: array
+    items:
+      type: string
+  arquitetura:
+    type: object
+    properties:
+      fluxo:
+        type: string
+      contrato:
+        type: string
+  resiliencia:
+    type: object
+    properties:
+      timeout_ms:
+        type: integer
+        minimum: 1
+      retry:
+        type: object
+        properties:
+          max_attempts:
+            type: integer
+          backoff:
+            type: string
+      circuit_breaker:
+        type: object
+        properties:
+          enabled:
+            type: boolean
+          failure_threshold:
+            type: integer
+          reset_timeout_ms:
+            type: integer
+      idempotencia:
+        oneOf:
+          - type: boolean
+          - type: object
+            properties:
+              enabled:
+                type: boolean
+              key_header:
+                type: string
+  observabilidade:
+    type: object
+    properties:
+      logs:
+        type: object
+      metrics:
+        type: object
+        properties:
+          enabled:
+            type: boolean
+          padrao:
+            type: string
+          export:
+            type: string
+      tracing:
+        type: object
+        properties:
+          enabled:
+            type: boolean
+          padrao:
+            type: string
+          sampler:
+            type: string
+  seguranca:
+    type: object
+    properties:
+      validar_input:
+        type: boolean
+      authn:
+        type: string
+      authz:
+        type: string
+  documentacao:
+    type: object
+    properties:
+      readme:
+        type: object
+      changelog:
+        type: object
+      api_docs:
+        type: object

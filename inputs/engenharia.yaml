@@ -1,8 +1,9 @@
-# Defaults de engenharia da plataforma (Prompt-less).
-# Histórias/PRD consomem este baseline; evolua aqui sem inchir o prompt.
-# Futuro: overrides por fluxo, circuit breaker, métricas, tracing, alertas.
+# Defaults de engenharia da plataforma (Prompt-less) — baseline v2.
+# Histórias/PRD/SDD consomem NFRs selecionados por camada + criticidade.
+# Schema: config/engenharia.schema.yaml (version 1 ainda migra na ingest).
 
-version: 1
+version: 2
+criticidade: medium
 
 stack:
   bff:
@@ -21,15 +22,18 @@ arquitetura:
   fluxo: MFE -> BFF -> API Domínio
   contrato: openapi
 
-# --- Baseline mínimo (v1) ---
 resiliencia:
   timeout_ms: 2000
   retry:
     max_attempts: 2
     backoff: exponential
-    # on: [5xx, timeout]   # futuro
-  # circuit_breaker: {}    # futuro
-  # idempotencia: true     # futuro
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    reset_timeout_ms: 30000
+  idempotencia:
+    enabled: true
+    key_header: Idempotency-Key
 
 observabilidade:
   logs:
@@ -41,16 +45,20 @@ observabilidade:
       - correlation_id
       - message
     sem_pii: true
-  # metrics: []            # futuro
-  # tracing: {}            # futuro
-  # alerting: {}           # futuro
+  metrics:
+    enabled: true
+    padrao: red
+    export: prometheus
+  tracing:
+    enabled: true
+    padrao: w3c-tracecontext
+    sampler: parentbased_traceidratio
 
 seguranca:
   validar_input: true
-  # authn: required        # futuro
-  # authz: required        # futuro
+  authn: required
+  authz: required
 
-# --- Documentação (DoD — entrega sem README/changelog incompleto) ---
 documentacao:
   readme:
     obrigatorio: true
@@ -63,11 +71,10 @@ documentacao:
       - ownership
   changelog:
     obrigatorio: true
-    formato: keep-a-changelog   # https://keepachangelog.com
+    formato: keep-a-changelog
     path: CHANGELOG.md
   api_docs:
     obrigatorio: true
-    # resolvido automaticamente pela stack; override por linguagem se precisar
     por_linguagem:
       java: javadoc
       kotlin: kdoc
@@ -77,5 +84,3 @@ documentacao:
       go: godoc
       csharp: xml-doc
       rust: rustdoc
-  # adrs: true              # futuro
-  # openapi_publicado: true # futuro

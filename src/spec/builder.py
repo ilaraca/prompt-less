@@ -19,6 +19,7 @@ from src.domain.spec import (
     CanonicalSpec,
     ClaimLink,
     DataSchema,
+    Gap,
     OpenQuestion,
     Operation,
     Requirement,
@@ -27,6 +28,14 @@ from src.domain.spec import (
     SpecError,
 )
 from src.servicos import fold, resolve_service_id
+from src.engenharia import (
+    dehydrate_engenharia,
+    detect_nfr_signals,
+    layers_from_repos,
+    nfr_gaps_from_code,
+    select_nfrs,
+    validate_engenharia_schema,
+)
 from src.spec.evidence import bind_code_evidence, questions_from_conflicts
 
 _SUCCESS_STATUS_RE = re.compile(r"\b(2\d{2})\b")
@@ -304,7 +313,7 @@ def build_canonical_spec(
     servico: dict[str, Any] | None = None,
     mapa: dict[str, Any] | None = None,
 ) -> CanonicalSpec:
-    eng = engenharia or {}
+    eng = dehydrate_engenharia(engenharia or {})
     svc = servico or {}
     claim_objs = _claims_from_dicts(claims or [])
     service_id = str(svc.get("id") or "default")
@@ -653,23 +662,53 @@ def build_canonical_spec(
     extra_qs, qn = questions_from_conflicts(conflict_texts, start=qn)
     open_questions.extend(extra_qs)
 
-    nfrs: list[Requirement] = []
-    if eng.get("resiliencia"):
-        nfrs.append(
-            Requirement(
-                id="NFR-R-001",
-                text=f"Resiliência baseline: {eng.get('resiliencia')}",
+    repo_list: list[str] = []
+    for vals in (repos or {}).values():
+        repo_list.extend(vals or [])
+    layers = layers_from_repos(repo_list)
+    observed_nfr = detect_nfr_signals(indice if isinstance(indice, dict) else None)
+    selected = select_nfrs(eng, layers=layers, observed=observed_nfr)
+    # anexa seleção no eng para renderers (mesmo IDs que o IR)
+    if isinstance(eng, dict):
+        eng["_selected_nfrs"] = selected
+    nfrs: list[Requirement] = [
+        Requirement(
+            id=n.id,
+            text=n.text,
+            source_claims=[],
+            status=n.origin,
+            origin=n.origin,
+            category=n.category,
+            layers=list(n.layers),
+        )
+        for n in selected
+    ]
+    schema_errs = validate_engenharia_schema(eng)
+    for msg in schema_errs:
+        open_questions.append(
+            OpenQuestion(
+                id=f"Q-{qn:03d}",
+                text=f"engenharia.yaml inválido: {msg}",
+                blocking=False,
                 source_claims=[],
-                status="baseline",
             )
         )
-    if (eng.get("observabilidade") or {}).get("logs"):
-        nfrs.append(
-            Requirement(
-                id="NFR-O-001",
-                text="Logs estruturados com correlation_id sem PII",
-                source_claims=[],
-                status="baseline",
+        qn += 1
+
+    nfr_gap_dicts = nfr_gaps_from_code(
+        selected,
+        indice_applied=bool(indice is not None),
+        start=len(gaps) + 1,
+    )
+    for raw_gap in nfr_gap_dicts:
+        gaps.append(
+            Gap(
+                id=str(raw_gap["id"]),
+                kind=str(raw_gap["kind"]),
+                text=str(raw_gap["text"]),
+                origin=str(raw_gap.get("origin") or "heuristic"),
+                declared=raw_gap.get("declared"),
+                observed=raw_gap.get("observed"),
             )
         )
 

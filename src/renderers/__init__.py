@@ -214,7 +214,27 @@ def render_historia(
     *,
     engenharia: dict[str, Any] | None = None,
 ) -> str:
-    eng = engenharia or {}
+    from src.engenharia import SelectedNfr, layers_from_repos, select_nfrs
+
+    eng = dict(engenharia or {})
+    repos: list[str] = []
+    for v in (spec.repositories or {}).values():
+        repos.extend(v or [])
+    layers = layers_from_repos(repos)
+    if "_selected_nfrs" not in eng:
+        if spec.nfrs:
+            eng["_selected_nfrs"] = [
+                SelectedNfr(
+                    id=n.id,
+                    category=n.category or "",
+                    text=n.text,
+                    origin=n.origin or n.status or "baseline",
+                    layers=list(n.layers or []),
+                )
+                for n in spec.nfrs
+            ]
+        else:
+            eng["_selected_nfrs"] = select_nfrs(eng, layers=layers)
     titulo = spec.service_name or spec.service_id or "História"
     return _fill(
         template,
@@ -228,10 +248,12 @@ def render_historia(
             "stack": format_stack(eng),
             "padroes": format_padroes(eng),
             "arquitetura": format_arquitetura(eng),
-            "resiliencia": format_resiliencia(eng),
-            "observabilidade": format_observabilidade(eng),
-            "seguranca": format_seguranca(eng),
-            "documentacao": format_documentacao(eng),
+            "resiliencia": format_resiliencia(eng, with_ids=True, layers=layers),
+            "observabilidade": format_observabilidade(
+                eng, with_ids=True, layers=layers
+            ),
+            "seguranca": format_seguranca(eng, with_ids=True, layers=layers),
+            "documentacao": format_documentacao(eng, with_ids=True, layers=layers),
             "dependencias": "- Canonical Spec validado",
             "fora_escopo": "- Itens não presentes no Canonical Spec",
             "proveniencia": _provenance_md(spec),
@@ -246,11 +268,30 @@ def render_prd(
     engenharia: dict[str, Any] | None = None,
     consolidated: str = "",
 ) -> str:
-    eng = engenharia or {}
+    from src.engenharia import SelectedNfr, layers_from_repos, select_nfrs
+
+    eng = dict(engenharia or {})
     titulo = spec.service_name or spec.service_id or "PRD"
     repos = []
     for v in (spec.repositories or {}).values():
         repos.extend(v or [])
+    layers = layers_from_repos(repos)
+    if "_selected_nfrs" not in eng:
+        # Prefere IDs do IR (fonte da verdade) para alinhar com SDD
+        if spec.nfrs:
+            eng["_selected_nfrs"] = [
+                SelectedNfr(
+                    id=n.id,
+                    category=n.category or "",
+                    text=n.text,
+                    origin=n.origin or n.status or "baseline",
+                    layers=list(n.layers or []),
+                )
+                for n in spec.nfrs
+            ]
+        else:
+            eng["_selected_nfrs"] = select_nfrs(eng, layers=layers)
+    nfr_ids_yaml = "\n".join(f"    - {n.id}" for n in spec.nfrs) or "    - _(nenhum)_"
     regras = (
         "\n".join(
             f"- **{e.id}** {e.trigger} → HTTP {e.status}"
@@ -276,6 +317,7 @@ def render_prd(
             "service_nome": titulo,
             "repos_yaml": str(repos),
             "camadas_yaml": "{}",
+            "nfr_ids_yaml": nfr_ids_yaml,
             "problema": f"Especificar o serviço `{spec.service_id}` de forma rastreável.",
             "objetivo": "Entregar RF/AC/NFR a partir do Canonical Spec.",
             "non_goals": "- Fora do Canonical Spec",
@@ -290,10 +332,12 @@ def render_prd(
             "regras_negocio": regras,
             "criterios_bdd": _bdd_from_spec(spec),
             "nfr_stack_arch": format_nfr_stack_arch(eng),
-            "nfr_resiliencia": format_resiliencia(eng, with_ids=True),
-            "nfr_observabilidade": format_observabilidade(eng, with_ids=True),
-            "nfr_seguranca": format_seguranca(eng, with_ids=True),
-            "nfr_documentacao": format_documentacao(eng, with_ids=True),
+            "nfr_resiliencia": format_resiliencia(eng, with_ids=True, layers=layers),
+            "nfr_observabilidade": format_observabilidade(
+                eng, with_ids=True, layers=layers
+            ),
+            "nfr_seguranca": format_seguranca(eng, with_ids=True, layers=layers),
+            "nfr_documentacao": format_documentacao(eng, with_ids=True, layers=layers),
             "estado_atual": _estado_atual_from_spec(spec),
             "gaps": _gaps_from_spec(spec),
             "dependencias": "- Canonical Spec",

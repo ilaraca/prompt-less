@@ -19,7 +19,9 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 - prefixo de system/tools **estável e cacheável** (OpenAI / Claude);
 - budget explícito de tokens (alvo ~650; teto ~2000);
 - **PRD.md** gerado junto com a história, como insumo canônico para **SDD**;
-- baseline de engenharia (**stack + NFR v1**: timeout/retry + logs + README/changelog/Javadoc) via `inputs/engenharia.yaml`;
+- baseline de engenharia (**stack + NFR v2**: timeout/retry/circuit breaker/
+  idempotência + logs/metrics/tracing + segurança + README/changelog/Javadoc)
+  via `inputs/engenharia.yaml` (schema versionado; seleção por camada/criticidade);
 - **harness**: runtime por `run_id`, provenance/claims, Canonical Spec + quality gate, ciclo verify/repair, plano multi-repo e melhoria com evals (sem apply automático).
 
 **Princípio:** nunca enviar dados brutos ao modelo se puderem ser filtrados ou comprimidos antes.
@@ -46,13 +48,13 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 | **Verify pós-executor** | `close_loop` confere o que ocorreu no Git e nos logs do adapter (não o payload) vs spec + policy |
 | **Promoção com aprovação humana** | `src.approval` vincula ator + spec + relatório + commit; HMAC detecta adulteração |
 | **Plano coordenado multi-repo** | `plan_repos` gera ondas/contratos a partir de dependências observadas (código + Canonical Spec); camada é fallback revisável |
-| **Melhoria sem regressão silenciosa** | `improve` aplica no candidato; `apply` promove a config versionada com snapshot e rollback |
+| **Melhoria sem regressão silenciosa** | `improve` aplica a proposta só no candidato, compara evals distintas e só então promove status |
 
 ### Onde *não* é a melhor ferramenta (ainda)
 
 | Cenário | Motivo |
 |--------|--------|
-| Geração 100% automática em produção sem revisão humana | Dry-run preenche esqueleto; `--live` (API) ainda é slot a plugar; Devin E2E é série 2; apply em config exige risco `low` ou aprovação (`21`) |
+| Geração 100% automática em produção sem revisão humana | Dry-run preenche esqueleto; `--live` (API) ainda é slot a plugar; Devin E2E e apply+rollback são série 2 |
 | Documentos sem sinais lexicais de negócio | Resumo extrativo prioriza termos (regra, HTTP, endpoint…); texto só narrativo pode ser filtrado demais |
 | Extração fiel linha a linha de PDFs jurídicos/contratos | Foco é **sinal para artefato técnico**, não arquivo íntegro |
 | `.doc` legado fora do macOS sem `antiword` | Conversão depende de `textutil` (macOS) ou `antiword` |
@@ -101,7 +103,6 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
  [approval] ─────────────── request-approval → approve|reject → promote (HMAC)
  [plan_repos] ───────────── mapa + evidência de código/contratos → implementation_plan (ondas)
  [improve] ──────────────── diagnose → apply no candidato → evals distintas → accepted / approved_for_experiment / rejected
- [apply] ────────────────── snapshot → change.key/value em config/ → re-eval → keep ou rollback
 ```
 
 ### Técnicas de economia de tokens (mapeamento do artigo)
@@ -111,7 +112,7 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
 | Não reenviar histórico completo | `state/workflow.json` com campos mínimos |
 | Tools compactas | `config/tools.compact.yaml` (assinaturas curtas) |
 | System prompt estável / cache | `prompts/system.compact.txt` + pacote Claude `cache_control` |
-| Comprimir RAG | `rag_compress.py` + `hybrid_retrieval.py` / `doc_compress.py` |
+| Comprimir RAG | `rag_compress.py` + `doc_compress.py` |
 | Compressão hierárquica | chunks → resumos → consolidado |
 | Modelo pequeno no pré-processamento | Extrativo local (regex de sinais); slot para LLM small depois |
 | Encadeamento OpenAI Responses | Pacote com `store: true` (pronto para `previous_response_id`) |
@@ -222,7 +223,7 @@ Esse `consolidated` é o que vai para o campo `contexto_comprimido` do pacote LL
 
 | Recurso típico de RAG “full” | Status aqui |
 |------------------------------|-------------|
-| Embeddings (OpenAI, sentence-transformers, etc.) | Não (2ª camada = sinônimos locais + TF) |
+| Embeddings (OpenAI, sentence-transformers, etc.) | Não |
 | Vector DB (Chroma, Pinecone, pgvector…) | Não |
 | Similarity search / top-k por query | Não |
 | Índice persistente entre execuções | **Sim** — `state/repo_index.json` (código dos repos, ver seção 13) |
@@ -236,19 +237,7 @@ Esse `consolidated` é o que vai para o campo `contexto_comprimido` do pacote LL
 - **RAG desta pipeline:** “pegue estes arquivos desta pasta, fatie, filtre o que parece regra/API, comprima, entregue ao modelo.”
 - **RAG vetorial:** “indexe milhares de docs; para esta pergunta, busque os k trechos mais similares semanticamente.”
 
-A recuperação documental agora é **híbrida** (`src/hybrid_retrieval.py`, ticket 26):
-
-| Insumo | Estratégia (1ª camada) |
-|--------|------------------------|
-| **structured** (≥2 títulos) | Âncoras de seção via `doc_preface.parse_sections` + TF-IDF |
-| **flat** (ex.: `amostra_3000.txt`) | Chunk 40 linhas + `SIGNAL_RE` (`doc_compress`) |
-
-Segunda camada semântica é **opcional** e limitada por budget (fallback local com sinônimos — sem provider externo). Secrets/PII são scrubados antes. Índice invertido por seção em `state/doc_section_index.json` (como `repo_index`), **não** no prompt.
-
-```bash
-python -m src.hybrid_retrieval inputs/amostra_3000.txt --detect-only
-python -m src.hybrid_retrieval docs/spec.md --query "CPF 400 auth"
-```
+Evolução natural (próximo passo): manter `doc_compress` / budget e trocar só o **Retrieve** por embeddings + top-k, sem mudar o resto do pipeline.
 
 ### 6. `context_build` (`src/context_builder.py`)
 
@@ -289,7 +278,7 @@ Estimativa de tokens: tokenizer do provider configurado em `models.provider` / `
 ```
 figma.json ──────► preprocess ──► ui {inputs, actions, columns} ──┐
 regras.yaml ─────► preprocess ──► regras {bloqueios, …} ──────────┤
-engenharia.yaml ► preprocess ──► engenharia {stack, NFR v1} ─────┼─► rag_compress ─► consolidated
+engenharia.yaml ► preprocess ──► engenharia {stack, NFR v2 selecionados} ─┼─► rag_compress ─► consolidated
 docs *.txt ──────► doc_compress ─► resumos/consolidado docs ─────┘         │
                                                                             ▼
 state/workflow.json ◄── só metadados                               context_builder
@@ -330,7 +319,7 @@ O `PRD.md` nasce com:
 - **frontmatter YAML** (`id`, `artifacts`, `sdd.expected`, `nfr_ids`) para parsers de SDD
 - RF (`RF-xx`) a partir das regras/UI
 - AC (`AC-xx`) BDD alinhados à história
-- NFR (`NFR-R|O|S|D-xx`) a partir de `engenharia.yaml` (baseline v1)
+- NFR (`NFR-R|O|S|D-xx`) a partir de `engenharia.yaml` (baseline v2, selecionados)
 - contrato de dados (entrada/saída/ações)
 - seção **Handoff para SDD** (o que o próximo estágio deve gerar)
 - contexto comprimido do Prompt-less (sem texto bruto)
@@ -384,7 +373,7 @@ Figma + regras + docs
 - Título, Contexto (1 linha), Critérios BDD (Dado/Quando/Então), Dependências
 - Critérios = tradução das condições de `regras.yaml`
 - Payloads alinhados ao Figma
-- Escopo técnico + DoD NFR a partir de `engenharia.yaml` (baseline v1: timeout/retry + logs + documentação)
+- Escopo técnico + DoD NFR a partir de `engenharia.yaml` (baseline v2)
 
 **PRD**
 
@@ -422,7 +411,8 @@ Coloque os arquivos em `pipeline/inputs/`:
 ### Exemplo mínimo de `engenharia.yaml`
 
 ```yaml
-version: 1
+version: 2
+criticidade: medium   # low | medium | high | critical — corta o catálogo NFR
 stack:
   bff: [Java 17, Spring Boot 3]
   mfe: [TypeScript, React]
@@ -435,13 +425,30 @@ resiliencia:
   retry:
     max_attempts: 2
     backoff: exponential
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    reset_timeout_ms: 30000
+  idempotencia:
+    enabled: true
+    key_header: Idempotency-Key
 observabilidade:
   logs:
     formato: structured_json
     campos_minimos: [timestamp, level, service, correlation_id, message]
     sem_pii: true
+  metrics:
+    enabled: true
+    padrao: red
+    export: prometheus
+  tracing:
+    enabled: true
+    padrao: w3c-tracecontext
+    sampler: parentbased_traceidratio
 seguranca:
   validar_input: true
+  authn: required
+  authz: required
 documentacao:
   readme:
     obrigatorio: true
@@ -465,7 +472,13 @@ documentacao:
       go: godoc
 ```
 
-Baseline **v1**: timeout/retry + logs + segurança mínima + **documentação** (README estruturado, CHANGELOG, docs de API conforme a stack — Javadoc, TSDoc, GoDoc…). Circuit breaker, metrics, tracing, ADRs e alertas ficam comentados/`_(futuro)_` para evoluir sem estourar tokens.
+Baseline **v2** (`config/engenharia.schema.yaml`): timeout/retry/circuit breaker/
+idempotência + logs/metrics/tracing + segurança + documentação. Arquivos
+`version: 1` **migram na ingest** (defaults v2 preenchidos; overrides preservados).
+NFRs entram no IR/história/PRD/SDD com IDs estáveis (`NFR-R-01`…) e origem
+`baseline|declared|observed`; a seleção é por **camada** (api/bff/mfe/…) e
+**criticidade** — o prompt recebe o recorte, não o YAML integral. Conflito ou
+ausência no índice de código gera gap `GAP-NFR-*`.
 
 A seção `documentacao` vira **NFR-D** na história/PRD. O padrão de doc de código é derivado da `stack` (ex.: BFF Java → Javadoc; MFE TypeScript → TSDoc); `por_linguagem` só sobrescreve quando necessário.
 
@@ -1190,7 +1203,7 @@ O plano usa **dependências observadas** (OpenAPI clients, imports, URLs, evento
 .venv/bin/python -m src.improve --cases happy_path,eval_adversarial --out /tmp/improve
 ```
 
-Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`playbook.yaml`) → **workspaces distintos** (snapshot de `config/` em `evals/workspaces/{baseline,candidate}`) → a proposta é aplicada **somente no candidato** (overlay atômico) → eval suite nos dois lados (cfg mesclado do workspace) → decisão.
+Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`playbook.yaml`) → **workspaces distintos** (snapshot de `config/` em `evals/workspaces/{baseline,candidate}`) → a proposta é aplicada **somente no candidato** (overlay atômico) → eval suite nos dois lados → decisão.
 
 Status:
 
@@ -1203,26 +1216,13 @@ Status:
 | `accepted` | melhoria comprovada **no candidato** (não é apply em produção) |
 | `rejected` | regressão crítica, não aplicada, risco medium+, ou workspaces iguais |
 
-Uma proposta **não aplicada** nunca entra em `accepted` nem `approved_for_experiment`. Regressão em qualquer caso `critical: true` rejeita o candidato mesmo se o pass rate agregado subir. HTTP crítico exige igualdade de status, salvo `http_status_mode` explícito na fixture. O histórico (`state/knowledge/proposals-history.json`) guarda diff e métricas comparadas.
+Uma proposta **não aplicada** nunca entra em `accepted` nem `approved_for_experiment`. Regressão em qualquer caso `critical: true` rejeita o candidato mesmo se o pass rate agregado subir. HTTP crítico exige igualdade de status, salvo `http_status_mode` explícito na fixture. O histórico (`state/knowledge/proposals-history.json`) guarda diff e métricas comparadas. Apply em produção continua no ticket `14`.
 
-### Apply em produção (`apply`)
+Limites deste slice (não reabrir; o `14` consome o overlay):
 
-```bash
-.venv/bin/python -m src.apply --root . --proposal-json /tmp/prop.json --cases happy_path
-# risco medium+: exige run já aprovada (src.approval), não close_loop --approve
-.venv/bin/python -m src.apply --root . --proposal-json /tmp/medium.json \
-  --run-dir runs/RUN123 --run-id RUN123 --cases happy_path
-```
-
-Fluxo: gate de risco → snapshot de bytes em `state/knowledge/snapshots/<id>/` → aplica `change.key/value` em arquivos versionados sob `config/` (YAML nomeado quando o prefixo bate, senão `proposal-overlay.yaml`) → re-roda a eval suite com o cfg mesclado (baseline pré-apply × candidate pós-apply) → regressão restaura bytes e marca `rejected`; sem regressão mantém a mudança e registra `accepted` com `applied_to_production`.
-
-`run` / `run_eval_suite` mesclam `config/proposal-overlay.yaml` em `pipeline.yaml`, então baseline e candidate executam sobre configs distintas (corrige o residual do `23`). Rollback restaura **bytes** — não interpreta jitter de `avg_latency_ms` como melhoria comprovada.
-
-Limites deste slice:
-
-- Jitter de latência sozinho não prova melhoria (o gate de produção é anti-regressão).
-- Chaves que só existem no overlay não alteram o IR até um consumidor lê-las; o apply garante persistência versionada + eval isolada.
-- Risco `medium+` consome `assert_promotable` (`src.approval`); `promote` continua sendo só selo, não aplica código.
+- O apply grava `config/proposal-overlay.yaml` só no candidato. `src.run` continua lendo `config/pipeline.yaml` do ROOT — a eval prova isolamento e gates, não o efeito da chave do playbook no IR.
+- `two_services` ainda espera HTTP 401 que o spec não materializa (residual do recorte de regras). O gate multi-contexto que passa é `eval_multi_context` (200/400/422 exact).
+- A suíte default inclui `eval_adversarial` e `eval_multi_context`. `--cases` restringe.
 
 ### Evals e testes
 
@@ -1282,7 +1282,6 @@ pipeline/
     ├── approval.py                # request-approval / approve / promote (HMAC)
     ├── plan_repos.py              # implementation_plan multi-repo
     ├── improve.py                 # diagnose → propose → eval → gate
-    ├── apply.py                   # apply em config + snapshot/rollback
     ├── ingest.py / docs_ingest.py / preprocess.py / engenharia.py
     ├── servicos.py / marcar.py / repo_index.py
     ├── state_store.py / doc_compress.py / rag_compress.py
@@ -1295,7 +1294,7 @@ pipeline/
     ├── executors/                 # policy, verify, evidence (Git+logs), loop, Devin, safe_exec
     ├── hardening/                 # debugger, input scan, claim tools, recall
     ├── planning/                  # grafo observado, camadas (fallback), plan
-    └── learning/                  # evals, proposals, accept, apply_rollback, failure_patterns
+    └── learning/                  # evals, proposals, accept, failure_patterns
 ```
 
 Leitura recomendada: `run.py` → `spec/builder.py` → `validators/` → `executors/verify.py` → `learning/evals.py`. Para o caminho clássico de tokens: `rag_compress.py` → `doc_compress.py` → `context_builder.py`.
@@ -1517,7 +1516,7 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   worktree limpo antes do close_loop é o `10`
 - Sem `PROMPTLESS_INTEGRITY_KEY`, `evidence_hashes.hmac` fica nulo (SHA-256
   permanece) — **aceito**; selo tamper-evident da aprovação é o `21`
-- `improve` aplica propostas só no workspace candidato; `python -m src.apply` promove a config versionada com snapshot/rollback (`14`)
+- `improve` aplica propostas só no workspace candidato e compara evals distintas; apply + rollback em produção continua no ticket `14`
 - OpenAPI/Mermaid derivam do IR já fatiado por `owner`: `--all-contexts` não
   replica a action de um serviço no contrato de outro; operação sem dono e
   erro órfão ficam `unresolved`
@@ -1530,8 +1529,13 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 - Plano multi-repo sem evidência de código cai na topologia por camada
   (`origin: heuristic`, exige revisão); execução paralela das ondas ainda não roda (ticket `13`)
 - O pacote SDD lê o grafo multi-repo observado quando há evidência; fallback
-  heurístico continua `requires_review`. Não classifica NFR por tipo (28)
-- Nenhuma task do SDD é despachada a executor (`10`); apply de propostas é só em config versionada (`14`), não despacha implementação
+  heurístico continua `requires_review`. NFRs são selecionados por camada +
+  criticidade (`28`); tasks recebem o subconjunto da sua `layer`
+- Nenhuma task do SDD é despachada a executor (`10`) nem passa por apply/rollback (`14`)
+- Sinais de NFR no índice (CircuitBreaker, MeterRegistry, OTel…) são heurísticos
+  por substring — falso positivo/negativo possível; gap `GAP-NFR-*` marca origem
+  `heuristic` quando o baseline exige e o código não mostra sinal
+- Alertas/ADRs/bulkhead ainda não entram no catálogo v2
 - Resumo de docs é **extrativo por regex**, não LLM small (bom custo; pode perder nuance)
 - Tokenizer oficial cobre OpenAI via `tiktoken`; Anthropic/Gemini e ausência da lib usam heurística `chars÷4` (`method=heuristic`), nunca como contagem exata
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
@@ -1548,10 +1552,9 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 1. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`) — consome as tools já no pacote
 2. Devin CLI real no `close_loop`
 3. Redis opcional (state backend)
-4. Execução concorrente por ondas (`13`)
-5. NFR por tipo (resiliência / observabilidade / segurança) no consumidor SDD (`28`)
-6. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
-7. Ligar estágios opcionais de scan/index/marcar no grafo default
+4. Execução concorrente por ondas + apply/rollback de propostas em produção (`14`)
+5. Alertas / ADRs / bulkhead no catálogo de engenharia (extensão do `28`)
+6. Ligar estágios opcionais de scan/index/marcar no grafo default
 
 
 ---
