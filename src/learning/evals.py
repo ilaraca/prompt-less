@@ -1,7 +1,6 @@
 """Evals leves sobre fixtures baseline — métricas de qualidade/custo."""
 from __future__ import annotations
 
-import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -9,6 +8,7 @@ from typing import Any
 
 import yaml
 
+from src.domain.spec import ResolvedInt
 from src.run import run
 from src.runtime.atomic_io import UnsafePath
 from src.runtime.integrity import verify_run_dir
@@ -25,7 +25,6 @@ DEFAULT_CASES = (
     "eval_adversarial",
     "eval_multi_context",
 )
-_HTTP_RE = re.compile(r"(?:HTTP\s+)?\b([1-5]\d{2})\b", re.IGNORECASE)
 _ARTIFACT_NAMES = {"historia.md", "prd.md"}
 _SPEC_NAME = "canonical-spec.yaml"
 _QUALITY_UP = ("claim_recall", "traceability_rate", "pass_rate")
@@ -343,28 +342,165 @@ def _spec_text_blob(spec: dict[str, Any]) -> str:
     return "\n".join(parts).lower()
 
 
-def collect_spec_statuses(spec: dict[str, Any]) -> set[int]:
-    """HTTP statuses declarados no Canonical Spec (errors + textos RF/AC/Q)."""
-    found: set[int] = set()
-    for error in spec.get("errors") or []:
-        if error.get("status") is not None:
+def _resolved_success_value(raw: Any) -> int | None:
+    """Sucesso tipado só conta quando resolvido — ausente/pendente sem presumir."""
+    status = ResolvedInt.from_raw(raw)
+    return int(status.value) if status.resolved and status.value is not None else None
+
+
+def _norm_method(raw: Any) -> str | None:
+    text = str(raw or "").strip().upper()
+    return text or None
+
+
+def _norm_path(raw: Any) -> str | None:
+    text = str(raw or "").strip()
+    return text or None
+
+
+def collect_operation_contracts(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """Contratos HTTP tipados por operação (método, rota, serviço, sucesso, erros).
+
+    Texto livre de RF/AC/perguntas **não** entra — só `operations.success_status`
+    resolvido e erros referenciados em `error_ids`.
+    """
+    errors_by_id = {
+        str(err.get("id")): err
+        for err in (spec.get("errors") or [])
+        if isinstance(err, dict) and err.get("id")
+    }
+    service_fallback = str(spec.get("service_id") or "") or None
+    contracts: list[dict[str, Any]] = []
+    for op in spec.get("operations") or []:
+        if not isinstance(op, dict):
+            continue
+        linked: list[int] = []
+        for eid in op.get("error_ids") or []:
+            err = errors_by_id.get(str(eid))
+            if not err or err.get("status") is None:
+                continue
             try:
-                found.add(int(error["status"]))
+                linked.append(int(err["status"]))
             except (TypeError, ValueError):
                 continue
-    for bucket in (
-        spec.get("requirements") or [],
-        spec.get("acceptance_criteria") or [],
-        spec.get("open_questions") or [],
-    ):
-        for item in bucket:
-            text = " ".join(
-                str(item.get(k) or "")
-                for k in ("text", "then", "when", "given")
-            )
-            for match in _HTTP_RE.finditer(text):
-                found.add(int(match.group(1)))
+        owner = str(op.get("owner") or "") or service_fallback
+        contracts.append(
+            {
+                "id": op.get("id"),
+                "name": op.get("name"),
+                "service": owner,
+                "method": _norm_method(op.get("method")),
+                "path": _norm_path(op.get("path")),
+                "success_status": _resolved_success_value(op.get("success_status")),
+                "error_statuses": sorted(set(linked)),
+            }
+        )
+    return contracts
+
+
+def collect_spec_statuses(spec: dict[str, Any]) -> set[int]:
+    """HTTP statuses tipados no Canonical Spec (sucesso resolvido + erros da op).
+
+    Números em RF/AC/perguntas **não** provam o contrato.
+    """
+    found: set[int] = set()
+    for contract in collect_operation_contracts(spec):
+        success = contract.get("success_status")
+        if success is not None:
+            found.add(int(success))
+        found.update(int(s) for s in (contract.get("error_statuses") or []))
     return found
+
+
+def _op_identity_key(op: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(op.get("service") or "").strip(),
+        str(op.get("method") or "").strip().upper(),
+        str(op.get("path") or "").strip(),
+    )
+
+
+def _error_statuses_match(
+    expected: set[int], actual: set[int], *, mode: str
+) -> bool:
+    if mode == "exact":
+        return expected == actual
+    return expected.issubset(actual)
+
+
+def match_http_operations(
+    expected_ops: list[dict[str, Any]],
+    actual_ops: list[dict[str, Any]],
+    *,
+    mode: str = "subset",
+) -> tuple[bool, list[dict[str, Any]]]:
+    """Compara expectativas por operação; status noutro serviço/op não compensa."""
+    if not expected_ops:
+        return True, []
+    remaining = list(enumerate(actual_ops))
+    mismatches: list[dict[str, Any]] = []
+    for exp in expected_ops:
+        want_key = _op_identity_key(exp)
+        hit_idx: int | None = None
+        hit: dict[str, Any] | None = None
+        for pos, (orig_i, candidate) in enumerate(remaining):
+            if _op_identity_key(candidate) == want_key:
+                hit_idx = pos
+                hit = candidate
+                _ = orig_i
+                break
+        if hit is None or hit_idx is None:
+            mismatches.append(
+                {
+                    "reason": "operation_not_found",
+                    "expected": {
+                        "service": exp.get("service"),
+                        "method": _norm_method(exp.get("method")),
+                        "path": _norm_path(exp.get("path")),
+                        "success_status": exp.get("success_status"),
+                        "error_statuses": list(exp.get("error_statuses") or []),
+                    },
+                }
+            )
+            continue
+        remaining.pop(hit_idx)
+
+        exp_success = exp.get("success_status", "__omit__")
+        got_success = hit.get("success_status")
+        if exp_success != "__omit__":
+            want_success = None if exp_success is None else int(exp_success)
+            if want_success != got_success:
+                mismatches.append(
+                    {
+                        "reason": "success_status_mismatch",
+                        "expected": {
+                            "service": exp.get("service"),
+                            "method": _norm_method(exp.get("method")),
+                            "path": _norm_path(exp.get("path")),
+                            "success_status": want_success,
+                        },
+                        "actual_success_status": got_success,
+                    }
+                )
+
+        exp_errors = {int(s) for s in (exp.get("error_statuses") or [])}
+        got_errors = {int(s) for s in (hit.get("error_statuses") or [])}
+        if exp.get("error_statuses") is not None or exp_errors:
+            if not _error_statuses_match(exp_errors, got_errors, mode=mode):
+                mismatches.append(
+                    {
+                        "reason": "error_statuses_mismatch",
+                        "expected": sorted(exp_errors),
+                        "actual": sorted(got_errors),
+                        "mode": mode,
+                        "operation": {
+                            "service": exp.get("service"),
+                            "method": _norm_method(exp.get("method")),
+                            "path": _norm_path(exp.get("path")),
+                        },
+                    }
+                )
+    return (not mismatches), mismatches
 
 
 def _collect_resolved_inferences(spec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -497,10 +633,19 @@ def score_case(
         artifact_texts = []
 
     # blocked runs ainda persistem canonical-spec antes do raise
+    actual_contracts: list[dict[str, Any]] = []
     actual_statuses: set[int] = set()
     for spec in specs:
+        contracts = collect_operation_contracts(spec)
+        actual_contracts.extend(contracts)
         actual_statuses |= collect_spec_statuses(spec)
 
+    expected_ops_raw = expected.get("http_operations")
+    expected_ops: list[dict[str, Any]] = (
+        [dict(op) for op in expected_ops_raw]
+        if isinstance(expected_ops_raw, list)
+        else []
+    )
     expected_statuses = {int(s) for s in (expected.get("http_statuses") or [])}
     critical = bool(expected.get("critical"))
     explicit_mode = expected.get("http_status_mode")
@@ -511,7 +656,13 @@ def score_case(
         mode = "exact"
     else:
         mode = "subset"
-    if not expected_statuses:
+
+    op_mismatches: list[dict[str, Any]] = []
+    if expected_ops:
+        expected_status_match, op_mismatches = match_http_operations(
+            expected_ops, actual_contracts, mode=mode
+        )
+    elif not expected_statuses:
         expected_status_match = True
     elif mode == "exact":
         expected_status_match = expected_statuses == actual_statuses
@@ -727,6 +878,9 @@ def score_case(
             "found_services": sorted(found_services),
             "expected_statuses": sorted(expected_statuses),
             "actual_spec_statuses": sorted(actual_statuses),
+            "expected_http_operations": expected_ops,
+            "actual_http_operations": actual_contracts,
+            "http_operation_mismatches": op_mismatches[:20],
             "http_status_mode": mode,
             "http_status_mode_explicit": bool(explicit_mode),
             "signals": signals,

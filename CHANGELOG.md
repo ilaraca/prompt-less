@@ -49,6 +49,12 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   `artifacts_released=false` (história/PRD não liberados para implementação).
   API: `select_run_evidence`, `RunStore.sealed_file_entries` /
   `verify_sealed_entry`. Testes em `tests/integration/test_eval_run_selection.py`.
+- **Evals com contratos HTTP tipados** (`32-eval-typed-http`): o gate deixa de
+  extrair números de RF/AC/perguntas e passa a comparar por operação
+  (`http_operations` na fixture) — serviço, método, rota, `success_status`
+  resolvido e erros vinculados; sucesso ausente/pendente não presume valor;
+  status correto noutro serviço/op não compensa. Fixtures da suíte default
+  declaram expectativas por operação; testes cobrem os negativos.
 
 - **Execução concorrente por ondas** (`13-parallel-exec`): scheduler
   `src/executors/scheduler.py` consome `waves` do `implementation_plan`, limita

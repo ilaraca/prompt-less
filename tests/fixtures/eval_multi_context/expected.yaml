@@ -10,6 +10,19 @@ http_statuses:
   - 200
   - 400
   - 422
+http_operations:
+  - service: ms-cliente
+    method: POST
+    path: /clientes
+    success_status: 200
+    error_statuses:
+      - 400
+  - service: ms-pagamento
+    method: POST
+    path: /pagamentos
+    success_status: 200
+    error_statuses:
+      - 422
 max_unreviewed_inferences: 0
 ownership:
   ms-cliente:

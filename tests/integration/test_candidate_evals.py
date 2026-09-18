@@ -77,6 +77,14 @@ def test_critical_http_defaults_to_exact_equality():
     assert score.details["http_status_mode_explicit"] is False
 
 
+def _write_spec(spec_dir: Path, payload: dict) -> None:
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "canonical-spec.yaml").write_text(
+        yaml.safe_dump(payload),
+        encoding="utf-8",
+    )
+
+
 def test_critical_http_extra_status_is_adversarial_fail(tmp_path: Path):
     from src.runtime.atomic_io import sha256_of
     from src.runtime.integrity import seal_hmac
@@ -95,11 +103,25 @@ def test_critical_http_extra_status_is_adversarial_fail(tmp_path: Path):
                 "claims": [{"id": "CLM-0001", "text": "cadastro POST /clientes"}],
                 "requirements": [],
                 "acceptance_criteria": [],
-                "operations": [],
+                "operations": [
+                    {
+                        "id": "OP-001",
+                        "name": "salvar",
+                        "owner": "ms-cliente",
+                        "method": "POST",
+                        "path": "/clientes",
+                        "success_status": {
+                            "value": 200,
+                            "origin": "declared",
+                            "confidence": 1.0,
+                            "requires_review": False,
+                        },
+                        "error_ids": ["ERR-001", "ERR-002"],
+                    }
+                ],
                 "errors": [
-                    {"trigger": "ok", "status": 200},
-                    {"trigger": "cpf", "status": 400},
-                    {"trigger": "inventado", "status": 500},
+                    {"id": "ERR-001", "trigger": "cpf", "status": 400},
+                    {"id": "ERR-002", "trigger": "inventado", "status": 500},
                 ],
                 "open_questions": [],
             }
@@ -141,6 +163,10 @@ def test_critical_http_extra_status_is_adversarial_fail(tmp_path: Path):
     assert score.details["http_status_mode"] == "exact"
     assert score.expected_status_match is False
     assert score.passed is False
+    assert any(
+        m.get("reason") == "error_statuses_mismatch"
+        for m in score.details["http_operation_mismatches"]
+    )
 
 
 def test_critical_http_explicit_subset_rule_allows_extra(tmp_path: Path):
@@ -161,8 +187,27 @@ def test_critical_http_explicit_subset_rule_allows_extra(tmp_path: Path):
                 "claims": [],
                 "requirements": [],
                 "acceptance_criteria": [],
-                "operations": [],
-                "errors": [{"status": 401}, {"status": 403}, {"status": 200}],
+                "operations": [
+                    {
+                        "id": "OP-A",
+                        "name": "auth",
+                        "owner": "ms-auth",
+                        "method": "GET",
+                        "path": "/session",
+                        "success_status": {
+                            "value": 200,
+                            "origin": "declared",
+                            "confidence": 1.0,
+                            "requires_review": False,
+                        },
+                        "error_ids": ["E1", "E2", "E3"],
+                    }
+                ],
+                "errors": [
+                    {"id": "E1", "status": 401},
+                    {"id": "E2", "status": 403},
+                    {"id": "E3", "status": 200},
+                ],
                 "open_questions": [],
             }
         ),
@@ -188,7 +233,15 @@ def test_critical_http_explicit_subset_rule_allows_extra(tmp_path: Path):
     expected = {
         "critical": True,
         "http_status_mode": "subset",
-        "http_statuses": [401, 403],
+        "http_operations": [
+            {
+                "service": "ms-auth",
+                "method": "GET",
+                "path": "/session",
+                "success_status": 200,
+                "error_statuses": [401, 403],
+            }
+        ],
         "services": [],
         "signals": [],
         "expect_blocked": False,
@@ -205,6 +258,221 @@ def test_critical_http_explicit_subset_rule_allows_extra(tmp_path: Path):
     assert score.details["http_status_mode"] == "subset"
     assert score.expected_status_match is True
     assert score.selection_ok is True
+
+
+def test_typed_success_ignores_free_text_status_numbers(tmp_path: Path):
+    """Status tipado errado reprova mesmo com o número certo em RF/AC."""
+    spec_dir = tmp_path / "out"
+    _write_spec(
+        spec_dir,
+        {
+            "service_id": "ms-cliente",
+            "claims": [],
+            "requirements": [
+                {"id": "RF-1", "text": "cadastro bem-sucedido retorna HTTP 200"}
+            ],
+            "acceptance_criteria": [
+                {
+                    "id": "AC-1",
+                    "given": "payload ok",
+                    "when": "POST /clientes",
+                    "then": "HTTP 200",
+                }
+            ],
+            "operations": [
+                {
+                    "id": "OP-001",
+                    "name": "salvar",
+                    "owner": "ms-cliente",
+                    "method": "POST",
+                    "path": "/clientes",
+                    "success_status": {
+                        "value": 201,
+                        "origin": "declared",
+                        "confidence": 1.0,
+                        "requires_review": False,
+                    },
+                    "error_ids": [],
+                }
+            ],
+            "errors": [],
+            "open_questions": [{"id": "Q-1", "text": "confirmar se HTTP 200 basta"}],
+        },
+    )
+    expected = {
+        "http_operations": [
+            {
+                "service": "ms-cliente",
+                "method": "POST",
+                "path": "/clientes",
+                "success_status": 200,
+                "error_statuses": [],
+            }
+        ],
+        "services": [],
+        "signals": [],
+    }
+    score = score_case(
+        expected,
+        {"status": "completed", "contexts": [], "by_context": [], "claims": []},
+        output_root=spec_dir,
+    )
+    assert score.expected_status_match is False
+    assert score.details["actual_spec_statuses"] == [201]
+    assert any(
+        m.get("reason") == "success_status_mismatch"
+        for m in score.details["http_operation_mismatches"]
+    )
+
+
+def test_typed_success_on_other_service_does_not_compensate(tmp_path: Path):
+    spec_dir = tmp_path / "out"
+    _write_spec(
+        spec_dir,
+        {
+            "operations": [
+                {
+                    "id": "OP-C",
+                    "name": "salvar",
+                    "owner": "ms-cliente",
+                    "method": "POST",
+                    "path": "/clientes",
+                    "success_status": {
+                        "value": 200,
+                        "origin": "declared",
+                        "confidence": 1.0,
+                        "requires_review": False,
+                    },
+                    "error_ids": [],
+                },
+                {
+                    "id": "OP-P",
+                    "name": "pagar",
+                    "owner": "ms-pagamento",
+                    "method": "POST",
+                    "path": "/pagamentos",
+                    "success_status": {
+                        "value": 201,
+                        "origin": "declared",
+                        "confidence": 1.0,
+                        "requires_review": False,
+                    },
+                    "error_ids": [],
+                },
+            ],
+            "errors": [],
+            "requirements": [],
+            "acceptance_criteria": [],
+        },
+    )
+    expected = {
+        "http_operations": [
+            {
+                "service": "ms-cliente",
+                "method": "POST",
+                "path": "/clientes",
+                "success_status": 201,
+                "error_statuses": [],
+            }
+        ],
+        "services": [],
+        "signals": [],
+    }
+    score = score_case(
+        expected,
+        {"status": "completed", "contexts": [], "by_context": [], "claims": []},
+        output_root=spec_dir,
+    )
+    assert score.expected_status_match is False
+    assert any(
+        m.get("reason") == "success_status_mismatch"
+        and m.get("actual_success_status") == 200
+        for m in score.details["http_operation_mismatches"]
+    )
+
+
+def test_pending_success_status_is_not_presumed(tmp_path: Path):
+    spec_dir = tmp_path / "out"
+    _write_spec(
+        spec_dir,
+        {
+            "operations": [
+                {
+                    "id": "OP-001",
+                    "name": "salvar",
+                    "owner": "ms-cliente",
+                    "method": "POST",
+                    "path": "/clientes",
+                    "success_status": {
+                        "value": 200,
+                        "origin": "default",
+                        "confidence": 0.4,
+                        "requires_review": True,
+                    },
+                    "error_ids": ["ERR-1"],
+                }
+            ],
+            "errors": [{"id": "ERR-1", "status": 400, "trigger": "cpf"}],
+            "requirements": [{"text": "sucesso HTTP 200"}],
+            "acceptance_criteria": [],
+        },
+    )
+    expected = {
+        "http_operations": [
+            {
+                "service": "ms-cliente",
+                "method": "POST",
+                "path": "/clientes",
+                "success_status": 200,
+                "error_statuses": [400],
+            }
+        ],
+        "services": [],
+        "signals": [],
+    }
+    score = score_case(
+        expected,
+        {"status": "completed", "contexts": [], "by_context": [], "claims": []},
+        output_root=spec_dir,
+    )
+    assert score.expected_status_match is False
+    assert score.details["actual_spec_statuses"] == [400]
+    assert any(
+        m.get("reason") == "success_status_mismatch"
+        and m.get("actual_success_status") is None
+        for m in score.details["http_operation_mismatches"]
+    )
+
+
+def test_collect_spec_statuses_ignores_free_text():
+    from src.learning.evals import collect_spec_statuses
+
+    statuses = collect_spec_statuses(
+        {
+            "requirements": [{"text": "retornar HTTP 200"}],
+            "acceptance_criteria": [{"then": "HTTP 201"}],
+            "open_questions": [{"text": "usar 204?"}],
+            "operations": [
+                {
+                    "id": "OP-1",
+                    "owner": "ms-x",
+                    "method": "POST",
+                    "path": "/x",
+                    "success_status": {
+                        "value": 201,
+                        "origin": "declared",
+                        "requires_review": False,
+                    },
+                    "error_ids": ["E1"],
+                }
+            ],
+            "errors": [
+                {"id": "E1", "status": 400},
+                {"id": "orphan", "status": 500},
+            ],
+        }
+    )
+    assert statuses == {201, 400}
 
 
 def test_eval_adversarial_and_multi_context_fixtures(tmp_path: Path):
