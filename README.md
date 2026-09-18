@@ -44,6 +44,7 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 | **Pré-processamento barato + raciocínio caro** | Camada local (“modelo pequeno”) + slot para LLM grande |
 | **Gate antes de implementar** | Canonical Spec bloqueia ambiguidade (ex.: HTTP indefinido) com `PipelineBlocked` |
 | **Verify pós-executor** | `close_loop` confere o que ocorreu no Git e nos logs do adapter (não o payload) vs spec + policy |
+| **Promoção com aprovação humana** | `src.approval` vincula ator + spec + relatório + commit; HMAC detecta adulteração |
 | **Plano coordenado multi-repo** | `plan_repos` gera ondas/contratos a partir do mapa de serviços |
 | **Melhoria sem regressão silenciosa** | `improve` + evals; propostas só `approved_for_experiment` |
 
@@ -97,6 +98,7 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
 
         (pós-execução, opcional)
  [close_loop] ───────────── Git diff × adapter log × spec × policy → verify / repair
+ [approval] ─────────────── request-approval → approve|reject → promote (HMAC)
  [plan_repos] ───────────── mapa-servicos → implementation_plan (ondas)
  [improve] ──────────────── diagnose → propostas → evals → approved_for_experiment
 ```
@@ -1036,16 +1038,38 @@ com HMAC reusando `PROMPTLESS_INTEGRITY_KEY`).
   --result tests/fixtures/executor/execution_ok.json \
   --repo path/para/checkout \
   --adapter-log path/adapter-log.jsonl \
-  --out /tmp/verify
+  --out runs/<id>/validations
 
-# marcar aprovação / tentativa de reparo
-.venv/bin/python -m src.close_loop --spec ... --result ... --repo ... --approve
+# tentativa de reparo (não promove)
 .venv/bin/python -m src.close_loop --spec ... --result ... --repo ... --attempt 1 --layer bff
 ```
 
 `--repo` e os commits são obrigatórios. Sem ancestralidade no mesmo
 repositório, sem log do adapter ou com teste apenas “declarado”, o verify
-falha fechado.
+falha fechado. `--approve` **não** marca mais `approved=True` — o comando
+sai com erro e aponta para `src.approval`.
+
+### Aprovação auditável (`src.approval`)
+
+Pedido, decisão humana e promoção são comandos separados. O registro em
+`runs/<id>/validations/approval.json` identifica **quem** aprovou **qual**
+Canonical Spec, verify-report e `result_commit`. HMAC reusa
+`PROMPTLESS_INTEGRITY_KEY` / `seal_hmac` do 19: adulterar o arquivo invalida
+a promoção. Rejeição também é persistida (`approve --reject`). Aprovação de
+uma run não vale em outra. Promote **não** aplica código (isso é o ticket 14).
+
+```bash
+.venv/bin/python -m src.approval request-approval --root . --run-id <id>
+.venv/bin/python -m src.approval approve --root . --run-id <id> \
+  --actor alice --justification "spec, diff e commit conferem" --origin cli
+.venv/bin/python -m src.approval approve --root . --run-id <id> \
+  --actor alice --justification "fora do combinado" --reject
+.venv/bin/python -m src.approval promote --root . --run-id <id>
+.venv/bin/python -m src.approval show --root . --run-id <id>
+```
+
+Mudar o spec, o verify-report (diff) ou o `result_commit` **expira** a
+aprovação vigente. Promote sem registro válido e vinculado falha fechado.
 
 Policy (`config/permission_profiles.yaml` + `src/executors/policy.py`):
 
@@ -1081,7 +1105,7 @@ Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`
 
 ```bash
 .venv/bin/pytest -v --tb=short
-# esperado: 121 passed
+# esperado: 133 passed
 ```
 
 Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services) e goldens de artefato derivado em `tests/fixtures/golden/` (`openapi.yaml`, `sequence.mmd`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`. CI em `.github/workflows/ci.yml` (compileall + YAML de profiles + pytest + smoke `plan_repos`).
@@ -1124,7 +1148,8 @@ pipeline/
 │   └── integration/
 └── src/
     ├── run.py                     # pipeline + Canonical Spec + runtime
-    ├── close_loop.py              # verify por evidência (Git + logs) / approve / repair
+    ├── close_loop.py              # verify por evidência (Git + logs) / repair
+    ├── approval.py                # request-approval / approve / promote (HMAC)
     ├── plan_repos.py              # implementation_plan multi-repo
     ├── improve.py                 # diagnose → propose → eval → gate
     ├── ingest.py / docs_ingest.py / preprocess.py / engenharia.py
@@ -1132,7 +1157,7 @@ pipeline/
     ├── state_store.py / doc_compress.py / rag_compress.py
     ├── context_builder.py / reason.py / emit.py / economia.py
     ├── domain/                    # Claim, SourceRef, DocumentChunk, CanonicalSpec
-    ├── runtime/                   # RunContext, RunStore, EventStore, atomic_io
+    ├── runtime/                   # RunContext, RunStore, EventStore, atomic_io, approval
     ├── spec/                      # builder do IR
     ├── validators/                # quality gate
     ├── renderers/                 # história/PRD/OpenAPI/Mermaid a partir do IR
