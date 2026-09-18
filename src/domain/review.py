@@ -1,11 +1,14 @@
 """Decisão humana sobre vínculo claim → RF/AC/erro que exige revisão.
 
 Confiança numérica do match lexical não substitui evidência nem aprovação.
-A decisão fica vinculada à versão da spec e ao fingerprint do claim; mudança
-incompatível invalida a decisão e reabre a pendência.
+A decisão fica vinculada à versão da spec, ao fingerprint do claim e ao
+hash do conteúdo do requisito/aceite/erro revisado; mudança incompatível
+invalida a decisão e reabre a pendência.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
@@ -31,6 +34,7 @@ class ReviewDecision:
     justification: str
     reviewed_spec_version: str
     reviewed_claim_fingerprint: str
+    reviewed_subject_fingerprint: str = ""
     reviewed_link_method: str = "lexical"
     reviewed_link_score: float | None = None
     timestamp: str | None = None
@@ -68,6 +72,9 @@ class ReviewDecision:
             reviewed_claim_fingerprint=str(
                 data.get("reviewed_claim_fingerprint") or ""
             ),
+            reviewed_subject_fingerprint=str(
+                data.get("reviewed_subject_fingerprint") or ""
+            ),
             reviewed_link_method=str(data.get("reviewed_link_method") or "lexical"),
             reviewed_link_score=(
                 None if score_raw is None else float(score_raw)
@@ -99,6 +106,72 @@ def fingerprint_for_claim(claim: Any) -> str:
     return claim_fingerprint(payload)
 
 
+def _subject_content_payload(subject: Any) -> dict[str, Any] | None:
+    """Conteúdo estável do RF/AC/erro (sem claim_links — já cobertos à parte)."""
+    if subject is None:
+        return None
+    if isinstance(subject, dict):
+        data = dict(subject)
+    elif hasattr(subject, "to_dict"):
+        data = subject.to_dict()
+    else:
+        return None
+
+    subject_id = str(data.get("id") or "")
+    sources = sorted(str(s) for s in (data.get("source_claims") or []))
+
+    if "text" in data and "given" not in data and "trigger" not in data:
+        return {
+            "kind": "requirement",
+            "id": subject_id,
+            "text": str(data.get("text") or ""),
+            "status": str(data.get("status") or ""),
+            "source_claims": sources,
+            "origin": data.get("origin"),
+            "category": data.get("category"),
+            "layers": list(data.get("layers") or []),
+        }
+    if "given" in data or "when" in data or "then" in data:
+        return {
+            "kind": "acceptance",
+            "id": subject_id,
+            "requirement_id": str(data.get("requirement_id") or ""),
+            "given": str(data.get("given") or ""),
+            "when": str(data.get("when") or ""),
+            "then": str(data.get("then") or ""),
+            "source_claims": sources,
+        }
+    if "trigger" in data:
+        return {
+            "kind": "error",
+            "id": subject_id,
+            "trigger": str(data.get("trigger") or ""),
+            "status": data.get("status"),
+            "code": data.get("code"),
+            "source_claims": sources,
+        }
+    # Fallback: hashear campos escalares relevantes sem links.
+    skip = {"claim_links", "source_claims"}
+    scalars = {
+        k: v
+        for k, v in data.items()
+        if k not in skip and not isinstance(v, (list, dict))
+    }
+    scalars["id"] = subject_id
+    scalars["source_claims"] = sources
+    scalars["kind"] = "subject"
+    return scalars
+
+
+def fingerprint_for_subject(subject: Any) -> str:
+    """Hash do conteúdo do requisito/aceite/erro revisado (não só IDs)."""
+    payload = _subject_content_payload(subject)
+    if not payload:
+        return ""
+    blob = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
 def _link_fields(link: Any) -> tuple[str, str, float | None]:
     if link is None:
         return "", "lexical", None
@@ -119,12 +192,13 @@ def decide_claim_link_review(
     spec_version: str,
     claim: Claim | dict[str, Any],
     link: ClaimLink | dict[str, Any],
+    subject: Any,
     subject_id: str,
     decision: ReviewOutcome,
     actor: str,
     justification: str,
 ) -> ReviewDecision:
-    """Cria decisão vinculada à evidência atual (spec version + claim fingerprint)."""
+    """Cria decisão vinculada à evidência atual (spec + claim + conteúdo do sujeito)."""
     if decision not in DECISIONS:
         raise ValueError(f"decisão de revisão inválida: {decision!r}")
     actor = (actor or "").strip()
@@ -135,6 +209,9 @@ def decide_claim_link_review(
         raise ValueError("justificativa é obrigatória na decisão de revisão")
 
     claim_id, method, score = _link_fields(link)
+    subject_fp = fingerprint_for_subject(subject)
+    if not subject_fp:
+        raise ValueError("sujeito é obrigatório para fingerprint da decisão de revisão")
     return ReviewDecision(
         subject_id=subject_id,
         claim_id=claim_id,
@@ -143,6 +220,7 @@ def decide_claim_link_review(
         justification=justification,
         reviewed_spec_version=str(spec_version),
         reviewed_claim_fingerprint=fingerprint_for_claim(claim),
+        reviewed_subject_fingerprint=subject_fp,
         reviewed_link_method=method,
         reviewed_link_score=score,
         timestamp=_now(),
@@ -171,14 +249,20 @@ def decision_matches_evidence(
     *,
     spec_version: str,
     claim: Claim | dict[str, Any] | None,
+    subject: Any = None,
     link: ClaimLink | dict[str, Any] | None = None,
 ) -> bool:
-    """True se a decisão ainda cobre a evidência/spec atuais."""
+    """True se a decisão ainda cobre a evidência/spec/conteúdo atuais."""
     if decision.reviewed_spec_version != str(spec_version):
         return False
     current_fp = fingerprint_for_claim(claim)
     if not decision.reviewed_claim_fingerprint or (
         decision.reviewed_claim_fingerprint != current_fp
+    ):
+        return False
+    current_subject_fp = fingerprint_for_subject(subject)
+    if not decision.reviewed_subject_fingerprint or (
+        decision.reviewed_subject_fingerprint != current_subject_fp
     ):
         return False
     if link is None:

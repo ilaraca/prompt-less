@@ -37,6 +37,11 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- **Fingerprint do conteúdo em revisão obrigatória** (`33-required-review-gate`):
+  `ReviewDecision` passa a gravar `reviewed_subject_fingerprint` (hash do texto
+  do RF / given-when-then do AC / trigger do erro + evidências). Alterar o
+  conteúdo com os mesmos IDs, claim e `spec.version` invalida a aprovação
+  (`REQUIRED_REVIEW_STALE`); o fingerprint do claim sozinho não basta.
 - **Política completa no reparo** (`36-repair-policy`): `build_repair_request`
   deixa de filtrar só padrões protegidos — reaplica profile da camada +
   `repo_root` (`resolve_repo_path` / realpath / symlink) a cada tentativa.
