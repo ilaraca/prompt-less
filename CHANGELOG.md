@@ -19,6 +19,10 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Histórico de propostas guarda diff e métricas comparadas; o resultado
   distingue `proposed`, `applied_to_candidate`, `evaluated`,
   `approved_for_experiment`, `accepted` e `rejected`
+- Limites aceitos neste slice (efeito do overlay no IR fica no `14`):
+  `src.run` ainda lê `pipeline.yaml` do ROOT; o gate multi-contexto que
+  passa é `eval_multi_context` (`two_services` segue com 401 omitido);
+  suíte default maior (`--cases` restringe)
 
 - **Evidência de código no Canonical Spec** (`22-code-evidence-spec`): o IR
   passa a modelar `current_state`, `gaps` e `code_evidence`; o `repo_index`

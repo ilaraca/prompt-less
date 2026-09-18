@@ -1062,6 +1062,12 @@ Status:
 
 Uma proposta **não aplicada** nunca entra em `accepted` nem `approved_for_experiment`. Regressão em qualquer caso `critical: true` rejeita o candidato mesmo se o pass rate agregado subir. HTTP crítico exige igualdade de status, salvo `http_status_mode` explícito na fixture. O histórico (`state/knowledge/proposals-history.json`) guarda diff e métricas comparadas. Apply em produção continua no ticket `14`.
 
+Limites deste slice (não reabrir; o `14` consome o overlay):
+
+- O apply grava `config/proposal-overlay.yaml` só no candidato. `src.run` continua lendo `config/pipeline.yaml` do ROOT — a eval prova isolamento e gates, não o efeito da chave do playbook no IR.
+- `two_services` ainda espera HTTP 401 que o spec não materializa (residual do recorte de regras). O gate multi-contexto que passa é `eval_multi_context` (200/400/422 exact).
+- A suíte default inclui `eval_adversarial` e `eval_multi_context`. `--cases` restringe.
+
 ### Evals e testes
 
 ```bash
