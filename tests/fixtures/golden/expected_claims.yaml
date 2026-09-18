@@ -1,0 +1,14 @@
+min_recall: 1.0
+cases:
+  happy_path:
+    - id: CLM-R001
+      text_contains: "CPF inválido"
+    - text_contains: "400"
+  access_denied:
+    - text_contains: "401"
+    - text_contains: "403"
+    - text_contains: "autenticação"
+  two_services:
+    - text_contains: "400"
+    - text_contains: "422"
+    - text_contains: "401"

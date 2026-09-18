@@ -1,7 +1,6 @@
 """Autoaperfeiçoamento controlado: patterns, propostas, evals, aceite."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from src.learning.accept import decide_proposals, load_history

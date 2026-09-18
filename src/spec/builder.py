@@ -5,11 +5,19 @@ import re
 from collections import defaultdict
 from typing import Any
 
+from src.domain.chunk import content_hash
 from src.domain.claim import Claim, ClaimOrigin
+from src.domain.provenance import (
+    MATCH_REVIEW_THRESHOLD,
+    lexical_match_score,
+    make_claim_id,
+    parse_claim_ref,
+)
 from src.domain.source_ref import SourceRef
 from src.domain.spec import (
     AcceptanceCriterion,
     CanonicalSpec,
+    ClaimLink,
     DataSchema,
     OpenQuestion,
     Operation,
@@ -18,8 +26,11 @@ from src.domain.spec import (
     SchemaField,
     SpecError,
 )
+from src.servicos import fold, resolve_service_id
+from src.spec.evidence import bind_code_evidence, questions_from_conflicts
 
 _SUCCESS_STATUS_RE = re.compile(r"\b(2\d{2})\b")
+_CONTEXT_SENTINELS = {"default", "_unassigned"}
 
 
 def _schema_id(name: str, suffix: str) -> str:
@@ -53,6 +64,152 @@ def _schema_from_ui(
     return DataSchema(id=_schema_id(op_name, suffix), fields=fields, origin=origin)
 
 
+def _keyword_score(text: str, keywords: list[str] | None) -> int:
+    """Contagem de keywords (fold) — mesma heurística do mapa de serviços."""
+    low = fold(text)
+    score = 0
+    for kw in keywords or []:
+        key = fold(kw)
+        if key:
+            score += low.count(key)
+    return score
+
+
+def _action_blob(action: dict[str, Any]) -> str:
+    return " ".join(
+        str(action.get(k) or "")
+        for k in ("id", "name", "method", "path", "owner", "service_id", "service")
+    )
+
+
+def _explicit_owner(action: dict[str, Any], mapa: dict[str, Any] | None) -> str | None:
+    raw = action.get("owner") or action.get("service_id") or action.get("service")
+    if not raw:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    if mapa:
+        return resolve_service_id(mapa, text) or text
+    return text
+
+
+def _resolve_operation_owner(
+    action: dict[str, Any],
+    *,
+    mapa: dict[str, Any] | None,
+    fallback_service_id: str,
+) -> str | None:
+    """Dono da ação por evidência — nunca herda o contexto só porque a spec é dele."""
+    explicit = _explicit_owner(action, mapa)
+    if explicit:
+        return explicit
+
+    servicos = (mapa or {}).get("servicos") or {}
+    if servicos:
+        blob = _action_blob(action)
+        scored = {
+            sid: _keyword_score(blob, list((meta or {}).get("keywords") or []))
+            for sid, meta in servicos.items()
+        }
+        best = max(scored.values()) if scored else 0
+        winners = [sid for sid, score in scored.items() if score == best and score > 0]
+        if len(winners) == 1:
+            return winners[0]
+        if best <= 0 and len(servicos) == 1:
+            return next(iter(servicos))
+        return None
+
+    if fallback_service_id and fallback_service_id not in _CONTEXT_SENTINELS:
+        return fallback_service_id
+    if fallback_service_id == "default":
+        return "default"
+    return None
+
+
+def _slice_context_id(service_id: str) -> str | None:
+    return None if service_id in _CONTEXT_SENTINELS else service_id
+
+
+def _error_blob(err: SpecError) -> str:
+    return f"{err.trigger} {err.code or ''}"
+
+
+def _score_error_for_op(
+    err: SpecError, op: Operation, mapa: dict[str, Any] | None
+) -> int:
+    blob = _error_blob(err)
+    score = _keyword_score(blob, [op.name or "", op.path or "", op.id])
+    servicos = (mapa or {}).get("servicos") or {}
+    if op.owner and op.owner in servicos:
+        score += _keyword_score(
+            blob, list((servicos[op.owner] or {}).get("keywords") or [])
+        )
+    return score
+
+
+def _assign_error_ids(
+    operations: list[Operation],
+    errors: list[SpecError],
+    mapa: dict[str, Any] | None,
+) -> None:
+    """Ancora ERR-* na operação dona; empate ou zero vira órfão (não copia)."""
+    contract_ops = [op for op in operations if op.owner]
+    for op in operations:
+        op.error_ids = []
+    if not errors or not operations:
+        return
+    for err in errors:
+        scored = [(_score_error_for_op(err, op, mapa), op) for op in operations]
+        best = max((s for s, _ in scored), default=0)
+        winners = [op for s, op in scored if s == best and s > 0]
+        if len(winners) == 1:
+            winners[0].error_ids.append(err.id)
+        elif len(contract_ops) == 1:
+            # um único serviço/op no spec: não é cópia entre contextos
+            contract_ops[0].error_ids.append(err.id)
+
+
+def _error_service_candidates(
+    err: SpecError, mapa: dict[str, Any] | None
+) -> list[str]:
+    servicos = (mapa or {}).get("servicos") or {}
+    if not servicos:
+        return []
+    blob = _error_blob(err)
+    scored = {
+        sid: _keyword_score(blob, list((meta or {}).get("keywords") or []))
+        for sid, meta in servicos.items()
+    }
+    best = max(scored.values()) if scored else 0
+    if best <= 0:
+        return []
+    return [sid for sid, score in scored.items() if score == best]
+
+
+def _keep_errors_for_spec(
+    errors: list[SpecError],
+    operations: list[Operation],
+    *,
+    context_id: str | None,
+    mapa: dict[str, Any] | None,
+) -> tuple[list[SpecError], list[SpecError]]:
+    """Mantém erros ancorados + órfãos verdadeiros; não copia erro de outro serviço."""
+    referenced = {eid for op in operations for eid in op.error_ids}
+    kept: list[SpecError] = []
+    orphans: list[SpecError] = []
+    for err in errors:
+        if err.id in referenced:
+            kept.append(err)
+            continue
+        owners = _error_service_candidates(err, mapa)
+        if context_id and len(owners) == 1 and owners[0] != context_id:
+            continue
+        kept.append(err)
+        orphans.append(err)
+    return kept, orphans
+
+
 def _parse_confidence(raw: Any, *, default: float) -> float:
     """Preserva 0.0 explícito; só aplica default quando ausente."""
     if raw is None:
@@ -73,6 +230,8 @@ def _claims_from_dicts(raw: list[dict[str, Any]]) -> list[Claim]:
                 start_line=s.get("start_line"),
                 end_line=s.get("end_line"),
                 content_hash=s.get("content_hash"),
+                selected_lines=_selected_lines(s.get("selected_lines")),
+                locator=s.get("locator"),
             )
             for s in (c.get("sources") or [])
         ]
@@ -81,9 +240,10 @@ def _claims_from_dicts(raw: list[dict[str, Any]]) -> list[Claim]:
             origin_e = ClaimOrigin(origin)
         except ValueError:
             origin_e = ClaimOrigin.INFERRED
+        public_id, parsed_ns = parse_claim_ref(str(c.get("id") or ""))
         out.append(
             Claim(
-                id=str(c.get("id") or f"CLM-{len(out)+1:04d}"),
+                id=public_id or make_claim_id(len(out) + 1),
                 text=str(c.get("text") or ""),
                 origin=origin_e,
                 confidence=_parse_confidence(c.get("confidence"), default=0.5),
@@ -96,14 +256,43 @@ def _claims_from_dicts(raw: list[dict[str, Any]]) -> list[Claim]:
     return out
 
 
-def _match_claim_ids(text: str, claims: list[Claim]) -> list[str]:
-    blob = text.lower()
-    matched: list[str] = []
+def _selected_lines(raw: Any) -> tuple[int, ...] | None:
+    if not raw:
+        return None
+    return tuple(int(x) for x in raw)
+
+
+def _match_claim_links(
+    text: str, claims: list[Claim], *, context: str | None = None
+) -> list[ClaimLink]:
+    matched: list[ClaimLink] = []
     for c in claims:
-        tokens = [t for t in re.split(r"\W+", c.text.lower()) if len(t) > 3][:6]
-        if tokens and sum(1 for t in tokens if t in blob) >= max(1, len(tokens) // 2):
-            matched.append(c.id)
+        score = lexical_match_score(c.text, text)
+        if score is None:
+            continue
+        matched.append(
+            ClaimLink(
+                claim_id=c.id,
+                method="lexical",
+                score=round(score, 3),
+                requires_review=score < MATCH_REVIEW_THRESHOLD,
+                context=context or c.service_id,
+            )
+        )
     return matched
+
+
+def _ids_from_links(links: list[ClaimLink]) -> list[str]:
+    return [link.claim_id for link in links]
+
+
+def _synthetic_source(section: str, locator: str, text: str) -> SourceRef:
+    return SourceRef(
+        document="regras.yaml",
+        section=section,
+        content_hash=content_hash(text),
+        locator=locator,
+    )
 
 
 def build_canonical_spec(
@@ -113,6 +302,7 @@ def build_canonical_spec(
     engenharia: dict[str, Any] | None = None,
     claims: list[dict[str, Any]] | None = None,
     servico: dict[str, Any] | None = None,
+    mapa: dict[str, Any] | None = None,
 ) -> CanonicalSpec:
     eng = engenharia or {}
     svc = servico or {}
@@ -186,19 +376,41 @@ def build_canonical_spec(
         else:
             text = f"Validar: {trigger} → HTTP status a confirmar"
             then = "retornar HTTP status a confirmar"
-        src = _match_claim_ids(f"{trigger} {status_i}", claim_objs)
-        if not src:
+        src_links = _match_claim_links(
+            f"{trigger} {status_i}", claim_objs, context=service_id
+        )
+        if not src_links:
             synth = Claim(
-                id=f"CLM-SYN-{i:03d}",
+                id=make_claim_id(i, kind="SYN"),
                 text=text,
                 origin=ClaimOrigin.DECLARED,
                 confidence=1.0,
-                sources=[SourceRef(document="regras.yaml", section=f"bloqueios[{i-1}]")],
+                service_id=service_id,
+                sources=[
+                    _synthetic_source(
+                        f"bloqueios[{i-1}]", f"$.bloqueios[{i-1}]", text
+                    )
+                ],
             )
             claim_objs.append(synth)
-            src = [synth.id]
+            src_links = [
+                ClaimLink(
+                    claim_id=synth.id,
+                    method="synthetic",
+                    score=1.0,
+                    requires_review=False,
+                    context=service_id,
+                )
+            ]
+        src = _ids_from_links(src_links)
         requirements.append(
-            Requirement(id=rf_id, text=text, source_claims=src, status="draft")
+            Requirement(
+                id=rf_id,
+                text=text,
+                source_claims=src,
+                status="draft",
+                claim_links=src_links,
+            )
         )
         acceptance.append(
             AcceptanceCriterion(
@@ -208,6 +420,7 @@ def build_canonical_spec(
                 when=trigger,
                 then=then,
                 source_claims=src,
+                claim_links=src_links,
             )
         )
         if status_declared and status_i is not None:
@@ -218,6 +431,7 @@ def build_canonical_spec(
                     status=status_i,
                     code=b.get("code"),
                     source_claims=src,
+                    claim_links=src_links,
                 )
             )
 
@@ -235,18 +449,34 @@ def build_canonical_spec(
             text = f"Decisão: {d}"
             when = str(d)
             then = "sucesso"
-        src = _match_claim_ids(text, claim_objs)
-        if not src:
+        src_links = _match_claim_links(text, claim_objs, context=service_id)
+        if not src_links:
             synth = Claim(
-                id=f"CLM-SYN-D{j:03d}",
+                id=make_claim_id(j, kind="SYND"),
                 text=text,
                 origin=ClaimOrigin.DECLARED,
                 confidence=1.0,
-                sources=[SourceRef(document="regras.yaml", section=f"decisoes[{j-1}]")],
+                service_id=service_id,
+                sources=[
+                    _synthetic_source(
+                        f"decisoes[{j-1}]", f"$.decisoes[{j-1}]", text
+                    )
+                ],
             )
             claim_objs.append(synth)
-            src = [synth.id]
-        requirements.append(Requirement(id=rf_id, text=text, source_claims=src))
+            src_links = [
+                ClaimLink(
+                    claim_id=synth.id,
+                    method="synthetic",
+                    score=1.0,
+                    requires_review=False,
+                    context=service_id,
+                )
+            ]
+        src = _ids_from_links(src_links)
+        requirements.append(
+            Requirement(id=rf_id, text=text, source_claims=src, claim_links=src_links)
+        )
         acceptance.append(
             AcceptanceCriterion(
                 id=f"AC-{i:03d}",
@@ -255,17 +485,30 @@ def build_canonical_spec(
                 when=when,
                 then=then,
                 source_claims=src,
+                claim_links=src_links,
             )
         )
         for match in _SUCCESS_STATUS_RE.finditer(then):
             success_evidence.setdefault(int(match.group(1)), []).extend(src)
 
     if not requirements:
+        fallback_ids = [c.id for c in claim_objs[:1]]
+        fallback_links = [
+            ClaimLink(
+                claim_id=cid,
+                method="declared",
+                score=1.0,
+                requires_review=False,
+                context=service_id,
+            )
+            for cid in fallback_ids
+        ]
         requirements.append(
             Requirement(
                 id="RF-001",
                 text="Permitir submissão com dados válidos (HTTP status a confirmar)",
-                source_claims=[c.id for c in claim_objs[:1]],
+                source_claims=fallback_ids,
+                claim_links=fallback_links,
             )
         )
         acceptance.append(
@@ -275,26 +518,39 @@ def build_canonical_spec(
                 given="dados válidos",
                 when="submeter",
                 then="sucesso com status HTTP a confirmar",
-                source_claims=[c.id for c in claim_objs[:1]],
+                source_claims=fallback_ids,
+                claim_links=fallback_links,
             )
         )
 
     actions = [a for a in (ui.get("actions") or []) if isinstance(a, dict)]
-    # Sucesso só é resolvido quando a atribuição é inequívoca: uma operação e um
-    # único 2xx declarado nas decisões. Fora disso permanece `unresolved`.
+    context_id = _slice_context_id(service_id)
+
+    owned_actions: list[tuple[int, dict[str, Any], str | None]] = []
+    for i, a in enumerate(actions, start=1):
+        owner = _resolve_operation_owner(
+            a, mapa=mapa, fallback_service_id=service_id
+        )
+        if context_id and owner and owner != context_id:
+            continue
+        owned_actions.append((i, a, owner))
+
+    # Sucesso só é resolvido quando a atribuição é inequívoca: uma operação
+    # *com dono* e um único 2xx declarado nas decisões. Fora disso `unresolved`.
+    owned_count = sum(1 for _, _, owner in owned_actions if owner)
     unique_success = (
         next(iter(success_evidence.items()))
-        if len(actions) == 1 and len(success_evidence) == 1
+        if owned_count == 1 and len(success_evidence) == 1
         else None
     )
 
     operations: list[Operation] = []
-    for i, a in enumerate(actions, start=1):
+    for i, a, owner in owned_actions:
         op_id = f"OP-{i:03d}"
         op_name = str(a.get("id") or f"action-{i}")
         method = a.get("method")
         path = a.get("path")
-        if unique_success is not None:
+        if unique_success is not None and owner:
             status_value, status_claims = unique_success
             success = ResolvedInt(
                 value=status_value,
@@ -310,6 +566,8 @@ def build_canonical_spec(
             )
 
         unresolved: list[str] = []
+        if not owner:
+            unresolved.append("owner")
         if not method:
             unresolved.append("method")
         if not path:
@@ -317,30 +575,31 @@ def build_canonical_spec(
         if not success.resolved:
             unresolved.append("success_status")
 
-        for missing in ("method", "path"):
-            if missing in unresolved:
-                open_questions.append(
-                    OpenQuestion(
-                        id=f"Q-{qn:03d}",
-                        text=(
-                            f"Operação {op_id} ({op_name}) sem {missing} declarado "
-                            f"na UI — definir antes de gerar contrato"
-                        ),
-                        blocking=False,
-                        source_claims=[],
-                    )
+        if "owner" in unresolved:
+            open_questions.append(
+                OpenQuestion(
+                    id=f"Q-{qn:03d}",
+                    text=(
+                        f"Operação {op_id} ({op_name}) sem dono atribuível "
+                        "no mapa/UI — não emitir como contrato resolvido"
+                    ),
+                    blocking=False,
+                    source_claims=[],
                 )
-                qn += 1
+            )
+            qn += 1
 
         operations.append(
             Operation(
                 id=op_id,
                 name=op_name,
-                owner=service_id,
+                owner=owner,
                 method=method,
                 path=path,
+                method_origin="declared" if method else None,
+                path_origin="declared" if path else None,
                 success_status=success,
-                error_ids=[e.id for e in errors],
+                error_ids=[],
                 request_schema=_schema_from_ui(op_name, ui.get("inputs") or [], "Request"),
                 response_schema=_schema_from_ui(
                     op_name, ui.get("columns") or [], "Response"
@@ -348,6 +607,51 @@ def build_canonical_spec(
                 unresolved=unresolved,
             )
         )
+
+    _assign_error_ids(operations, errors, mapa)
+    errors, orphan_errors = _keep_errors_for_spec(
+        errors, operations, context_id=context_id, mapa=mapa
+    )
+    for err in orphan_errors:
+        open_questions.append(
+            OpenQuestion(
+                id=f"Q-{qn:03d}",
+                text=(
+                    f"Erro {err.id} ({err.trigger}) sem operação dona — "
+                    "permanece unresolved, não copiado para outro serviço"
+                ),
+                blocking=False,
+                source_claims=list(err.source_claims),
+            )
+        )
+        qn += 1
+
+    indice = None
+    if isinstance(svc, dict) and "indice" in svc:
+        indice = svc.get("indice") or {}
+    current_state, gaps, code_evidence, conflict_texts = bind_code_evidence(
+        operations=operations,
+        errors=errors,
+        indice=indice,
+    )
+
+    for op in operations:
+        for missing in ("method", "path"):
+            if missing in op.unresolved:
+                open_questions.append(
+                    OpenQuestion(
+                        id=f"Q-{qn:03d}",
+                        text=(
+                            f"Operação {op.id} ({op.name}) sem {missing} declarado "
+                            f"na UI — definir antes de gerar contrato"
+                        ),
+                        blocking=False,
+                        source_claims=[],
+                    )
+                )
+                qn += 1
+    extra_qs, qn = questions_from_conflicts(conflict_texts, start=qn)
+    open_questions.extend(extra_qs)
 
     nfrs: list[Requirement] = []
     if eng.get("resiliencia"):
@@ -381,4 +685,7 @@ def build_canonical_spec(
         errors=errors,
         nfrs=nfrs,
         open_questions=open_questions,
+        current_state=current_state,
+        gaps=gaps,
+        code_evidence=code_evidence,
     )

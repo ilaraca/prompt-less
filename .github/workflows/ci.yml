@@ -6,37 +6,97 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    name: pytest
+  quality-gates:
+    name: quality-gates (${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     defaults:
       run:
         working-directory: .
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.lock
+            requirements-dev.lock
 
-      - name: Install dependencies
+      - name: Install dependencies (lock)
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install --require-hashes -r requirements-dev.lock
 
-      - name: Static checks
+      - name: Compile
+        run: python -m compileall -q src tests scripts
+
+      - name: Lint
+        run: ruff check src tests scripts
+
+      - name: Type check
+        run: mypy src
+
+      - name: Validate YAML
         run: |
-          python -m compileall -q src
-          python -c "import yaml; yaml.safe_load(open('config/permission_profiles.yaml'))"
+          python scripts/ci_reports.py validate-yaml
+          yamllint -c .yamllint.yaml config inputs templates .github .yamllint.yaml
 
-      - name: Run tests
-        run: python -m pytest -v --tb=short
+      - name: Secrets scan
+        run: detect-secrets scan --baseline .secrets.baseline
+
+      - name: pip-audit
+        run: pip-audit --strict -r requirements-dev.lock
+
+      - name: Tests + coverage
+        run: |
+          mkdir -p reports
+          python -m pytest -q --tb=short \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-report=xml:reports/coverage.xml \
+            --cov-report=json:reports/coverage.json \
+            --cov-report=html:reports/coverage-html \
+            --cov-fail-under=70 \
+            --junitxml=reports/pytest.xml
+
+      - name: Collect eval / coverage / verify reports
+        if: always()
+        run: python scripts/ci_reports.py collect --reports-dir reports
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: quality-reports-py${{ matrix.python-version }}
+          path: reports/
+          if-no-files-found: error
 
       - name: Smoke plan_repos
         run: python -m src.plan_repos --help
+
+  ci:
+    name: CI
+    if: always()
+    needs: quality-gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require quality-gates
+        run: |
+          echo "quality-gates=${{ needs.quality-gates.result }}"
+          test "${{ needs.quality-gates.result }}" = "success"

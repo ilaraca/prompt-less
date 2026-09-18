@@ -12,7 +12,9 @@ from typing import Any
 
 from src.domain.claim import Claim, ClaimOrigin
 from src.domain.chunk import ChunkSummary, DocumentChunk, content_hash
+from src.domain.provenance import make_claim_id
 from src.domain.source_ref import SourceRef
+from src.tokenizer import count_tokens, est_raw
 
 SIGNAL_RE = re.compile(
     r"\b(regra|bloqueio|erro|http|endpoint|path|request|response|dado|quando|então|"
@@ -112,6 +114,7 @@ def summarize_document_chunk(chunk: DocumentChunk, max_chars: int = 220) -> Chun
             discarded=True,
             reason="empty_chunk",
             document=chunk.document,
+            section=chunk.section,
             start_line=chunk.start_line,
             end_line=chunk.end_line,
             content_hash=chunk.content_hash,
@@ -133,6 +136,7 @@ def summarize_document_chunk(chunk: DocumentChunk, max_chars: int = 220) -> Chun
             reason="no_known_signal",
             recoverable=True,
             document=chunk.document,
+            section=chunk.section,
             start_line=chunk.start_line,
             end_line=chunk.end_line,
             content_hash=chunk.content_hash,
@@ -156,6 +160,7 @@ def summarize_document_chunk(chunk: DocumentChunk, max_chars: int = 220) -> Chun
         signals=chunk.signals or _detect_signals(" ".join(picked)),
         discarded=False,
         document=chunk.document,
+        section=chunk.section,
         start_line=chunk.start_line,
         end_line=chunk.end_line,
         content_hash=chunk.content_hash,
@@ -165,6 +170,7 @@ def summarize_document_chunk(chunk: DocumentChunk, max_chars: int = 220) -> Chun
 def claim_from_summary(summary: ChunkSummary, claim_id: str) -> Claim | None:
     if summary.discarded or not summary.summary:
         return None
+    selected = tuple(summary.selected_lines) if summary.selected_lines else None
     return Claim(
         id=claim_id,
         text=summary.summary,
@@ -173,9 +179,11 @@ def claim_from_summary(summary: ChunkSummary, claim_id: str) -> Claim | None:
         sources=[
             SourceRef(
                 document=summary.document or "unknown",
+                section=summary.section,
                 start_line=summary.start_line,
                 end_line=summary.end_line,
                 content_hash=summary.content_hash,
+                selected_lines=selected,
             )
         ],
         chunk_id=summary.chunk_id,
@@ -248,6 +256,7 @@ def compress_documents(
     lines_per_chunk: int = 40,
     chunk_summary_chars: int = 220,
     consolidated_chars: int = 800,
+    service_id: str | None = None,
 ) -> dict[str, Any]:
     per_doc: list[dict[str, Any]] = []
     all_chunk_objs: list[DocumentChunk] = []
@@ -260,7 +269,7 @@ def compress_documents(
 
     for doc in docs:
         text = doc.get("text") or ""
-        raw_tokens += doc.get("est_tokens_raw") or (len(text) // 4)
+        raw_tokens += doc.get("est_tokens_raw") or est_raw(text)
         chunks = build_document_chunks(doc, lines_per_chunk, counter_start=counter)
         counter += len(chunks)
         all_chunk_objs.extend(chunks)
@@ -273,9 +282,10 @@ def compress_documents(
                 discarded.append(summary.to_dict())
             else:
                 doc_summaries.append(summary.summary)
-                claim = claim_from_summary(summary, f"CLM-{claim_n:04d}")
+                claim = claim_from_summary(summary, make_claim_id(claim_n))
                 claim_n += 1
                 if claim:
+                    claim.service_id = service_id or doc.get("service_id")
                     claims.append(claim)
 
         per_doc.append(
@@ -283,7 +293,7 @@ def compress_documents(
                 "name": doc.get("name"),
                 "lines": doc.get("lines"),
                 "chunks": len(chunks),
-                "est_tokens_raw": doc.get("est_tokens_raw") or (len(text) // 4),
+                "est_tokens_raw": doc.get("est_tokens_raw") or est_raw(text),
                 "chunk_summaries": doc_summaries,
             }
         )
@@ -320,7 +330,7 @@ def compress_documents(
         "discarded": discarded,
         "consolidated": consolidated,
         "est_tokens_raw": raw_tokens,
-        "est_tokens_compressed": max(1, len(consolidated) // 4) if consolidated else 0,
+        "est_tokens_compressed": max(1, count_tokens(consolidated)) if consolidated else 0,
         "reduction_pct": round(
             100
             * (

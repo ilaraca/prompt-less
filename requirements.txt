@@ -1,3 +1,12 @@
+# Piso das dependências diretas (não é o lock).
+# Instalação reproduzível (CI):
+#   pip install --require-hashes -r requirements-dev.lock
+# Runtime apenas:
+#   pip install --require-hashes -r requirements.lock
+# Regenerar:
+#   pip-compile --generate-hashes --allow-unsafe --output-file=requirements.lock requirements.in
+#   pip-compile --generate-hashes --allow-unsafe --output-file=requirements-dev.lock requirements-dev.in
 PyYAML>=6.0.1
 python-docx>=1.1.0
 pytest>=8.0.0
+tiktoken>=0.7.0

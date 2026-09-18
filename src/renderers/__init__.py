@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.domain.spec import CanonicalSpec
+from src.domain.spec import CanonicalSpec, CodeEvidence, Gap
 from src.engenharia import (
     format_arquitetura,
     format_documentacao,
@@ -50,8 +50,138 @@ def _rf_from_spec(spec: CanonicalSpec) -> str:
     return "\n".join(lines) if lines else "- _(sem RF)_"
 
 
+def _provenance_md(spec: CanonicalSpec) -> str:
+    used: list[str] = []
+    seen: set[str] = set()
+    for bucket in (spec.requirements, spec.acceptance_criteria, spec.errors):
+        for item in bucket:
+            for cid in item.source_claims or []:
+                if cid not in seen:
+                    seen.add(cid)
+                    used.append(cid)
+    by_id = {c.id: c for c in spec.claims}
+    lines: list[str] = []
+    for cid in used:
+        claim = by_id.get(cid)
+        if claim is None:
+            lines.append(f"- `{cid}` _(claim ausente)_")
+            continue
+        loc = ""
+        src = claim.sources[0] if claim.sources else None
+        if src is not None:
+            loc = f" — `{src.document}`"
+            if src.selected_lines:
+                loc += " L" + ",".join(str(n) for n in src.selected_lines)
+            elif src.locator:
+                loc += f" `{src.locator}`"
+            elif src.section:
+                loc += f" {src.section}"
+        lines.append(f"- `{claim.id}` {claim.text}{loc}")
+    return "\n".join(lines) if lines else "- _(sem claims utilizados)_"
+
+
+INDEX_NOT_APPLIED = "- _(índice não aplicado neste render)_"
+GAPS_INDEX_NOT_APPLIED = (
+    "- _(índice não aplicado — gaps não calculados; ausência de evidência "
+    "não significa que não há gaps)_"
+)
+
+
+def _pointer_md(ev: CodeEvidence) -> str:
+    parts: list[str] = []
+    if ev.file:
+        loc = ev.file
+        if ev.line:
+            loc = f"{loc}:{ev.line}"
+        parts.append(f"`{loc}`")
+    if ev.symbol:
+        parts.append(f"`{ev.symbol}`")
+    if ev.route:
+        parts.append(f"`{ev.route}`")
+    if ev.status is not None:
+        parts.append(f"HTTP {ev.status}")
+    conf = f"confiança {ev.confidence:.2f}"
+    origin = "observado" if ev.origin == "observed" else "heurística"
+    parts.append(f"_({origin}, {conf})_")
+    return " ".join(parts)
+
+
+def _estado_atual_from_spec(spec: CanonicalSpec) -> str:
+    state = spec.current_state
+    if state is None or not state.applied:
+        return INDEX_NOT_APPLIED
+
+    lines: list[str] = []
+    if state.routes:
+        lines.append(f"**Endpoints existentes** ({len(state.routes)}):")
+        for ev in state.routes[:12]:
+            lines.append(f"- {_pointer_md(ev)}")
+        if len(state.routes) > 12:
+            lines.append(f"- _(+{len(state.routes) - 12} rotas no Canonical Spec)_")
+    else:
+        lines.append("**Endpoints existentes:** nenhum detectado no índice")
+
+    if state.statuses:
+        codes = []
+        seen: set[int] = set()
+        for ev in state.statuses:
+            if ev.status is None or ev.status in seen:
+                continue
+            seen.add(ev.status)
+            codes.append(f"`{ev.status}`")
+        if codes:
+            lines.append("")
+            lines.append("**Códigos HTTP já tratados:** " + ", ".join(codes))
+
+    if state.symbols:
+        names = []
+        seen_s: set[str] = set()
+        for ev in state.symbols[:10]:
+            if not ev.symbol or ev.symbol in seen_s:
+                continue
+            seen_s.add(ev.symbol)
+            names.append(f"`{ev.symbol}`")
+        if names:
+            lines.append("")
+            lines.append("**Entidades/classes:** " + ", ".join(names))
+
+    return "\n".join(lines)
+
+
+def _gap_origin_mark(gap: Gap) -> str:
+    return "observado" if gap.origin == "observed" else "heurística"
+
+
+def _gaps_from_spec(spec: CanonicalSpec) -> str:
+    state = spec.current_state
+    if state is None or not state.applied:
+        return GAPS_INDEX_NOT_APPLIED
+
+    if not spec.gaps:
+        return (
+            "- _(nenhum gap identificado no índice — conferir evidência "
+            "em `code_evidence`)_"
+        )
+
+    lines: list[str] = []
+    for gap in spec.gaps:
+        mark = _gap_origin_mark(gap)
+        loc = ""
+        if gap.evidence:
+            loc = " — " + "; ".join(_pointer_md(e) for e in gap.evidence[:2])
+        elif mark == "heurística":
+            loc = " — _(sem ponteiro de arquivo; marcação heurística)_"
+        lines.append(f"- **{gap.id}** [{mark}] {gap.text}{loc}")
+    return "\n".join(lines)
+
+
 def _operacao_md(op) -> str:
     """Ação do PRD alinhada ao IR — sem method/path/status inventado."""
+    if not op.owner or "owner" in (op.unresolved or []):
+        return (
+            f"- **{op.id}** {op.name} — "
+            "_(owner não resolvido no IR — requer revisão)_"
+        )
     if op.method and op.path:
         linha = f"- **{op.id}** {op.method} {op.path}"
     else:
@@ -90,8 +220,8 @@ def render_historia(
             "ownership": _ownership_md(spec),
             "contexto": f"Fluxo `{spec.service_id}` gerado a partir do Canonical Spec.",
             "criterios_bdd": _bdd_from_spec(spec),
-            "estado_atual": "- _(índice não aplicado neste render)_",
-            "gaps": "- _(sem gaps calculados)_",
+            "estado_atual": _estado_atual_from_spec(spec),
+            "gaps": _gaps_from_spec(spec),
             "stack": format_stack(eng),
             "padroes": format_padroes(eng),
             "arquitetura": format_arquitetura(eng),
@@ -101,6 +231,7 @@ def render_historia(
             "documentacao": format_documentacao(eng),
             "dependencias": "- Canonical Spec validado",
             "fora_escopo": "- Itens não presentes no Canonical Spec",
+            "proveniencia": _provenance_md(spec),
         },
     )
 
@@ -117,9 +248,21 @@ def render_prd(
     repos = []
     for v in (spec.repositories or {}).values():
         repos.extend(v or [])
-    regras = "\n".join(
-        f"- **{e.id}** {e.trigger} → HTTP {e.status}" for e in spec.errors
-    ) or "- _(sem erros explícitos)_"
+    regras = (
+        "\n".join(
+            f"- **{e.id}** {e.trigger} → HTTP {e.status}"
+            for e in spec.errors
+            if any(e.id in op.error_ids for op in spec.contract_operations())
+        )
+        or "- _(sem erros explícitos)_"
+    )
+    orfaos = [e for e in spec.errors if not any(e.id in op.error_ids for op in spec.operations)]
+    if orfaos:
+        regras += "\n" + "\n".join(
+            f"- **{e.id}** {e.trigger} → HTTP {e.status} "
+            "_(unresolved — sem operação dona)_"
+            for e in orfaos
+        )
     return _fill(
         template,
         {
@@ -148,12 +291,13 @@ def render_prd(
             "nfr_observabilidade": format_observabilidade(eng, with_ids=True),
             "nfr_seguranca": format_seguranca(eng, with_ids=True),
             "nfr_documentacao": format_documentacao(eng, with_ids=True),
-            "estado_atual": "- _(índice não aplicado neste render)_",
-            "gaps": "- _(sem gaps)_",
+            "estado_atual": _estado_atual_from_spec(spec),
+            "gaps": _gaps_from_spec(spec),
             "dependencias": "- Canonical Spec",
             "metricas": "- RF/AC cobertos no SDD",
             "riscos": "\n".join(f"- {q.text}" for q in spec.open_questions) or "- _(nenhum)_",
             "contexto_comprimido": consolidated or "_(vazio)_",
             "ownership": _ownership_md(spec),
+            "proveniencia": _provenance_md(spec),
         },
     )

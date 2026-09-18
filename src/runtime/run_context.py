@@ -12,6 +12,7 @@ from src.runtime.atomic_io import UnsafePath, resolve_within
 RUNS_DIRNAME = "runs"
 ARTIFACTS_DIRNAME = "artifacts"
 VALIDATIONS_DIRNAME = "validations"
+CHECKPOINTS_DIRNAME = "checkpoints"
 # nome único de subdiretório por serviço — igual na run e no espelho outputs/
 CONTEXTS_DIRNAME = "contextos"
 
@@ -141,6 +142,10 @@ class RunContext:
     @property
     def validations_dir(self) -> Path:
         return self.run_dir / VALIDATIONS_DIRNAME
+
+    @property
+    def checkpoints_dir(self) -> Path:
+        return self.run_dir / CHECKPOINTS_DIRNAME
 
     def context_artifacts_dir(self, context_id: str) -> Path:
         return context_subdir(self.artifacts_dir, context_id)

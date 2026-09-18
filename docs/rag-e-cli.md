@@ -98,7 +98,7 @@ Budget padrão (`config/pipeline.yaml`):
 | `max_context_tokens` | 2000 | Teto do pacote de contexto |
 | `target_context_tokens` | 650 | Alvo do pacote final |
 
-Conversão usada no código: **tokens × 4 ≈ chars** (heurística).
+Conversão usada no clip de budget: **tokens × 4 ≈ chars** (heurística de recorte). A telemetria (`est_tokens`, `method`) usa o tokenizer do provider (`tiktoken` no OpenAI) e só cai nessa heurística com `method=heuristic`.
 
 ---
 
@@ -131,7 +131,7 @@ flowchart TD
 
 ### Matemática do budget
 
-A config `consolidated_summary_max_tokens: 200` vira cerca de **800 caracteres** (heurística tokens × 4).
+A config `consolidated_summary_max_tokens: 200` vira cerca de **800 caracteres** no recorte (inverso da heurística). A contagem reportada segue o tokenizer configurado.
 
 | Passo | Cálculo | Resultado típico |
 |-------|---------|-----------------:|

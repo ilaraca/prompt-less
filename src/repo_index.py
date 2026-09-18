@@ -77,35 +77,91 @@ def _join_path(base: str, rota: str) -> str:
     return re.sub(r"//+", "/", completo)
 
 
-def _extract_routes(conteudo: str) -> list[str]:
-    """`METODO /caminho` já concatenado com a base da classe, quando existir."""
+def _line_of(conteudo: str, pos: int) -> int:
+    return conteudo[:pos].count("\n") + 1
+
+
+_DEF_RE = re.compile(
+    r"^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)", re.M
+)
+
+
+def _nearest_symbol(conteudo: str, pos: int) -> str | None:
+    """Classe ou função imediatamente acima do match."""
+    last: tuple[int, str] | None = None
+    for regex in (*CLASS_RES, _DEF_RE):
+        for m in regex.finditer(conteudo):
+            if m.start() <= pos and (last is None or m.start() >= last[0]):
+                last = (m.start(), m.group(1))
+    return last[1] if last else None
+
+
+def _extract_route_hits(conteudo: str) -> list[dict[str, Any]]:
+    """Rotas com arquivo/símbolo/linha preenchidos pelo chamador."""
     base_match = BASE_PATH_RE.search(conteudo)
     base = base_match.group(1) if base_match else ""
-    achadas: list[str] = []
+    hits: list[dict[str, Any]] = []
     for regex, g_metodo, g_path, usa_base in ROUTE_PATTERNS:
         for m in regex.finditer(conteudo):
             rota = (m.group(g_path) if g_path else "") or ""
+            if g_path == 0:
+                # grupo 0 é o match inteiro (`@PostMapping()`); path é a base
+                rota = ""
             if len(rota) > 120:
                 continue
             metodo = m.group(g_metodo).upper() if g_metodo else "ANY"
             completo = _join_path(base, rota) if usa_base else _join_path("", rota)
-            if completo and completo != "/":
-                achadas.append(f"{metodo} {completo}")
-    # só a base (controller sem método reconhecido) ainda é informação útil
-    if not achadas and base:
-        achadas.append(f"ANY {_join_path(base, '')}")
-    return achadas
+            if not completo or completo == "/":
+                continue
+            observed = bool(g_metodo) and metodo != "ANY"
+            hits.append(
+                {
+                    "kind": "route",
+                    "line": _line_of(conteudo, m.start()),
+                    "symbol": _nearest_symbol(conteudo, m.start()),
+                    "route": f"{metodo} {completo}",
+                    "confidence": 0.9 if observed else 0.5,
+                    "origin": "observed" if observed else "heuristic",
+                }
+            )
+    if not hits and base:
+        hits.append(
+            {
+                "kind": "route",
+                "line": _line_of(conteudo, base_match.start()) if base_match else None,
+                "symbol": _nearest_symbol(conteudo, base_match.start())
+                if base_match
+                else None,
+                "route": f"ANY {_join_path(base, '')}",
+                "confidence": 0.4,
+                "origin": "heuristic",
+            }
+        )
+    return hits
+
+
+def _extract_routes(conteudo: str) -> list[str]:
+    """`METODO /caminho` já concatenado com a base da classe, quando existir."""
+    seen: list[str] = []
+    for hit in _extract_route_hits(conteudo):
+        rota = hit["route"]
+        if rota not in seen:
+            seen.append(rota)
+    return seen
 
 # --- códigos de status -----------------------------------------------------
 STATUS_NAME_RES = [
     re.compile(r"HttpStatus(?:Code)?\.([A-Z][A-Z_]{2,})"),
     re.compile(r"http\.Status([A-Z][A-Za-z]+)"),
 ]
-STATUS_NUM_RES = [
+STATUS_NUM_OBSERVED_RES = [
     re.compile(r"ResponseEntity\.status\(\s*(\d{3})"),
-    re.compile(r"(?:sendStatus|statusCode|status_code|status)\s*[=(]\s*(\d{3})"),
     re.compile(r"HTTPException\(\s*status_code\s*=\s*(\d{3})"),
 ]
+STATUS_NUM_HEURISTIC_RES = [
+    re.compile(r"(?:sendStatus|statusCode|status_code|status)\s*[=(]\s*(\d{3})"),
+]
+STATUS_NUM_RES = STATUS_NUM_OBSERVED_RES + STATUS_NUM_HEURISTIC_RES
 STATUS_NAMES = {
     "OK": 200, "CREATED": 201, "ACCEPTED": 202, "NOCONTENT": 204, "NO_CONTENT": 204,
     "BADREQUEST": 400, "BAD_REQUEST": 400, "UNAUTHORIZED": 401,
@@ -218,6 +274,7 @@ def index_repo(repo: Path) -> dict[str, Any]:
     tabelas: Counter[str] = Counter()
     campos: Counter[str] = Counter()
     termos: Counter[str] = Counter()
+    evidencias: list[dict[str, Any]] = []
     arquivos = 0
 
     for path in repo.rglob("*"):
@@ -236,16 +293,31 @@ def index_repo(repo: Path) -> dict[str, Any]:
         except OSError:
             continue
         arquivos += 1
+        rel = str(path.relative_to(repo))
 
-        for rota in _extract_routes(conteudo):
+        for hit in _extract_route_hits(conteudo):
+            rota = hit["route"]
             rotas[rota] += 1
+            evidencias.append({**hit, "file": rel})
             for seg in re.split(r"[/{}\-_.]", rota.split(" ", 1)[-1]):
                 if seg and not seg.isdigit():
                     termos[seg.lower()] += 1
 
         if path.suffix.lower() in {".yaml", ".yml"} and "paths:" in conteudo:
             for m in OPENAPI_PATH_RE.finditer(conteudo):
-                rotas[f"SPEC {m.group(1)}"] += 1
+                rota = f"SPEC {m.group(1)}"
+                rotas[rota] += 1
+                evidencias.append(
+                    {
+                        "kind": "route",
+                        "file": rel,
+                        "line": _line_of(conteudo, m.start()),
+                        "symbol": None,
+                        "route": rota,
+                        "confidence": 0.8,
+                        "origin": "observed",
+                    }
+                )
                 for seg in re.split(r"[/{}\-_.]", m.group(1)):
                     if seg and not seg.isdigit():
                         termos[seg.lower()] += 1
@@ -256,14 +328,68 @@ def index_repo(repo: Path) -> dict[str, Any]:
                 num = STATUS_NAMES.get(nome.replace("_", "")) or STATUS_NAMES.get(nome)
                 if num:
                     status[str(num)] += 1
-        for regex in STATUS_NUM_RES:
+                    evidencias.append(
+                        {
+                            "kind": "status",
+                            "file": rel,
+                            "line": _line_of(conteudo, m.start()),
+                            "symbol": _nearest_symbol(conteudo, m.start()),
+                            "status": num,
+                            "confidence": 0.85,
+                            "origin": "observed",
+                        }
+                    )
+        observed_status_lines: set[int] = set()
+        for regex in STATUS_NUM_OBSERVED_RES:
             for m in regex.finditer(conteudo):
-                status[m.group(1)] += 1
+                num = int(m.group(1))
+                line = _line_of(conteudo, m.start())
+                status[str(num)] += 1
+                observed_status_lines.add(line)
+                evidencias.append(
+                    {
+                        "kind": "status",
+                        "file": rel,
+                        "line": line,
+                        "symbol": _nearest_symbol(conteudo, m.start()),
+                        "status": num,
+                        "confidence": 0.85,
+                        "origin": "observed",
+                    }
+                )
+        for regex in STATUS_NUM_HEURISTIC_RES:
+            for m in regex.finditer(conteudo):
+                line = _line_of(conteudo, m.start())
+                if line in observed_status_lines:
+                    continue
+                num = int(m.group(1))
+                status[str(num)] += 1
+                evidencias.append(
+                    {
+                        "kind": "status",
+                        "file": rel,
+                        "line": line,
+                        "symbol": _nearest_symbol(conteudo, m.start()),
+                        "status": num,
+                        "confidence": 0.55,
+                        "origin": "heuristic",
+                    }
+                )
 
         for regex in CLASS_RES:
             for m in regex.finditer(conteudo):
                 nome = m.group(1)
                 classes[nome] += 1
+                evidencias.append(
+                    {
+                        "kind": "symbol",
+                        "file": rel,
+                        "line": _line_of(conteudo, m.start()),
+                        "symbol": nome,
+                        "confidence": 0.8,
+                        "origin": "observed",
+                    }
+                )
                 for tok in _split_camel(_strip_suffix(nome)):
                     termos[tok] += 1
         for regex in TABLE_RES:
@@ -284,6 +410,9 @@ def index_repo(repo: Path) -> dict[str, Any]:
     limpos = {
         t: n for t, n in termos.items() if len(t) >= 4 and t not in STOP_TERMS and not t.isdigit()
     }
+    evidencias.sort(
+        key=lambda e: (e.get("file") or "", e.get("line") or 0, e.get("kind") or "")
+    )
     return {
         "arquivos_lidos": arquivos,
         "stack": _detect_stack(repo),
@@ -293,6 +422,7 @@ def index_repo(repo: Path) -> dict[str, Any]:
         "tabelas": sorted(tabelas),
         "campos": [c for c, _ in campos.most_common(40)],
         "termos": dict(sorted(limpos.items(), key=lambda kv: -kv[1])[:150]),
+        "evidencias": evidencias[:400],
     }
 
 
@@ -315,6 +445,7 @@ def index_workspace(workspace: Path, mapa: dict[str, Any]) -> dict[str, Any]:
         campos: list[str] = []
         tabelas: list[str] = []
         stack: list[str] = []
+        evidencias: list[dict[str, Any]] = []
         for nome, idx in repos_idx.items():
             agregado_termos.update(idx["termos"])
             rotas.extend(f"{nome}: {r}" for r in idx["rotas"])
@@ -323,6 +454,14 @@ def index_workspace(workspace: Path, mapa: dict[str, Any]) -> dict[str, Any]:
             campos.extend(idx["campos"])
             tabelas.extend(idx["tabelas"])
             stack.extend(idx["stack"])
+            for hit in idx.get("evidencias") or []:
+                evidencias.append(
+                    {
+                        **hit,
+                        "repo": nome,
+                        "file": f"{nome}/{hit['file']}" if hit.get("file") else None,
+                    }
+                )
         servicos[sid] = {
             "repos": repos_idx,
             "termos": dict(agregado_termos.most_common(200)),
@@ -332,6 +471,7 @@ def index_workspace(workspace: Path, mapa: dict[str, Any]) -> dict[str, Any]:
             "campos": sorted(set(campos))[:60],
             "tabelas": sorted(set(tabelas))[:40],
             "stack": sorted(set(stack)),
+            "evidencias": evidencias[:400],
         }
     return {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),

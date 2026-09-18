@@ -32,6 +32,13 @@ from src.context_builder import build_context  # noqa: E402
 from src.ingest import ARTIFACT_TEMPLATES, load_inputs  # noqa: E402
 from src.preprocess import preprocess  # noqa: E402
 from src.rag_compress import compress_rag  # noqa: E402
+from src.tokenizer import (  # noqa: E402
+    chars_for_token_budget,
+    configure,
+    estimate,
+    heuristic_count,
+    provider_for_model,
+)
 
 
 def _state_sem_gravar(data: dict[str, Any]) -> dict[str, Any]:
@@ -123,8 +130,8 @@ PROMPTLESS_OVERHEAD = PROMPTLESS_SYSTEM + PROMPTLESS_TOOLS
 DEFAULT_OUTPUT_TOKENS = 1200  # artefato gerado (historia/PRD/openapi)
 
 
-def est_tokens(text: str) -> int:
-    return max(0, len(text) // 4) if text else 0
+def est_tokens(text: str, *, model: str | None = None) -> int:
+    return estimate(text, model=model).tokens
 
 
 def load_cfg() -> dict:
@@ -135,7 +142,7 @@ def measure_inputs(tipo: str = "historia") -> dict[str, Any]:
     """Mede o cenário real a partir de inputs/."""
     cfg = load_cfg()
     budget = cfg.get("budget") or {}
-    consolidated_chars = int(budget.get("consolidated_summary_max_tokens", 200)) * 4
+    consolidated_chars = chars_for_token_budget(int(budget.get("consolidated_summary_max_tokens", 200)))
     lines_per_chunk = int(budget.get("doc_lines_per_chunk", 40))
     chunk_summary_chars = int(budget.get("rag_chunk_max_tokens", 120)) * 2
     max_ctx = int(budget.get("max_context_tokens", 2000))
@@ -206,12 +213,16 @@ def measure_inputs(tipo: str = "historia") -> dict[str, Any]:
         "naive_input_tokens": naive_input,
         "promptless_input_tokens": promptless_input,
         "package_est_tokens": ctx["est_tokens"],
+        "est_tokens_method": ctx.get("est_tokens_method"),
+        "token_usage": ctx.get("token_usage"),
     }
 
 
 def measure_what_if(*, linhas: int, chars_por_linha: int = 80) -> dict[str, Any]:
     """Cenário hipotético: N linhas de doc + overheads típicos."""
-    docs_raw = max(1, (linhas * chars_por_linha) // 4)
+    docs_raw = heuristic_count("x" * (linhas * chars_por_linha)) or max(
+        1, (linhas * chars_por_linha) // 4
+    )
     # insumos estruturados típicos (figma+regras+eng+template)
     estruturados = 800
     naive_input = docs_raw + estruturados + NAIVE_OVERHEAD
@@ -241,6 +252,15 @@ def measure_what_if(*, linhas: int, chars_por_linha: int = 80) -> dict[str, Any]
         "naive_input_tokens": naive_input,
         "promptless_input_tokens": promptless_input,
         "package_est_tokens": promptless_input - PROMPTLESS_TOOLS,
+        "est_tokens_method": "heuristic",
+        "token_usage": {
+            "tokens": promptless_input - PROMPTLESS_TOOLS,
+            "method": "heuristic",
+            "label": "heurística chars÷4 (fallback; não é contagem exata)",
+            "estimated": promptless_input - PROMPTLESS_TOOLS,
+            "billable": None,
+            "delta": None,
+        },
     }
 
 
@@ -281,6 +301,8 @@ def calcular(
     if modelo not in MODELOS:
         raise SystemExit(f"modelo desconhecido: {modelo}. Opções: {', '.join(MODELOS)}")
 
+    configure(provider=provider_for_model(modelo), model=modelo)
+
     preco = MODELOS[modelo]
     naive_tok = int(medicao["naive_input_tokens"])
     pl_tok = int(medicao["promptless_input_tokens"])
@@ -311,6 +333,14 @@ def calcular(
     usd_economia_mes = usd_naive_mes - usd_pl_mes
     usd_economia_ano = usd_economia_mes * 12
 
+    usage = medicao.get("token_usage") or {}
+    method = usage.get("method") or medicao.get("est_tokens_method") or "heuristic"
+    estimativa_label = usage.get("label") or (
+        "heurística chars÷4 (fallback; não é contagem exata)"
+        if method != "official"
+        else "tokenizer oficial — pré-chamada; billable do vendor pode divergir"
+    )
+
     return {
         "modelo": modelo,
         "modelo_label": preco["label"],
@@ -326,7 +356,9 @@ def calcular(
             "output_tokens_por_chamada": output_tokens,
             "cache_hit_promptless": cache_hit,
             "cache_hit_naive": min(0.15, cache_hit),
-            "estimativa": "chars/4 (heurística; não é tokenizer oficial)",
+            "estimativa": estimativa_label,
+            "estimativa_method": method,
+            "token_usage": usage or None,
         },
         "por_chamada": {
             "naive_input_tokens": naive_tok,
@@ -430,7 +462,7 @@ def render_texto(rel: dict[str, Any]) -> str:
 
     linhas += [
         "",
-        "Notas: preços de referência (USD/1M tokens); estimativa chars÷4;",
+        f"Notas: preços de referência (USD/1M tokens); {h['estimativa']};",
         "naive = baseline sem Prompt-less (docs brutos + system/tools longos + histórico).",
         "Ajuste com --modelo, --runs-mes, --cache-hit, --output-tokens.",
     ]
@@ -489,6 +521,7 @@ def main() -> None:
     if args.what_if:
         medicao = measure_what_if(linhas=args.linhas)
     else:
+        configure(provider=provider_for_model(args.modelo), model=args.modelo)
         medicao = measure_inputs(args.tipo)
 
     kwargs = dict(

@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from src.tokenizer import est_raw
+
 ROOT = Path(__file__).resolve().parents[1]
 INPUTS = ROOT / "inputs"
 
@@ -48,6 +50,7 @@ def _read_doc_legacy(path: Path) -> str:
             capture_output=True,
             text=True,
             timeout=60,
+            shell=False,
         )
         if r.stdout.strip():
             return r.stdout
@@ -61,6 +64,7 @@ def _read_doc_legacy(path: Path) -> str:
             capture_output=True,
             text=True,
             timeout=60,
+            shell=False,
         )
         return r.stdout
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
@@ -101,7 +105,7 @@ def load_documents(directory: Path = INPUTS) -> list[dict[str, Any]]:
                 "ext": path.suffix.lower(),
                 "lines": text.count("\n") + (1 if text else 0),
                 "chars": len(text),
-                "est_tokens_raw": max(1, len(text) // 4) if text else 0,
+                "est_tokens_raw": est_raw(text),
                 "text": text,
             }
         )

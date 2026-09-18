@@ -5,8 +5,11 @@ from typing import Any
 
 from src.doc_compress import compress_documents
 from src.domain.claim import Claim, ClaimOrigin
+from src.domain.chunk import content_hash
+from src.domain.provenance import make_claim_id
 from src.domain.source_ref import SourceRef
 from src.engenharia import rag_snippet
+from src.tokenizer import count_tokens
 
 
 def _clip(text: str, max_chars: int) -> str:
@@ -67,6 +70,7 @@ def compress_rag(
     consolidated_chars: int = 800,
     lines_per_chunk: int = 40,
     chunk_summary_chars: int = 220,
+    service_id: str | None = None,
 ) -> dict[str, Any]:
     struct_chunks = retrieve_chunks(ctx)
     struct_summaries = summarize_chunks(struct_chunks)
@@ -79,6 +83,7 @@ def compress_rag(
         lines_per_chunk=lines_per_chunk,
         chunk_summary_chars=chunk_summary_chars,
         consolidated_chars=doc_budget,
+        service_id=service_id,
     )
 
     parts = [p for p in (struct_part, docs_part.get("consolidated") or "") if p]
@@ -91,18 +96,27 @@ def compress_rag(
         text = f"block status={b.get('status')} trigger={b.get('trigger')}"
         struct_claims.append(
             Claim(
-                id=f"CLM-R{n:03d}",
+                id=make_claim_id(n, kind="R"),
                 text=text,
                 origin=ClaimOrigin.DECLARED,
                 confidence=1.0,
-                sources=[SourceRef(document="regras.yaml", section=f"bloqueios[{i}]")],
+                service_id=service_id,
+                sources=[
+                    SourceRef(
+                        document="regras.yaml",
+                        section=f"bloqueios[{i}]",
+                        content_hash=content_hash(text),
+                        locator=f"$.bloqueios[{i}]",
+                    )
+                ],
             ).to_dict()
         )
         n += 1
 
-    raw_tokens = (sum(len(c["text"]) for c in struct_chunks) // 4) + int(
+    raw_tokens = sum(count_tokens(c["text"]) for c in struct_chunks) + int(
         docs_part.get("est_tokens_raw") or 0
     )
+    compressed = count_tokens(consolidated) if consolidated else 0
     return {
         "chunk_count": len(struct_chunks) + sum(d.get("chunks", 0) for d in docs_part.get("docs") or []),
         "summaries": struct_summaries + (docs_part.get("chunk_summaries") or []),
@@ -111,5 +125,5 @@ def compress_rag(
         "claims": struct_claims + list(docs_part.get("claims") or []),
         "discarded": list(docs_part.get("discarded") or []),
         "est_tokens_raw": raw_tokens,
-        "est_tokens_compressed": max(1, len(consolidated) // 4) if consolidated else 0,
+        "est_tokens_compressed": max(1, compressed) if consolidated else 0,
     }

@@ -1,0 +1,1 @@
+credencial de exemplo AKIAIOSFODNN7EXAMPLE e chave aws_secret_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY

@@ -2,14 +2,28 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
+import pytest
+
 from src.close_loop import close_loop
-from src.domain.spec import AcceptanceCriterion, CanonicalSpec, Requirement
+from src.domain.spec import CanonicalSpec
 from src.executors import DevinAdapter, build_repair_request, verify_execution
 from src.executors.base import ExecutionResult
 from src.executors.policy import check_command_allowed, check_write_allowed, load_profiles
 from src.spec.builder import build_canonical_spec
+
+from tests.integration.evidence_support import (
+    DEFAULT_BASE,
+    DEFAULT_RESULT,
+    MVNW_TEST,
+    TEST_TS,
+    evidenced_test,
+    make_git_repo,
+    mvnw_log_record,
+    write_adapter_log,
+)
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 EXEC = FIXTURES / "executor"
@@ -30,6 +44,38 @@ def _mini_spec() -> CanonicalSpec:
         ],
         servico={"id": "ms-cliente", "nome": "Cliente", "repos": ["bff-cliente"]},
     )
+
+
+def _passing_bundle(tmp_path: Path, spec: CanonicalSpec) -> tuple[ExecutionResult, Path, Path]:
+    repo, base, result = make_git_repo(
+        tmp_path, base_files=DEFAULT_BASE, extra_result=DEFAULT_RESULT
+    )
+    runner = tmp_path / "runner"
+    log_file = runner / "mvnw-test.txt"
+    adapter_log = write_adapter_log(runner / "adapter-log.jsonl", [mvnw_log_record()])
+    rf = spec.requirements[0].id
+    ac = spec.acceptance_criteria[0].id
+    execution = ExecutionResult(
+        run_id="run-ok-001",
+        agent="devin",
+        repository="bff-cliente",
+        layer="bff",
+        base_commit=base,
+        result_commit=result,
+        changed_files=[
+            "src/main/java/ClienteService.java",
+            "tests/ClienteServiceTest.java",
+        ],
+        commands_executed=[MVNW_TEST],
+        tests=[evidenced_test(name="ClienteServiceTest", log_file=log_file)],
+        requirement_traceability={
+            rf: ["src/main/java/ClienteService.java"],
+            ac: ["tests/ClienteServiceTest.java"],
+        },
+        approved=True,
+        adapter_log=str(adapter_log),
+    )
+    return execution, repo, adapter_log
 
 
 def test_policy_denies_secret_and_prod():
@@ -79,28 +125,70 @@ def test_verify_fail_closed_unknown_layer():
     assert any(i.code == "UNKNOWN_EXECUTION_LAYER" for i in verify.issues)
 
 
-def test_verify_passes_good_execution():
+def test_verify_passes_good_execution(tmp_path: Path):
     spec = _mini_spec()
-    data = json.loads((EXEC / "execution_ok.json").read_text(encoding="utf-8"))
-    # alinhar IDs do fixture aos do spec
-    rf = spec.requirements[0].id
-    ac = spec.acceptance_criteria[0].id
-    data["requirement_traceability"] = {
-        rf: ["src/main/java/ClienteService.java"],
-        ac: ["tests/ClienteServiceTest.java"],
-    }
-    result = ExecutionResult.from_dict(data)
-    verify = verify_execution(result, spec, layer="bff")
-    assert verify.status == "passed"
-    assert not verify.has_errors
-
-
-def test_verify_fails_out_of_scope_and_unmapped():
-    spec = _mini_spec()
-    result = ExecutionResult.from_dict(
-        json.loads((EXEC / "execution_bad.json").read_text(encoding="utf-8"))
+    result, repo, adapter_log = _passing_bundle(tmp_path, spec)
+    verify = verify_execution(
+        result, spec, layer="bff", repo_path=repo, adapter_log=adapter_log
     )
-    verify = verify_execution(result, spec, layer="bff")
+    assert verify.status == "passed", [i.to_dict() for i in verify.issues]
+    assert not verify.has_errors
+    assert verify.evidence_hashes.get("diff_sha256")
+    assert verify.evidence_hashes.get("adapter_log_sha256")
+    assert verify.evidence_hashes.get("hmac")
+
+
+def test_verify_fails_out_of_scope_and_unmapped(tmp_path: Path):
+    spec = _mini_spec()
+    repo, base, result_sha = make_git_repo(
+        tmp_path,
+        base_files={"README.md": "# x\n"},
+        extra_result={
+            "src/main/java/ClienteService.java": "class ClienteService {}\n",
+            "infra/prod/deploy.yaml": "deploy: prod\n",
+            ".github/workflows/deploy.yml": "name: deploy\n",
+        },
+    )
+    runner = tmp_path / "runner"
+    log_file = runner / "mvnw-test.txt"
+    adapter_log = write_adapter_log(
+        runner / "adapter-log.jsonl",
+        [
+            {
+                "timestamp": TEST_TS,
+                "command": "terraform apply",
+                "exit_code": 1,
+            }
+        ],
+    )
+    result = ExecutionResult(
+        run_id="run-bad-001",
+        agent="devin",
+        repository="bff-cliente",
+        layer="bff",
+        base_commit=base,
+        result_commit=result_sha,
+        changed_files=[
+            "src/main/java/ClienteService.java",
+            "infra/prod/deploy.yaml",
+            ".github/workflows/deploy.yml",
+        ],
+        commands_executed=["terraform apply"],
+        tests=[
+            evidenced_test(
+                name="ClienteServiceTest",
+                log_file=log_file,
+                command="terraform apply",
+                exit_code=1,
+            )
+        ],
+        unresolved_items=["auth edge case"],
+        requirement_traceability={},
+        approved=True,
+    )
+    verify = verify_execution(
+        result, spec, layer="bff", repo_path=repo, adapter_log=adapter_log
+    )
     assert verify.status == "failed"
     codes = {i.code for i in verify.issues}
     assert "FILE_OUT_OF_SCOPE" in codes
@@ -109,15 +197,25 @@ def test_verify_fails_out_of_scope_and_unmapped():
     assert "RF_NOT_MAPPED" in codes
 
 
-def test_verify_no_tests_is_error_for_code_change():
+def test_verify_no_tests_is_error_for_code_change(tmp_path: Path):
     spec = _mini_spec()
+    repo, base, result_sha = make_git_repo(
+        tmp_path,
+        base_files={"README.md": "# x\n"},
+        extra_result={"src/main/java/Foo.java": "class Foo {}\n"},
+    )
+    adapter_log = write_adapter_log(
+        tmp_path / "runner" / "adapter-log.jsonl", [mvnw_log_record()]
+    )
     result = ExecutionResult(
         run_id="r",
         agent="devin",
         repository="bff-cliente",
         layer="bff",
+        base_commit=base,
+        result_commit=result_sha,
         changed_files=["src/main/java/Foo.java"],
-        commands_executed=["./mvnw test"],
+        commands_executed=[MVNW_TEST],
         tests=[],
         requirement_traceability={
             spec.requirements[0].id: ["src/main/java/Foo.java"],
@@ -125,31 +223,68 @@ def test_verify_no_tests_is_error_for_code_change():
         },
         approved=True,
     )
-    verify = verify_execution(result, spec, layer="bff")
+    verify = verify_execution(
+        result, spec, layer="bff", repo_path=repo, adapter_log=adapter_log
+    )
     assert verify.status == "failed"
     assert any(i.code == "NO_TESTS_REPORTED" and i.severity == "error" for i in verify.issues)
 
 
-def test_needs_approval_gate():
+def test_needs_approval_gate(tmp_path: Path):
     spec = _mini_spec()
-    data = json.loads((EXEC / "execution_needs_approval.json").read_text(encoding="utf-8"))
-    rf = spec.requirements[0].id
-    ac = spec.acceptance_criteria[0].id
-    data["requirement_traceability"] = {
-        rf: data["changed_files"][:1],
-        ac: data["changed_files"][1:],
-    }
-    result = ExecutionResult.from_dict(data)
-    verify = verify_execution(result, spec, layer="bff")
+    result, repo, adapter_log = _passing_bundle(tmp_path, spec)
+    result.approved = False
+    result.run_id = "run-pending-001"
+    verify = verify_execution(
+        result, spec, layer="bff", repo_path=repo, adapter_log=adapter_log
+    )
     assert verify.status == "needs_approval"
 
 
-def test_repair_request_requires_approval():
+def test_repair_request_requires_approval(tmp_path: Path):
     spec = _mini_spec()
-    result = ExecutionResult.from_dict(
-        json.loads((EXEC / "execution_bad.json").read_text(encoding="utf-8"))
+    repo, base, result_sha = make_git_repo(
+        tmp_path,
+        base_files={"README.md": "# x\n"},
+        extra_result={
+            "src/main/java/ClienteService.java": "class ClienteService {}\n",
+            "infra/prod/deploy.yaml": "deploy: prod\n",
+            ".github/workflows/deploy.yml": "name: deploy\n",
+        },
     )
-    verify = verify_execution(result, spec, layer="bff")
+    runner = tmp_path / "runner"
+    adapter_log = write_adapter_log(
+        runner / "adapter-log.jsonl",
+        [{"timestamp": TEST_TS, "command": "terraform apply", "exit_code": 1}],
+    )
+    result = ExecutionResult(
+        run_id="run-bad-001",
+        agent="devin",
+        repository="bff-cliente",
+        layer="bff",
+        base_commit=base,
+        result_commit=result_sha,
+        changed_files=[
+            "src/main/java/ClienteService.java",
+            "infra/prod/deploy.yaml",
+            ".github/workflows/deploy.yml",
+        ],
+        commands_executed=["terraform apply"],
+        tests=[
+            evidenced_test(
+                name="ClienteServiceTest",
+                log_file=runner / "t.txt",
+                command="terraform apply",
+                exit_code=1,
+            )
+        ],
+        unresolved_items=["auth edge case"],
+        requirement_traceability={},
+        approved=True,
+    )
+    verify = verify_execution(
+        result, spec, layer="bff", repo_path=repo, adapter_log=adapter_log
+    )
     repair = build_repair_request(verify, result, attempt=1)
     assert repair is not None
     assert repair["status"] == "repair_requested"
@@ -174,7 +309,7 @@ def test_devin_adapter_prepare_and_collect(tmp_path: Path):
     assert collected.run_id == "run-ok-001"
 
 
-def test_close_loop_approve_passes(tmp_path: Path):
+def test_close_loop_passes_without_legacy_approve_flag(tmp_path: Path):
     spec = _mini_spec()
     spec_path = tmp_path / "canonical-spec.yaml"
     import yaml
@@ -183,19 +318,53 @@ def test_close_loop_approve_passes(tmp_path: Path):
         yaml.safe_dump(spec.to_dict(), allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
-    # result with matching IDs
-    data = json.loads((EXEC / "execution_needs_approval.json").read_text(encoding="utf-8"))
-    rf = spec.requirements[0].id
-    ac = spec.acceptance_criteria[0].id
-    data["requirement_traceability"] = {
-        rf: ["src/main/java/ClienteService.java"],
-        ac: ["tests/T.java"],
-    }
+    execution, repo, adapter_log = _passing_bundle(tmp_path, spec)
     result_path = tmp_path / "execution.json"
-    result_path.write_text(json.dumps(data), encoding="utf-8")
+    result_path.write_text(json.dumps(execution.to_dict()), encoding="utf-8")
 
-    blocked = close_loop(spec_path=spec_path, result_path=result_path, approve=False)
-    assert blocked["verify"]["status"] == "needs_approval"
+    ok = close_loop(
+        spec_path=spec_path,
+        result_path=result_path,
+        repo_path=repo,
+        adapter_log=adapter_log,
+        out_dir=tmp_path / "verify",
+    )
+    assert ok["verify"]["status"] == "passed", ok["verify"]["issues"]
 
-    ok = close_loop(spec_path=spec_path, result_path=result_path, approve=True)
-    assert ok["verify"]["status"] == "passed"
+
+def test_close_loop_cli_rejects_legacy_approve(tmp_path: Path, monkeypatch, capsys):
+    spec = _mini_spec()
+    spec_path = tmp_path / "canonical-spec.yaml"
+    import yaml
+
+    from src.close_loop import main as close_loop_main
+
+    spec_path.write_text(
+        yaml.safe_dump(spec.to_dict(), allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    execution, repo, adapter_log = _passing_bundle(tmp_path, spec)
+    result_path = tmp_path / "execution.json"
+    result_path.write_text(json.dumps(execution.to_dict()), encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "close_loop",
+            "--spec",
+            str(spec_path),
+            "--result",
+            str(result_path),
+            "--repo",
+            str(repo),
+            "--adapter-log",
+            str(adapter_log),
+            "--approve",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        close_loop_main()
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "src.approval" in err
+    assert "approved=True" in err

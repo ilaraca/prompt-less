@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from src.tokenizer import est_raw
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MAPA = ROOT / "inputs" / "mapa-servicos.yaml"
 
@@ -184,7 +186,7 @@ def partition_documents(
                 combined.setdefault(kid, []).append(kbody)
                 sources.setdefault(kid, []).append(name)
 
-        # doc inteiro sem nenhum marcador: marked só tinha '' 
+        # doc inteiro sem nenhum marcador: marked só tinha ''
         if not marked and not preamble:
             for kid, kbody in assign_unmarked_text(
                 text, mapa, lines_per_chunk=lines_per_chunk
@@ -213,7 +215,7 @@ def partition_documents(
             "text": text,
             "meta": meta,
             "sources": sorted(set(sources.get(sid) or [])),
-            "est_tokens_raw": max(1, len(text) // 4),
+            "est_tokens_raw": est_raw(text),
             "lines": text.count("\n") + 1,
         }
     return result

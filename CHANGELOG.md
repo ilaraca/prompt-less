@@ -7,11 +7,86 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `pip-audit --strict` na matriz 3.10–3.13 deixava de passar: o lock compilado
+  em 3.9 pinava `pip` 26.0.1 e `setuptools` 82.0.1, cujos fixes exigem
+  Python ≥3.10. A matriz larga o 3.9, o lock recompila no 3.10 (`pip` 26.2.1,
+  `setuptools` 84) e o workflow não usa mais `--ignore-vuln`
+- `pip install --require-hashes` no 3.10 falhava porque o pytest 9 puxa
+  `exceptiongroup` só abaixo do 3.11; o lock compilado em 3.12 não pinava
+  o backport. O lock passa a incluir `exceptiongroup==1.3.1`
+
 ### Added
 
+- **Tokenizer oficial pluggable** (`src/tokenizer.py`): budget e telemetria usam a
+  estratégia do `models.provider` / `models.name`; OpenAI via `tiktoken`
+  (`method=official`); demais providers ou lib ausente falham aberto para
+  `chars÷4` com `method=heuristic` — o fallback nunca é tratado como exato
+- `token_usage` no resultado da run e no `llm_package.meta`, com hook
+  `observe_billable` para o live (09) persistir estimado vs tokens cobrados
+- Testes de budget no limite (`== teto` cabe; `teto+1` corta template)
+- **Aprovação auditável** (`21-auditable-approval`): CLI
+  `python -m src.approval` com `request-approval`, `approve` e `promote`
+  separados. O registro em `runs/<id>/validations/approval.json` guarda
+  ator, timestamp, justificativa, origem e hashes de Canonical Spec,
+  verify-report e `result_commit`, selados com `seal_hmac` (trilha HMAC
+  do 19). Rejeição é persistida; promoção sem aprovação válida e
+  vinculada falha fechado; mudar spec, diff ou commit expira a decisão;
+  copiar o registro para outra run é recusado
+- Testes (`tests/integration/test_auditable_approval.py`): promoção sem
+  aprovação falha; alterar spec/diff/commit invalida; rejeição persiste;
+  reuse cross-run recusado; HMAC adulterado é detectado
+- **Gates de produção** (`25-production-quality-gates`): lock hashed
+  (`requirements.lock` / `requirements-dev.lock` via pip-tools), CI com
+  compile + ruff + mypy + coverage mínima **70%** (relatório por módulo),
+  `pip-audit`, detect-secrets, YAML (`yaml.safe_load` + yamllint), Actions
+  pinadas por SHA e `permissions: contents: read`, matriz Python **3.10–3.13**,
+  artifacts eval/coverage/verify (placeholder de verify quando a run não
+  executa `close_loop`). Job agregador `CI` required-ready para branch
+  protection; a regra no GitHub **ainda não está ativa**
+- **Verificação por evidência** (`20-evidence-backed-verification`): o
+  `close_loop` deixa de confiar em `changed_files` / comandos / testes
+  declarados no payload. `base_commit` e `result_commit` são obrigatórios;
+  o verify confirma ancestralidade no mesmo repositório e calcula o diff
+  com Git
+- Policy avalia o diff real e o realpath (symlink em `src/` apontando para
+  `infra/prod` é `FILE_OUT_OF_SCOPE` / `PATH_ESCAPES_REPO`)
+- Comandos vêm do JSONL estruturado do adapter (`--adapter-log`); testes
+  exigem comando, `exit_code`, timestamp ISO-8601 e artefato/log existente
+- Rastreio RF/AC precisa existir no `result_commit` (arquivo e linha);
+  divergência relato × evidência é `EVIDENCE_DIVERGENCE`
+- `verify-report.json` inclui `evidence_hashes` (SHA-256 do diff, do log e
+  dos artefatos; HMAC reusa `PROMPTLESS_INTEGRITY_KEY` / `seal_hmac` do 19)
+- Testes (`tests/integration/test_evidence_verify.py`): payload forjado não
+  esconde arquivo fora de escopo; teste só declarado é recusado; hashes
+  reproduzíveis a partir do repo e dos logs
+- **Evidência de código no Canonical Spec** (`22-code-evidence-spec`): o IR
+  passa a modelar `current_state`, `gaps` e `code_evidence`; o `repo_index`
+  aponta arquivo, símbolo, linha, rota e confiança, com origem `observed` ou
+  `heuristic` explícita
+- Método/path/status encontrados no código podem resolver campos do IR com
+  `origin: observed`; conflito entre regra declarada e código observado abre
+  pergunta (`open_questions`) em vez de silenciar a divergência
+- História e PRD renderizam estado atual e gaps **a partir do IR**; ausência
+  de índice declara *índice não aplicado* e nunca vira “sem gaps”
+- Testes (`tests/integration/test_code_evidence_spec.py`): ponteiros do índice,
+  resolução `observed`, conflito regra × código, render e regressão sem índice
 - **Storage seguro da run** (`18-safe-run-storage`): `src/runtime/atomic_io.py`
   com write-temp + `os.replace`, cópia atômica e contenção de caminho
   (`resolve_within`)
+- **Orquestração via `pipeline.yaml`** (`11-stages-yaml`): `stages` vira DAG
+  executável (`handler`, `depends_on`, `gates`, `foreach: context`);
+  `src/run.py` deixa de hardcodar ingest → preprocess → reason → emit
+- Protocolo `Stage` + registry de handlers, checkpoints com `schema_version`,
+  retry/timeout por estágio, retomada `--resume --run-id` (valida hashes das
+  entradas) e cancelamento com `manifest.status: cancelled`
+- Gate YAML `validation.has_errors → blocked`; handlers recusam escrita fora
+  de `runs/<id>/`; runs antigas sem `checkpoints/` migram a partir de
+  `events.jsonl`
+- Testes em `tests/integration/test_stages_yaml.py`: estágio isolado, falha
+  intermediária preserva `run_id`, resume, hash mismatch, timeout, retry,
+  sandbox e migração
 - `run_id` e id de serviço com formato canônico validado
   (`InvalidRunId` / `InvalidContextId`); `run_dir.resolve()` obrigado a ficar
   sob `<root>/runs` (`UnsafeRunPath`)
@@ -26,6 +101,23 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Testes adversariais (`tests/integration/test_safe_run_storage.py`): traversal,
   symlink, colisão de id, interrupção no commit da escrita e duas runs
   concorrentes
+- **Proveniência contextual** (`19-contextual-provenance`): um identificador
+  público `id` (`CLM-0001` / `CLM-R001` / `CLM-SYN-001`); chave multi-contexto
+  `(context, id)`; `resolve_claim` fail-closed se o id for ambíguo
+- Deduplicação de claims por identidade completa (`context`, texto, origin,
+  `service_id`, `chunk_id`, sources); `id` público não é renomeado quando dois
+  contextos repetem `CLM-0001`
+- `ClaimLink` (método lexical + score) em RF/AC/erro; score < 0.6 marca
+  `requires_review` e emite warning `LOW_CONFIDENCE_CLAIM_MATCH` sem mudar
+  `status`
+- `SourceRef.selected_lines` e `locator` (`$.bloqueios[0]`) para o trecho
+  realmente usado; claims sintéticos ganham `content_hash` + seção
+- Cadeia HMAC-SHA256 em `events.jsonl` com `kid` (`PROMPTLESS_INTEGRITY_KID`,
+  anel `PROMPTLESS_INTEGRITY_KEYS` para rotação); selo depois de `finish`,
+  `events_tip` = HMAC de `run_finished`
+- Testes (`tests/integration/test_contextual_provenance.py`): multi-contexto
+  sem perda, dedup por identidade, adulteração de evento/artefato e match
+  de baixa confiança
 - **OpenAPI e Mermaid derivados do IR** (`src/renderers/openapi.py`,
   `src/renderers/mermaid.py`): `run openapi|mermaid` passa a renderizar a partir
   do Canonical Spec — paths, métodos, schemas e status saem de
@@ -41,9 +133,37 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - **Golden tests** (`tests/integration/test_derived_artifacts.py`,
   `tests/fixtures/golden/`): falham se IR, história, PRD, OpenAPI e Mermaid
   divergirem, e se um status/campo/path inventado escapar
+- **Hardening profundo** (`15-hardening-deep`): Agent Debugger persistido na run
+  (`validations/debugger.json` com `failure` / `agent_behavior` /
+  `harness_component` / `root_cause`)
+- Scan de inputs (secrets, PII heurística, instruções suspeitas) **antes** de
+  montar o pacote LLM; achado `error` bloqueia (`reason: input_scan_failed`) e
+  grava `validations/input-scan.json`
+- Tools de recovery `search_claims` e `get_claim` no `llm_package` (OpenAI/Claude
+  + contrato neutro), consultando claims da run
+- Golden recall (`tests/fixtures/golden/expected_claims.yaml`): o teste falha se
+  o recall dos claims anotados cair
+- Profiles explícitos `gtw` / `worker` / `batch` + fallback fail-closed;
+  `realpath`/symlink na policy; allowlist semântica de argv; `run_argv` sempre
+  com `shell=False`
 
 ### Changed
 
+- Budget (`context_build`) e telemetria (`est_tokens`, calculadora) passam a
+  contar com o tokenizer ativo em vez de `len/4` fixo; recorte de consolidado
+  ainda usa tokens×4 só como clip em caracteres
+- `close_loop --approve` deixa de marcar `execution.approved = True`.
+  O atalho foi removido: use `python -m src.approval`. `approved=False`
+  no payload ainda gera `needs_approval` no verify; promoção exige o
+  registro auditável
+- Python suportado declarado como **3.10–3.13** (a matriz do CI cobre esse
+  intervalo; 3.9 saiu porque os fixes de CVE do lock largaram essa versão)
+- `config/tools.compact.yaml` passa a ser YAML válido (assinaturas entre aspas)
+- `close_loop` / `verify_execution` exigem checkout Git (`--repo`) e log
+  estruturado do adapter; `changed_files` e `commands_executed` do payload
+  só servem para detectar divergência, não como evidência
+- História e PRD passam a preencher estado atual e gaps a partir do Canonical
+  Spec; o placeholder “sem gaps” some quando o índice não foi aplicado
 - `manifest.json`, `state.json`, `provenance.json`, `latest.json`,
   `canonical-spec.yaml`, `spec-validation.json` e `llm_package_*.json` passam a
   ser gravados atomicamente
@@ -51,23 +171,44 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   run (`artifacts/`, `validations/`) e no espelho; o diretório morto
   `runs/<id>/contexts/` deixa de ser criado
 - `EventStore` não cria mais o arquivo no construtor (o diretório da run só
-  nasce no `bootstrap`)
+  nasce no `bootstrap`); cada evento carrega `prev_hash`/`hash`
+- `emit` grava artefatos com write-temp + `os.replace` (digest precisa do
+  arquivo já commitado)
+- História/PRD passam a listar os claims utilizados na seção Proveniência
+- `provenance.json` agrega `spec.claims` (inclui sintéticos `CLM-*-SYN-*`)
 - `Operation` do IR ganha `request_schema`, `response_schema` e `unresolved`;
   `success_status` só é resolvido com evidência (um único 2xx declarado nas
   decisões e uma única operação) e agora carrega `source_claims`
 - Método/path ausentes na UI ficam `unresolved`, viram pergunta aberta não
   bloqueante e aparecem como `x-unresolved-operations` no OpenAPI
 - PRD lista ações com o status de sucesso do IR ou `unresolved` explícito
+- `--run-id` e `--resume` na CLI de `src.run`; `cancelled` entra na máquina de
+  status (`failed`/`cancelled` podem voltar a `running` na retomada;
+  `completed`/`blocked` continuam finais)
+
+### Fixed
+
+- **Operações por contexto no IR** (`29-operations-por-contexto`): o Canonical
+  Spec deixa de copiar o conjunto inteiro de actions da UI para cada serviço.
+  `Operation.owner` é resolvido por evidência (campo explícito na UI ou
+  keywords/path do mapa); `--context` / `--all-contexts` só emitem as ops do
+  serviço; `ERR-*` acompanha a operação dona e erro órfão fica `unresolved`
+  (não é copiado). OpenAPI, Mermaid e futuros consumidores leem o mesmo
+  `spec.operations` — o recorte não vive em cada renderer
+
+### Riscos aceitos (`20-evidence-backed-verification`, 2026-09-18)
+
+- Adapter Devin continua stub; o runner real grava o JSONL no `10-devin-e2e`
+- Worktree sujo vs `result_commit` não é checado (verify lê o commit); débito do `10`
+- Sem `PROMPTLESS_INTEGRITY_KEY`, `evidence_hashes.hmac` fica nulo (SHA-256 permanece); selo da aprovação é o `21`
 
 ### Planejado (série 2)
 
 - Modo `--live` (OpenAI / Claude)
 - Devin CLI real no `close_loop`
-- Orquestração declarativa via `pipeline.yaml` (stages)
-- Tokenizer oficial + Redis opcional
+- Redis opcional (state backend)
 - Execução concorrente por ondas
 - Apply de propostas + rollback
-- Hardening profundo (debugger, injection, recovery, golden recall)
 
 ## [0.2.0] - 2026-09-12
 

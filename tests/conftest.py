@@ -10,6 +10,14 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CASES = ("happy_path", "access_denied", "ambiguous_status", "two_services")
 
 
+@pytest.fixture(autouse=True)
+def _integrity_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Toda a suíte assina a trilha; a chave de teste nunca vai para produção."""
+    monkeypatch.setenv(
+        "PROMPTLESS_INTEGRITY_KEY", "test-integrity-key-not-for-prod"
+    )
+
+
 @pytest.fixture
 def fixture_root() -> Path:
     return FIXTURES

@@ -1,0 +1,53 @@
+[tool.promptless]
+# Versões que o README declara e que a matriz do CI deve cobrir.
+python_versions = ["3.10", "3.11", "3.12", "3.13"]
+coverage_fail_under = 70
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src"]
+ignore_missing_imports = true
+pretty = true
+show_error_codes = true
+warn_unused_configs = true
+
+# Superfície legado (YAML/dicts frouxos). O gate ainda type-checka o resto de src/.
+[[tool.mypy.overrides]]
+module = [
+    "src.economia",
+    "src.engenharia",
+    "src.executors.evidence",
+    "src.marcar",
+    "src.preprocess",
+    "src.run",
+    "src.spec.builder",
+]
+disable_error_code = ["union-attr", "dict-item", "arg-type", "assignment", "index"]
+
+[tool.coverage.run]
+source = ["src"]
+branch = false
+omit = ["src/__init__.py"]
+
+[tool.coverage.report]
+fail_under = 70
+show_missing = true
+skip_empty = true
+precision = 0
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+[tool.coverage.json]
+pretty_print = true

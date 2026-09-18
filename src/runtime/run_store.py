@@ -16,16 +16,20 @@ from src.runtime.atomic_io import (
     sha256_of,
 )
 from src.runtime.event_store import EventStore
+from src.runtime.integrity import collect_sealed_files, current_kid, seal_hmac
 from src.runtime.run_context import RunContext
 
 # manifesto do espelho: ponto de commit da publicação em outputs/
 MIRROR_MANIFEST_NAME = ".mirror-manifest.json"
 
-TERMINAL_STATUSES = frozenset({"completed", "blocked", "failed"})
+TERMINAL_STATUSES = frozenset({"completed", "blocked", "failed", "cancelled"})
 # "" = manifest ainda não existe
 _ALLOWED_TRANSITIONS: dict[str, frozenset] = {
     "": frozenset({"running"}),
-    "running": frozenset({"running", "completed", "blocked", "failed"}),
+    "running": frozenset({"running", "completed", "blocked", "failed", "cancelled"}),
+    # retomada de run interrompida ou falha — completed/blocked continuam finais
+    "failed": frozenset({"running"}),
+    "cancelled": frozenset({"running"}),
 }
 
 
@@ -66,7 +70,11 @@ class RunStore:
                     f"run_id '{self.ctx.run_id}' já existe em {run_dir}; "
                     "gere um id novo ou use bootstrap(resume=True)"
                 ) from None
-        for d in (self.ctx.artifacts_dir, self.ctx.validations_dir):
+        for d in (
+            self.ctx.artifacts_dir,
+            self.ctx.validations_dir,
+            self.ctx.checkpoints_dir,
+        ):
             d.mkdir(parents=True, exist_ok=True)
 
         existing = self.read_manifest()
@@ -202,6 +210,39 @@ class RunStore:
             "provenance_recorded",
             claims=len(claims),
             discarded=len(discarded),
+        )
+        return path
+
+    def seal_artifacts(self) -> dict[str, Any]:
+        """
+        Ancora sha256 dos artefatos no manifest com HMAC da ponta da cadeia.
+
+        Não emite evento depois do selo: `events_tip` é o HMAC do último
+        evento já gravado (`run_finished` se chamado após `finish`).
+        """
+        files = collect_sealed_files(
+            self.ctx.run_dir, self.ctx.artifacts_dir, self.ctx.validations_dir
+        )
+        kid = current_kid()
+        integrity = {
+            "algo": "hmac-sha256",
+            "kid": kid,
+            "events_tip": self.events.tip,
+            "files": files,
+            "sealed_at": _now(),
+        }
+        integrity["hmac"] = seal_hmac(integrity)
+        self.write_manifest({"integrity": integrity})
+        return integrity
+
+    def write_debugger(self, report: dict[str, Any]) -> Path:
+        """Persiste o Agent Debugger em validations/debugger.json."""
+        path = self.ctx.validations_dir / "debugger.json"
+        atomic_write_json(path, report)
+        self.events.emit(
+            "debugger_recorded",
+            terminal_cause=(report.get("failure") or {}).get("terminal_cause"),
+            owner=(report.get("harness_component") or {}).get("probable_owner"),
         )
         return path
 

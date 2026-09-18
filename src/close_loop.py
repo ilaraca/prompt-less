@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-Fecha o ciclo: carrega ExecutionResult + Canonical Spec → verify → repair opcional.
+Fecha o ciclo: carrega ExecutionResult + Canonical Spec → verify (Git + logs) → repair.
 
 Uso:
-  python -m src.close_loop --spec path/canonical-spec.yaml --result path/execution.json
-  python -m src.close_loop --spec ... --result ... --approve
-  python -m src.close_loop --spec ... --result ... --attempt 1
+  python -m src.close_loop --spec path/canonical-spec.yaml --result path/execution.json --repo path/checkout
+  python -m src.close_loop --spec ... --result ... --repo ... --adapter-log path/adapter-log.jsonl
+  python -m src.close_loop --spec ... --result ... --repo ... --attempt 1
+
+Aprovação humana: python -m src.approval request-approval|approve|promote
+(--approve neste comando foi removido; não marca approved=True).
 """
 from __future__ import annotations
 
@@ -29,8 +32,10 @@ from src.domain.spec import (  # noqa: E402
     Requirement,
     SpecError,
 )
+from src.hardening.debugger import build_debugger_report  # noqa: E402
 from src.executors import DevinAdapter, build_repair_request, verify_execution  # noqa: E402
 from src.executors.base import ExecutionResult  # noqa: E402
+from src.runtime.atomic_io import atomic_write_json  # noqa: E402
 
 
 def _parse_confidence(raw, *, default: float = 1.0) -> float:
@@ -77,31 +82,48 @@ def _load_spec(path: Path) -> CanonicalSpec:
     )
 
 
+def _default_adapter_log(result_path: Path, execution: ExecutionResult) -> Path | None:
+    if execution.adapter_log:
+        declared = Path(execution.adapter_log)
+        if not declared.is_absolute():
+            declared = result_path.parent / declared
+        return declared
+    sibling = result_path.parent / "adapter-log.jsonl"
+    return sibling if sibling.is_file() else None
+
+
 def close_loop(
     *,
     spec_path: Path,
     result_path: Path,
-    approve: bool = False,
     attempt: int = 1,
     layer: str | None = None,
     out_dir: Path | None = None,
+    repo_path: Path | None = None,
+    adapter_log: Path | None = None,
 ) -> dict:
     spec = _load_spec(spec_path)
     adapter = DevinAdapter(result_path=result_path)
     execution = adapter.collect_result()
-    if approve:
-        execution.approved = True
-    elif execution.approved is None:
-        execution.approved = False
 
-    verify = verify_execution(execution, spec, layer=layer)
+    log_path = adapter_log or _default_adapter_log(result_path, execution)
+    verify = verify_execution(
+        execution,
+        spec,
+        layer=layer,
+        repo_path=repo_path,
+        adapter_log=log_path,
+    )
     repair = None
     if verify.has_errors and verify.status != "needs_approval":
         repair = build_repair_request(verify, execution, attempt=attempt)
     elif verify.status == "needs_approval":
         repair = {
             "status": "awaiting_approval",
-            "message": "Use --approve após revisão humana",
+            "message": (
+                "Use python -m src.approval request-approval / approve "
+                "após revisão humana"
+            ),
             "issues": [i.to_dict() for i in verify.issues],
         }
 
@@ -111,11 +133,18 @@ def close_loop(
         "repair": repair,
         "execution": execution.to_dict(),
     }
+    debugger = build_debugger_report(
+        verify=verify,
+        execution=execution,
+        repair=repair,
+        stage="close_loop",
+        run_status=verify.status,
+    )
+    report["debugger"] = debugger
     if out_dir:
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "verify-report.json").write_text(
-            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        atomic_write_json(out_dir / "verify-report.json", report)
+        atomic_write_json(out_dir / "debugger.json", debugger)
     return report
 
 
@@ -123,18 +152,42 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Prompt-less — close executor loop")
     p.add_argument("--spec", required=True, type=Path, help="canonical-spec.yaml")
     p.add_argument("--result", required=True, type=Path, help="execution result JSON")
-    p.add_argument("--approve", action="store_true", help="marca execução como aprovada")
+    p.add_argument(
+        "--approve",
+        action="store_true",
+        help="removido: use python -m src.approval (não marca approved=True)",
+    )
     p.add_argument("--attempt", type=int, default=1)
     p.add_argument("--layer", default=None)
+    p.add_argument(
+        "--repo",
+        type=Path,
+        default=None,
+        help="checkout Git da execução (diff real; obrigatório)",
+    )
+    p.add_argument(
+        "--adapter-log",
+        type=Path,
+        default=None,
+        help="JSONL estruturado do adapter (default: <result>/adapter-log.jsonl)",
+    )
     p.add_argument("--out", type=Path, default=None, help="diretório para verify-report.json")
     args = p.parse_args()
+    if args.approve:
+        print(
+            "close_loop --approve foi removido: não é atalho para approved=True. "
+            "Use python -m src.approval request-approval / approve / promote.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     report = close_loop(
         spec_path=args.spec,
         result_path=args.result,
-        approve=args.approve,
         attempt=args.attempt,
         layer=args.layer,
         out_dir=args.out,
+        repo_path=args.repo,
+        adapter_log=args.adapter_log,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if report["verify"]["status"] != "passed":

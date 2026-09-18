@@ -29,6 +29,24 @@ patterns:
     recommended_action: request_repair
     playbook: fix_failing_tests
 
+  - id: FP-EVIDENCE
+    codes:
+      - MISSING_BASE_COMMIT
+      - MISSING_RESULT_COMMIT
+      - MISSING_REPO_EVIDENCE
+      - COMMIT_NOT_IN_REPO
+      - COMMIT_NOT_ANCESTOR
+      - EVIDENCE_DIVERGENCE
+      - MISSING_ADAPTER_LOG
+      - INVALID_ADAPTER_LOG
+      - TEST_NOT_EVIDENCED
+      - TRACE_NOT_IN_RESULT_COMMIT
+      - PATH_ESCAPES_REPO
+    terminal_cause: unverifiable_execution
+    probable_owner: executor
+    recommended_action: collect_real_evidence
+    playbook: capture_more_evidence
+
   - id: FP-APPROVAL
     codes: [HUMAN_APPROVAL_REQUIRED]
     terminal_cause: awaiting_human

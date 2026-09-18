@@ -6,7 +6,6 @@ from src.planning.layers import infer_layer, sort_repos_by_layer
 from src.planning.plan import (
     build_implementation_plan,
     build_plans_from_mapa,
-    integrate_report,
 )
 
 FIXTURES_MAPA = {
@@ -53,7 +52,6 @@ def test_plan_dependencies_and_contracts():
         ],
         contract_version="v2",
     )
-    by_id = {t["id"]: t for t in plan["tasks"]}
     api = next(t for t in plan["tasks"] if t["layer"] == "api")
     bff = next(t for t in plan["tasks"] if t["layer"] == "bff")
     mfe = next(t for t in plan["tasks"] if t["layer"] == "mfe")
