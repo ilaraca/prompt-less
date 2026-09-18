@@ -1,0 +1,20 @@
+```mermaid
+sequenceDiagram
+    actor FE as Frontend (Tela)
+    participant BFF as BFF
+    participant API as API de Domínio
+
+    %% OP-001 salvar
+    FE->>BFF: POST /clientes
+    BFF->>API: POST /clientes
+    API-->>BFF: 201
+    BFF-->>FE: 201 SalvarResponse
+    alt OP-001 CPF inválido (ERR-001)
+        API-->>BFF: 400 CPF_INVALIDO
+        BFF-->>FE: 400 CPF_INVALIDO
+    end
+    alt OP-001 sem permissão admin (ERR-002)
+        API-->>BFF: 403
+        BFF-->>FE: 403
+    end
+```

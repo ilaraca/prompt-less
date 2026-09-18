@@ -10,12 +10,47 @@ from src.domain.source_ref import SourceRef
 from src.domain.spec import (
     AcceptanceCriterion,
     CanonicalSpec,
+    DataSchema,
     OpenQuestion,
     Operation,
     Requirement,
     ResolvedInt,
+    SchemaField,
     SpecError,
 )
+
+_SUCCESS_STATUS_RE = re.compile(r"\b(2\d{2})\b")
+
+
+def _schema_id(name: str, suffix: str) -> str:
+    """ID PascalCase determinístico a partir do nome da ação do IR."""
+    parts = [p for p in re.split(r"[^0-9A-Za-z]+", str(name or "")) if p]
+    base = "".join(p[:1].upper() + p[1:] for p in parts) or "Operacao"
+    return f"{base}{suffix}"
+
+
+def _schema_from_ui(
+    op_name: str, items: list[dict[str, Any]], suffix: str
+) -> DataSchema | None:
+    """Campos da UI desidratada → schema do IR (tipo inferido exige revisão)."""
+    fields: list[SchemaField] = []
+    for item in items or []:
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        origin = str(item.get("type_origin") or "inferred")
+        fields.append(
+            SchemaField(
+                name=str(item["name"]),
+                type=item.get("type"),
+                required=bool(item.get("required")),
+                origin=origin,
+                requires_review=origin != "declared",
+            )
+        )
+    if not fields:
+        return None
+    origin = "declared" if all(f.origin == "declared" for f in fields) else "inferred"
+    return DataSchema(id=_schema_id(op_name, suffix), fields=fields, origin=origin)
 
 
 def _parse_confidence(raw: Any, *, default: float) -> float:
@@ -187,6 +222,7 @@ def build_canonical_spec(
             )
 
     # happy path / decisões → RF extras
+    success_evidence: dict[int, list[str]] = {}
     base = len(requirements)
     for j, d in enumerate(regras.get("decisoes") or [], start=1):
         i = base + j
@@ -221,6 +257,8 @@ def build_canonical_spec(
                 source_claims=src,
             )
         )
+        for match in _SUCCESS_STATUS_RE.finditer(then):
+            success_evidence.setdefault(int(match.group(1)), []).extend(src)
 
     if not requirements:
         requirements.append(
@@ -241,23 +279,73 @@ def build_canonical_spec(
             )
         )
 
+    actions = [a for a in (ui.get("actions") or []) if isinstance(a, dict)]
+    # Sucesso só é resolvido quando a atribuição é inequívoca: uma operação e um
+    # único 2xx declarado nas decisões. Fora disso permanece `unresolved`.
+    unique_success = (
+        next(iter(success_evidence.items()))
+        if len(actions) == 1 and len(success_evidence) == 1
+        else None
+    )
+
     operations: list[Operation] = []
-    for i, a in enumerate(ui.get("actions") or [], start=1):
-        # Não inferir 200/201 sem evidência — default explícito exige review
+    for i, a in enumerate(actions, start=1):
+        op_id = f"OP-{i:03d}"
+        op_name = str(a.get("id") or f"action-{i}")
+        method = a.get("method")
+        path = a.get("path")
+        if unique_success is not None:
+            status_value, status_claims = unique_success
+            success = ResolvedInt(
+                value=status_value,
+                origin="declared",
+                confidence=1.0,
+                requires_review=False,
+                source_claims=sorted(set(status_claims)),
+            )
+        else:
+            # Não inferir 200/201 sem evidência — default explícito exige review
+            success = ResolvedInt(
+                value=None, origin="default", confidence=0.4, requires_review=True
+            )
+
+        unresolved: list[str] = []
+        if not method:
+            unresolved.append("method")
+        if not path:
+            unresolved.append("path")
+        if not success.resolved:
+            unresolved.append("success_status")
+
+        for missing in ("method", "path"):
+            if missing in unresolved:
+                open_questions.append(
+                    OpenQuestion(
+                        id=f"Q-{qn:03d}",
+                        text=(
+                            f"Operação {op_id} ({op_name}) sem {missing} declarado "
+                            f"na UI — definir antes de gerar contrato"
+                        ),
+                        blocking=False,
+                        source_claims=[],
+                    )
+                )
+                qn += 1
+
         operations.append(
             Operation(
-                id=f"OP-{i:03d}",
-                name=str(a.get("id") or f"action-{i}"),
+                id=op_id,
+                name=op_name,
                 owner=service_id,
-                method=a.get("method"),
-                path=a.get("path"),
-                success_status=ResolvedInt(
-                    value=None,
-                    origin="default",
-                    confidence=0.4,
-                    requires_review=True,
-                ),
+                method=method,
+                path=path,
+                success_status=success,
                 error_ids=[e.id for e in errors],
+                request_schema=_schema_from_ui(op_name, ui.get("inputs") or [], "Request"),
+                response_schema=_schema_from_ui(
+                    op_name, ui.get("columns") or [], "Response"
+                ),
+                unresolved=unresolved,
             )
         )
 
