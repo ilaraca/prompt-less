@@ -9,6 +9,17 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Aprovação auditável** (`21-auditable-approval`): CLI
+  `python -m src.approval` com `request-approval`, `approve` e `promote`
+  separados. O registro em `runs/<id>/validations/approval.json` guarda
+  ator, timestamp, justificativa, origem e hashes de Canonical Spec,
+  verify-report e `result_commit`, selados com `seal_hmac` (trilha HMAC
+  do 19). Rejeição é persistida; promoção sem aprovação válida e
+  vinculada falha fechado; mudar spec, diff ou commit expira a decisão;
+  copiar o registro para outra run é recusado
+- Testes (`tests/integration/test_auditable_approval.py`): promoção sem
+  aprovação falha; alterar spec/diff/commit invalida; rejeição persiste;
+  reuse cross-run recusado; HMAC adulterado é detectado
 - **Verificação por evidência** (`20-evidence-backed-verification`): o
   `close_loop` deixa de confiar em `changed_files` / comandos / testes
   declarados no payload. `base_commit` e `result_commit` são obrigatórios;
@@ -77,6 +88,10 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- `close_loop --approve` deixa de marcar `execution.approved = True`.
+  O atalho foi removido: use `python -m src.approval`. `approved=False`
+  no payload ainda gera `needs_approval` no verify; promoção exige o
+  registro auditável
 - `close_loop` / `verify_execution` exigem checkout Git (`--repo`) e log
   estruturado do adapter; `changed_files` e `commands_executed` do payload
   só servem para detectar divergência, não como evidência
