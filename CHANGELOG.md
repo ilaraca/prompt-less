@@ -9,6 +9,38 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Modo `--live`** (`09-live-llm`): `src/reason.py` chama OpenAI Responses
+  (`OPENAI_API_KEY`) ou Claude Messages (`ANTHROPIC_API_KEY`) com o
+  `llm_package_*.json`; dry-run permanece o default
+- Telemetria real em `token_usage` / `meta.live`: tokens billable, `delta` vs
+  estimado, `cache_hit`/`cache_read_tokens` quando o vendor reporta, e
+  `cost_usd` (tabela `economia.MODELOS`); falha de API não grava pacote/artefato
+  live e deixa `runs/<id>/` íntegro
+- Testes com transporte HTTP mock (`tests/integration/test_live_llm.py`)
+- **Apply + rollback em config** (`14-apply-rollback`): `python -m src.apply`
+  aplica `change.key/value` em arquivos versionados sob `config/`, grava
+  snapshot de bytes em `state/knowledge/snapshots/`, re-roda a eval suite e
+  restaura o snapshot se houver regressão (`rejected`)
+- Risco `medium+` exige `assert_promotable` via `src.approval` (não
+  `close_loop --approve`); `run` / evals mesclam `proposal-overlay.yaml` para
+  baseline e candidate executarem sobre configs distintas
+- Testes: aceite persiste a mudança; regressão reverte bytes; medium sem
+  aprovação falha fechado
+- **Recuperação híbrida de documentos** (`26-hybrid-document-retrieval`): roteador
+  `structured` | `flat` em `src/hybrid_retrieval.py` — documento com títulos usa
+  âncoras de seção (`doc_preface.parse_sections` + TF-IDF); documento plano mantém
+  `doc_compress` (chunk + `SIGNAL_RE`) sem regressão
+- Segunda camada semântica **opcional**, limitada por budget, com fallback local
+  (sinônimos + cosseno TF) — funciona sem provider externo; secrets/PII são
+  removidos antes dessa camada
+- Cada trecho recuperado carrega `SourceRef`, `score` e `retrieval_strategy`;
+  dedupe preserva diversidade de fontes; índice invertido por seção em
+  `state/doc_section_index.json` (nunca no prompt)
+- Telemetria de custo semântico (`est_tokens_semantic`, `hybrid` em rag_stats);
+  CLI `python -m src.hybrid_retrieval FILE [--query] [--detect-only]`
+- Golden fixtures `hybrid_structured` / `hybrid_synonym` / `hybrid_narrative` +
+  testes em `tests/integration/test_hybrid_retrieval.py`
+
 - **Baseline de engenharia v2** (`28-engineering-baseline-v2`): `engenharia.yaml`
   versionado (`config/engenharia.schema.yaml`); catálogo com circuit breaker,
   metrics, tracing, idempotência e segurança; NFRs selecionados por camada +
@@ -18,23 +50,6 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   mesmos IDs `NFR-*`
 - Testes (`tests/integration/test_engineering_baseline_v2.py`): migração v1→v2,
   seleção por camada/criticidade, IDs alinhados e gaps NFR×código
-
-### Fixed
-
-- Quality-gates deixam de divergir entre a máquina e o GitHub: o workflow chama
-  `python scripts/quality_gates.py` (compile, ruff, mypy, YAML, secrets, audit,
-  pytest+coverage). Cada onda que só rodava pytest quebrava no mypy depois do
-  push (`33d1726`, `279267f`, e de novo 24/27). Tipos dos slices 24/27
-  passam no mypy; collect não falha quando o typecheck pula os testes
-- `pip-audit --strict` na matriz 3.10–3.13 deixava de passar: o lock compilado
-  em 3.9 pinava `pip` 26.0.1 e `setuptools` 82.0.1, cujos fixes exigem
-  Python ≥3.10. A matriz larga o 3.9, o lock recompila no 3.10 (`pip` 26.2.1,
-  `setuptools` 84) e o workflow não usa mais `--ignore-vuln`
-- `pip install --require-hashes` no 3.10 falhava porque o pytest 9 puxa
-  `exceptiongroup` só abaixo do 3.11; o lock compilado em 3.12 não pinava
-  o backport. O lock passa a incluir `exceptiongroup==1.3.1`
-
-### Added
 
 - **Consumidor SDD** (`27-sdd-consumer`): `run sdd` (e `also_emit` de história/PRD)
   gera `sdd-package.yaml` a partir do Canonical Spec — arquitetura, API decisions
@@ -201,6 +216,11 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- README: limitações da Onda C (`09`/`14`/`26`/`28`) documentam riscos residuais
+  aceitos (Gemini ausente, overlay sem consumidor de negócio no IR, retrieval
+  sem embeddings, sinais NFR por substring, etc.) e removem próximos passos já
+  entregues (`--live`, apply+rollback, baseline v2, hybrid retrieval)
+
 - `ready_for_parallel_execution` no relatório do plano exige plano revisado e
   ausência de conflito (ciclo, contrato ausente, repo compartilhado sem
   `coordenacao`); topologia por camada deixa de ser autoridade
@@ -249,6 +269,19 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- Quality-gates deixam de divergir entre a máquina e o GitHub: o workflow chama
+  `python scripts/quality_gates.py` (compile, ruff, mypy, YAML, secrets, audit,
+  pytest+coverage). Cada onda que só rodava pytest quebrava no mypy depois do
+  push (`33d1726`, `279267f`, e de novo 24/27). Tipos dos slices 24/27
+  passam no mypy; collect não falha quando o typecheck pula os testes
+- `pip-audit --strict` na matriz 3.10–3.13 deixava de passar: o lock compilado
+  em 3.9 pinava `pip` 26.0.1 e `setuptools` 82.0.1, cujos fixes exigem
+  Python ≥3.10. A matriz larga o 3.9, o lock recompila no 3.10 (`pip` 26.2.1,
+  `setuptools` 84) e o workflow não usa mais `--ignore-vuln`
+- `pip install --require-hashes` no 3.10 falhava porque o pytest 9 puxa
+  `exceptiongroup` só abaixo do 3.11; o lock compilado em 3.12 não pinava
+  o backport. O lock passa a incluir `exceptiongroup==1.3.1`
+
 - **Operações por contexto no IR** (`29-operations-por-contexto`): o Canonical
   Spec deixa de copiar o conjunto inteiro de actions da UI para cada serviço.
   `Operation.owner` é resolvido por evidência (campo explícito na UI ou
@@ -265,12 +298,10 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Planejado (série 2)
 
-- Modo `--live` (OpenAI / Claude)
 - Devin CLI real no `close_loop`
 - Redis opcional (state backend)
 - Execução concorrente por ondas
 - Apply de propostas + rollback em produção (`14`; candidato já é o ticket 23)
-
 
 ## [0.2.0] - 2026-09-12
 
