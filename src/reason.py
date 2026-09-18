@@ -227,7 +227,7 @@ def _scaffold_mermaid(ui: dict, regras: dict, template: str) -> str:
         lines += [
             f"    alt {b.get('trigger')}",
             f"        API-->>BFF: {b.get('status')}",
-            f"        BFF-->>FE: Error",
+            "        BFF-->>FE: Error",
             "    end",
         ]
     body = "\n".join(lines)

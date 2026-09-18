@@ -184,7 +184,7 @@ def partition_documents(
                 combined.setdefault(kid, []).append(kbody)
                 sources.setdefault(kid, []).append(name)
 
-        # doc inteiro sem nenhum marcador: marked só tinha '' 
+        # doc inteiro sem nenhum marcador: marked só tinha ''
         if not marked and not preamble:
             for kid, kbody in assign_unmarked_text(
                 text, mapa, lines_per_chunk=lines_per_chunk
