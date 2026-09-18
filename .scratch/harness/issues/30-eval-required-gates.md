@@ -1,8 +1,8 @@
 # 30-eval-required-gates
 
-**Kanban:** Done  
+**Kanban:** Feedback  
 
-> Aprovado por humano em 2026-09-18 (`pode seguir`). Não reabre worktree filha.
+> Ajuste pós-reabertura (2026-09-18). Aguardando review humana → Done.
 **Blocked by:** —  
 **Prioridade:** P0.1
 
@@ -13,7 +13,8 @@
 ## Comportamento
 
 Separar diagnóstico de aprovação em `score_case()`: dimensões obrigatórias
-(spec, artefatos, rastreabilidade, pendências) não se compensam.
+(spec, artefatos, rastreabilidade, pendências) não se compensam. Gate
+`traceable` exige SourceRef válido; ID do claim sozinho não aprova.
 
 ## Aceite
 
@@ -28,18 +29,16 @@ Separar diagnóstico de aprovação em `score_case()`: dimensões obrigatórias
 
 ## Implementation note
 
-**HEAD:** `5ee18c366c3235a1c403e9afacc15ead4b0f1385` · `feature/eval-required-gates`
-(worktree `.worktrees/30-eval-required-gates`). Sem push / sem PR da filha.
+**HEAD:** `3cf8149` · `feature/eval-required-gates`
+(worktree `.worktrees/30-eval-required-gates`, rebaseada em `origin/main`
+`221e032`). Sem push / sem PR da filha.
 
-**O que shipou**
-- `score_case()` agora expõe `required_gates` (AND) e `fail_reasons`;
-  `layer_scores` permanece diagnóstico.
-- Spec OK **não** compensa artefato ausente nem sinais faltando em
-  história/PRD; rastreabilidade e pendências `blocking` entram no gate
-  (não só em `critical`).
-- Bloqueio esperado valida `expected_reason` /
-  `expected_block_codes` (`ambiguous_status` atualizado).
-- README + CHANGELOG `[Unreleased]` atualizados na worktree.
+**O que shipou (ajuste)**
+- Gate `traceable`: `_source_ref_valid` / `_claim_has_valid_sources` —
+  `document` não vazio e `start_line` ≤ `end_line`.
+- Regressões: claim sem fonte e fonte inválida com manifesto íntegro →
+  `passed=False`, `fail_reasons` inclui `traceable`.
+- README + CHANGELOG `[Unreleased]` atualizados.
 
 **Como verificar**
 
@@ -47,9 +46,12 @@ Separar diagnóstico de aprovação em `score_case()`: dimensões obrigatórias
 cd .worktrees/30-eval-required-gates
 PYTHONPATH=. ../../pipeline/.venv/bin/python -m pytest \
   tests/integration/test_eval_required_gates.py \
+  tests/integration/test_eval_run_selection.py \
   tests/integration/test_candidate_evals.py \
   tests/integration/test_learning.py -q
+# → 52 passed (focado required_gates: 11 passed)
 ```
 
-**Residual:** `scripts/quality_gates.py` — `audit` falhou neste ambiente
-(Python 3.9 vs `build==1.6.1` no lock); compile/lint/types/yaml OK.
+**Residual:** `pip_audit` neste ambiente (Python 3.9 vs `build==1.6.1`).
+
+**Pare.** Aguardando review humana → Done. Depois: merge no pai; liberar 35/37/39.
