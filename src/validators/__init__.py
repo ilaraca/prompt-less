@@ -7,6 +7,10 @@ from typing import Any
 
 import yaml
 
+from src.domain.review import (
+    decision_matches_evidence,
+    find_review_decision,
+)
 from src.domain.spec import CanonicalSpec
 
 #: Métodos válidos num Path Item Object (OpenAPI 3.0).
@@ -85,7 +89,10 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                 )
             )
 
-    def _warn_low_confidence(subject_id: str, links: list[Any]) -> None:
+    claims_by_id = {c.id: c for c in spec.claims}
+
+    def _check_required_review(subject_id: str, links: list[Any]) -> None:
+        """requires_review em ClaimLink bloqueia até decisão humana compatível."""
         for link in links:
             requires = (
                 link.requires_review
@@ -100,18 +107,63 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                 else str((link or {}).get("claim_id") or "")
             )
             score = link.score if hasattr(link, "score") else (link or {}).get("score")
-            issues.append(
-                ValidationIssue(
-                    code="LOW_CONFIDENCE_CLAIM_MATCH",
-                    severity="warning",
-                    message=(
-                        f"{subject_id} match lexical de {claim_id} "
-                        f"com score {score} < 0.6 — exige revisão"
-                    ),
-                    subject_id=subject_id,
-                    source_claims=[claim_id] if claim_id else [],
-                )
+            sources = [claim_id] if claim_id else []
+            decision = find_review_decision(
+                getattr(spec, "review_decisions", None) or [],
+                subject_id=subject_id,
+                claim_id=claim_id,
             )
+            if decision is None:
+                issues.append(
+                    ValidationIssue(
+                        code="REQUIRED_REVIEW_PENDING",
+                        severity="error",
+                        message=(
+                            f"{subject_id} match lexical de {claim_id} "
+                            f"com score {score} < 0.6 — revisão humana "
+                            "obrigatória antes da implementação "
+                            "(confiança numérica não substitui aprovação)"
+                        ),
+                        subject_id=subject_id,
+                        source_claims=sources,
+                    )
+                )
+                continue
+            claim = claims_by_id.get(claim_id)
+            if not decision_matches_evidence(
+                decision,
+                spec_version=spec.version,
+                claim=claim,
+                link=link,
+            ):
+                issues.append(
+                    ValidationIssue(
+                        code="REQUIRED_REVIEW_STALE",
+                        severity="error",
+                        message=(
+                            f"{subject_id}/{claim_id}: decisão de "
+                            f"{decision.actor} inválida — evidência ou "
+                            f"spec mudaram desde a revisão "
+                            f"(spec {decision.reviewed_spec_version!r})"
+                        ),
+                        subject_id=subject_id,
+                        source_claims=sources,
+                    )
+                )
+                continue
+            if decision.decision == "rejected":
+                issues.append(
+                    ValidationIssue(
+                        code="REQUIRED_REVIEW_REJECTED",
+                        severity="error",
+                        message=(
+                            f"{subject_id}/{claim_id}: revisão rejeitada por "
+                            f"{decision.actor} — {decision.justification}"
+                        ),
+                        subject_id=subject_id,
+                        source_claims=sources,
+                    )
+                )
 
     def _check_claim_sources(claim) -> None:
         origin = claim.origin.value if hasattr(claim.origin, "value") else str(claim.origin)
@@ -182,7 +234,7 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                 )
             )
         _check_source_claims(rf.id, list(rf.source_claims))
-        _warn_low_confidence(rf.id, getattr(rf, "claim_links", None) or [])
+        _check_required_review(rf.id, getattr(rf, "claim_links", None) or [])
 
     for ac in spec.acceptance_criteria:
         if ac.requirement_id not in rf_ids:
@@ -195,11 +247,11 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                 )
             )
         _check_source_claims(ac.id, list(ac.source_claims))
-        _warn_low_confidence(ac.id, getattr(ac, "claim_links", None) or [])
+        _check_required_review(ac.id, getattr(ac, "claim_links", None) or [])
 
     for err in spec.errors:
         _check_source_claims(err.id, list(err.source_claims))
-        _warn_low_confidence(err.id, getattr(err, "claim_links", None) or [])
+        _check_required_review(err.id, getattr(err, "claim_links", None) or [])
 
     for q in spec.open_questions:
         _check_source_claims(q.id, list(q.source_claims))

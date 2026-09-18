@@ -1050,7 +1050,17 @@ Na compressão RAG, trechos viram **claims** com `SourceRef` (arquivo, linhas se
 
 Agregação multi-contexto (`--all-contexts`) deduplica por **identidade completa** (`context`, texto, origin, `service_id`, `chunk_id`, sources), não só por `claim.id`. O `provenance.json` inclui `spec.claims` (sintéticos `CLM-SYN-*` inclusive). `claim_links` no spec carrega `context` além de `claim_id`. Campos extras (`hmac`, `kid`, `integrity`) são aditivos. Descarte é reportado no mesmo arquivo. Runs bloqueadas pelo quality gate **preservam** `claims` e `discarded` no payload JSON.
 
-Vínculo claim → RF/AC/erro é um `ClaimLink` (`method`, `score`, `requires_review`). Matching lexical com score < 0.6 emite warning `LOW_CONFIDENCE_CLAIM_MATCH` e marca revisão **sem** mudar o `status` do requisito (`max_unreviewed_inferences` nos evals continua contando só `ResolvedInt`). História e PRD listam os claims utilizados na seção **Proveniência**.
+Vínculo claim → RF/AC/erro é um `ClaimLink` (`method`, `score`, `requires_review`).
+Matching lexical com score < 0.6 marca revisão **obrigatória**: o quality gate
+emite erro `REQUIRED_REVIEW_PENDING` e bloqueia implementação até haver
+`review_decisions` explícita (responsável, justificativa, `reviewed_spec_version`
++ fingerprint do claim). Aprovação libera; rejeição (`REQUIRED_REVIEW_REJECTED`)
+e evidência/spec incompatível (`REQUIRED_REVIEW_STALE`) continuam bloqueando.
+Confiança numérica do match **não** substitui evidência nem aprovação humana.
+O `status` do requisito não muda por causa do score (`max_unreviewed_inferences`
+nos evals continua contando só `ResolvedInt`). Avisos informativos
+(`ORPHAN_CLAIM`, `NFR_FROM_BASELINE`) permanecem não bloqueantes. História e PRD
+listam os claims utilizados na seção **Proveniência**.
 
 ### Canonical Spec + quality gate
 

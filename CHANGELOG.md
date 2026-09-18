@@ -9,6 +9,15 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Revisão obrigatória bloqueante** (`33-required-review-gate`): match lexical
+  com `requires_review=true` deixa de ser só warning — o gate emite
+  `REQUIRED_REVIEW_PENDING` até `review_decisions` registrar ator, justificativa
+  e versão revisada (spec + fingerprint do claim); aprovação compatível libera,
+  rejeição e evidência/spec divergente (`REQUIRED_REVIEW_STALE`) bloqueiam;
+  avisos informativos (`ORPHAN_CLAIM`, `NFR_FROM_BASELINE`) seguem não bloqueantes
+- Modelo `ReviewDecision` em `src/domain/review.py`; testes de approve/reject/
+  stale em `tests/integration/test_contextual_provenance.py`
+
 - **Execução concorrente por ondas** (`13-parallel-exec`): scheduler
   `src/executors/scheduler.py` consome `waves` do `implementation_plan`, limita
   N tasks com semáforo (`--max-concurrency`) e agrega `ExecutionResult` + verify
@@ -239,6 +248,10 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   com `shell=False`
 
 ### Changed
+
+- `LOW_CONFIDENCE_CLAIM_MATCH` (warning) substituído por erros
+  `REQUIRED_REVIEW_PENDING` / `REQUIRED_REVIEW_REJECTED` / `REQUIRED_REVIEW_STALE`
+  no validador de traceability — pendência obrigatória bloqueia implementação
 
 - README: limitações do `13-parallel-exec` documentam riscos residuais aceitos
   (CLI sem Devin-por-task; onda seguinte após falha parcial; Redis/`12b` parqueado)

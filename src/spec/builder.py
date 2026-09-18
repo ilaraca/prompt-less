@@ -291,6 +291,37 @@ def _match_claim_links(
     return matched
 
 
+def _declared_section_link(
+    claims: list[Claim],
+    *,
+    section: str,
+    locator: str,
+    context: str | None = None,
+) -> ClaimLink | None:
+    """Vínculo declarado: claim estruturado da mesma seção de regras.yaml.
+
+    Não exige revisão — a evidência é a própria fonte estruturada, não um
+    match lexical fraco sobre o texto `block status=…`.
+    """
+    for c in claims:
+        for src in c.sources or []:
+            src_section = getattr(src, "section", None) or (
+                src.get("section") if isinstance(src, dict) else None
+            )
+            src_locator = getattr(src, "locator", None) or (
+                src.get("locator") if isinstance(src, dict) else None
+            )
+            if src_section == section or src_locator == locator:
+                return ClaimLink(
+                    claim_id=c.id,
+                    method="declared",
+                    score=1.0,
+                    requires_review=False,
+                    context=context or c.service_id,
+                )
+    return None
+
+
 def _ids_from_links(links: list[ClaimLink]) -> list[str]:
     return [link.claim_id for link in links]
 
@@ -385,9 +416,17 @@ def build_canonical_spec(
         else:
             text = f"Validar: {trigger} → HTTP status a confirmar"
             then = "retornar HTTP status a confirmar"
-        src_links = _match_claim_links(
-            f"{trigger} {status_i}", claim_objs, context=service_id
+        section = f"bloqueios[{i-1}]"
+        locator = f"$.bloqueios[{i-1}]"
+        declared = _declared_section_link(
+            claim_objs, section=section, locator=locator, context=service_id
         )
+        if declared is not None:
+            src_links = [declared]
+        else:
+            src_links = _match_claim_links(
+                f"{trigger} {status_i}", claim_objs, context=service_id
+            )
         if not src_links:
             synth = Claim(
                 id=make_claim_id(i, kind="SYN"),
@@ -396,9 +435,7 @@ def build_canonical_spec(
                 confidence=1.0,
                 service_id=service_id,
                 sources=[
-                    _synthetic_source(
-                        f"bloqueios[{i-1}]", f"$.bloqueios[{i-1}]", text
-                    )
+                    _synthetic_source(section, locator, text)
                 ],
             )
             claim_objs.append(synth)
