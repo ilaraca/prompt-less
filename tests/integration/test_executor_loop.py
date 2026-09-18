@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+import pytest
 
 from src.close_loop import close_loop
 from src.domain.spec import CanonicalSpec
@@ -306,7 +309,7 @@ def test_devin_adapter_prepare_and_collect(tmp_path: Path):
     assert collected.run_id == "run-ok-001"
 
 
-def test_close_loop_approve_passes(tmp_path: Path):
+def test_close_loop_passes_without_legacy_approve_flag(tmp_path: Path):
     spec = _mini_spec()
     spec_path = tmp_path / "canonical-spec.yaml"
     import yaml
@@ -316,24 +319,52 @@ def test_close_loop_approve_passes(tmp_path: Path):
         encoding="utf-8",
     )
     execution, repo, adapter_log = _passing_bundle(tmp_path, spec)
-    execution.approved = False
     result_path = tmp_path / "execution.json"
     result_path.write_text(json.dumps(execution.to_dict()), encoding="utf-8")
-
-    blocked = close_loop(
-        spec_path=spec_path,
-        result_path=result_path,
-        approve=False,
-        repo_path=repo,
-        adapter_log=adapter_log,
-    )
-    assert blocked["verify"]["status"] == "needs_approval"
 
     ok = close_loop(
         spec_path=spec_path,
         result_path=result_path,
-        approve=True,
         repo_path=repo,
         adapter_log=adapter_log,
+        out_dir=tmp_path / "verify",
     )
     assert ok["verify"]["status"] == "passed", ok["verify"]["issues"]
+
+
+def test_close_loop_cli_rejects_legacy_approve(tmp_path: Path, monkeypatch, capsys):
+    spec = _mini_spec()
+    spec_path = tmp_path / "canonical-spec.yaml"
+    import yaml
+
+    from src.close_loop import main as close_loop_main
+
+    spec_path.write_text(
+        yaml.safe_dump(spec.to_dict(), allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    execution, repo, adapter_log = _passing_bundle(tmp_path, spec)
+    result_path = tmp_path / "execution.json"
+    result_path.write_text(json.dumps(execution.to_dict()), encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "close_loop",
+            "--spec",
+            str(spec_path),
+            "--result",
+            str(result_path),
+            "--repo",
+            str(repo),
+            "--adapter-log",
+            str(adapter_log),
+            "--approve",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        close_loop_main()
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "src.approval" in err
+    assert "approved=True" in err
