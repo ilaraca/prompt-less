@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Verifica que o Kanban do workspace aponta para pipeline/ e está
-# alinhado com origin/feature/onda-frontier (ou origin/main, se já merjado).
+# Verifica que o Kanban vive só em pipeline/ e está alinhado com a origin.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -8,15 +7,16 @@ WORKSPACE_ROOT="$(cd "$REPO/.." && pwd)"
 
 die() { echo "check_kanban_sync: $*" >&2; exit 1; }
 
-# 1) Symlink da pasta-mãe → pipeline/.scratch/harness
-link="$WORKSPACE_ROOT/.scratch/harness"
-[[ -L "$link" ]] || die "esperado symlink em $link"
-target="$(readlink "$link")"
-[[ "$target" == "../pipeline/.scratch/harness" || "$target" == "pipeline/.scratch/harness" ]] \
-  || die "symlink deve apontar para ../pipeline/.scratch/harness (agora: $target)"
+# 1) Sem segundo Kanban na raiz do workspace
+if [[ -e "$WORKSPACE_ROOT/.scratch/harness" ]]; then
+  die "remova $WORKSPACE_ROOT/.scratch/harness — use só pipeline/.scratch/harness/"
+fi
+if [[ -e "$WORKSPACE_ROOT/docs/analise-engenheria-harness" || -e "$WORKSPACE_ROOT/docs/correcoes-engenharia-harness" ]]; then
+  die "remova docs/ na raiz do workspace — use só pipeline/docs/"
+fi
 [[ -f "$REPO/.scratch/harness/board.md" ]] || die "faltando $REPO/.scratch/harness/board.md"
 
-# 2) Branch do clone pipeline deve ter o harness (workspace/stable ou main)
+# 2) Branch do clone pipeline deve ter o harness
 cd "$REPO"
 git fetch origin --quiet
 branch="$(git branch --show-current)"
@@ -45,7 +45,7 @@ if [[ "$local_sha" != "$remote_sha" ]] \
   die "pipeline ($branch @$local_sha) divergiu de $remote_ref @$remote_sha"
 fi
 
-# 5) Se o pai existir: mesmo tip e mesmo conteúdo do Kanban (sem edição paralela)
+# 5) Se o pai existir: mesmo tip e mesmo conteúdo do Kanban
 pai="$WORKSPACE_ROOT/.worktrees/onda-merge"
 if [[ -d "$pai" ]]; then
   pai_sha="$(git -C "$pai" rev-parse HEAD 2>/dev/null || true)"
@@ -60,4 +60,4 @@ if [[ -d "$pai" ]]; then
   fi
 fi
 
-echo "check_kanban_sync: OK (pipeline=$branch symlink→pipeline Kanban limpo vs $remote_ref)"
+echo "check_kanban_sync: OK (pipeline=$branch Kanban limpo vs $remote_ref)"

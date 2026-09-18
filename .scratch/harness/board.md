@@ -209,8 +209,9 @@ Um repositório: **`ilaraca/prompt-less`** (`origin`).
 
 - **Código + governança** no mesmo git. Este board, `issues/` e os docs de
   análise/correções estão em `.scratch/harness/` e `docs/`.
-- **Editar Kanban só em** `pipeline/.scratch/harness/` (a raiz do workspace
-  tem symlink para lá). Nunca em `.worktrees/**/.scratch/harness/`.
+- **Editar Kanban só em** `pipeline/.scratch/harness/` (pasta real no
+  clone; sem cópia/symlink na raiz do workspace).
+  Nunca em `.worktrees/**/.scratch/harness/`.
 - Clone canônico do workspace: `pipeline/` na branch `workspace/stable`
   (rastreia `origin/feature/onda-frontier` até a onda mergiar; depois `main`).
 - Checagem: `bash scripts/check_kanban_sync.sh` em `pipeline/`.
