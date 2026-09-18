@@ -623,6 +623,9 @@ def _budget_reports_from_result(result: dict[str, Any]) -> list[dict[str, Any]]:
     return reports
 
 
+_EXPLICIT_BUDGET_STATUSES = frozenset({"blocked", "split_required"})
+
+
 def _critical_context_score(
     result: dict[str, Any], *, critical: bool
 ) -> dict[str, Any]:
@@ -631,6 +634,7 @@ def _critical_context_score(
 
     Sem budget_report (runs antigas) → n/a (não falha o gate).
     """
+    _ = critical  # fixtures critical continuam no conjunto DEFAULT_CASES
     reports = _budget_reports_from_result(result)
     if not reports:
         return {
@@ -638,6 +642,7 @@ def _critical_context_score(
             "complete": True,  # n/a — cobertura crítica permanece via fixtures critical
             "silent_critical_loss": False,
             "statuses": [],
+            "explicit_block_or_split": False,
         }
     statuses = [str(r.get("status") or "") for r in reports]
     silent = False
@@ -648,21 +653,38 @@ def _critical_context_score(
             complete = False
         # omissão crítica sem diagnosis/status de split/block = perda silenciosa
         crit_om = r.get("critical_omissions") or []
-        if crit_om and str(r.get("status") or "") not in {
-            "blocked",
-            "split_required",
-        }:
+        status = str(r.get("status") or "")
+        if crit_om and status not in _EXPLICIT_BUDGET_STATUSES:
             silent = True
             complete = False
-        if str(r.get("status") or "") in {"blocked", "split_required"}:
+        if status in _EXPLICIT_BUDGET_STATUSES:
             # explícito — não é silencioso; complete=False é esperado
             complete = False
+    explicit = bool(statuses) and all(s in _EXPLICIT_BUDGET_STATUSES for s in statuses)
     return {
         "present": True,
         "complete": complete,
         "silent_critical_loss": silent,
         "statuses": statuses,
+        "explicit_block_or_split": explicit,
     }
+
+
+def _critical_coverage_gate(crit: dict[str, Any]) -> bool:
+    """
+    Perda crítica / cobertura incompleta reprova run concluída.
+
+    Bloqueio ou split explícito (`blocked` / `split_required`) permanece permitido.
+    Ausência de budget_report (runs antigas) → n/a (passa).
+    """
+    if not crit.get("present"):
+        return True
+    if crit.get("silent_critical_loss"):
+        return False
+    if crit.get("complete"):
+        return True
+    # incomplete esperado só com tratamento explícito de block/split
+    return bool(crit.get("explicit_block_or_split"))
 
 
 def score_case(
@@ -886,6 +908,8 @@ def score_case(
     gate_spec_present = True if expect_blocked else bool(specs)
     gate_recall = (not critical) or claim_recall >= 1.0
     gate_unexpected_ok = gate_unexpected == 0
+    critical_context = _critical_context_score(result, critical=critical)
+    gate_critical_coverage = _critical_coverage_gate(critical_context)
 
     required_gates: dict[str, bool] = {
         "selection_ok": selection_ok,
@@ -902,6 +926,7 @@ def score_case(
         "no_blocking_pendencies": no_blocking_pendencies,
         "claim_recall_ok": gate_recall,
         "block_cause_ok": block_cause_ok,
+        "critical_coverage_ok": gate_critical_coverage,
     }
 
     fail_reasons = [name for name, ok in required_gates.items() if not ok]
@@ -954,7 +979,7 @@ def score_case(
             "errors": selection_errors,
             "files_used": list(selection.files_used) if selection else [],
         },
-        "critical_context": _critical_context_score(result, critical=critical),
+        "critical_context": critical_context,
     }
 
     return CaseScore(

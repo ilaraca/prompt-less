@@ -7,6 +7,16 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Perda crítica reprova na eval** (`38-critical-context-budget`):
+  `silent_critical_loss` ou `critical_coverage.complete=False` sem
+  `blocked`/`split_required` explícito passa a falhar o gate obrigatório
+  `critical_coverage_ok` (`passed=False` / `fail_reasons`). Diagnóstico em
+  `layer_scores.critical_context` sozinho não aprova mais a run. Block/split
+  explícito permanece permitido. Regressão em
+  `tests/integration/test_critical_context_budget.py`.
+
 ### Added
 
 - **Contexto crítico e custo completo** (`38-critical-context-budget`):
