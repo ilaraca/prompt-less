@@ -43,6 +43,8 @@ def build_llm_package(context: dict[str, Any]) -> dict[str, Any]:
         },
         "meta": {
             "est_tokens": context.get("est_tokens"),
+            "est_tokens_method": context.get("est_tokens_method"),
+            "token_usage": context.get("token_usage"),
             "rag_stats": context.get("rag_stats"),
             "comando": dynamic.get("comando"),
         },

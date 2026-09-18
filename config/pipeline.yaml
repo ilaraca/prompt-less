@@ -15,6 +15,8 @@ budget:
 models:
   preprocess: small   # sumarizar / filtrar / desidratar / docs
   reason: large       # raciocínio final do artefato
+  provider: openai    # openai | anthropic | google — escolhe o tokenizer
+  name: gpt-4o        # modelo do tokenizer oficial (tiktoken); fallback heurístico se ausente
 
 stages:
   - id: repos_scan

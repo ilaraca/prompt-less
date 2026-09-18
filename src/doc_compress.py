@@ -13,6 +13,7 @@ from typing import Any
 from src.domain.claim import Claim, ClaimOrigin
 from src.domain.chunk import ChunkSummary, DocumentChunk, content_hash
 from src.domain.source_ref import SourceRef
+from src.tokenizer import count_tokens, est_raw
 
 SIGNAL_RE = re.compile(
     r"\b(regra|bloqueio|erro|http|endpoint|path|request|response|dado|quando|então|"
@@ -260,7 +261,7 @@ def compress_documents(
 
     for doc in docs:
         text = doc.get("text") or ""
-        raw_tokens += doc.get("est_tokens_raw") or (len(text) // 4)
+        raw_tokens += doc.get("est_tokens_raw") or est_raw(text)
         chunks = build_document_chunks(doc, lines_per_chunk, counter_start=counter)
         counter += len(chunks)
         all_chunk_objs.extend(chunks)
@@ -283,7 +284,7 @@ def compress_documents(
                 "name": doc.get("name"),
                 "lines": doc.get("lines"),
                 "chunks": len(chunks),
-                "est_tokens_raw": doc.get("est_tokens_raw") or (len(text) // 4),
+                "est_tokens_raw": doc.get("est_tokens_raw") or est_raw(text),
                 "chunk_summaries": doc_summaries,
             }
         )
@@ -320,7 +321,7 @@ def compress_documents(
         "discarded": discarded,
         "consolidated": consolidated,
         "est_tokens_raw": raw_tokens,
-        "est_tokens_compressed": max(1, len(consolidated) // 4) if consolidated else 0,
+        "est_tokens_compressed": max(1, count_tokens(consolidated)) if consolidated else 0,
         "reduction_pct": round(
             100
             * (

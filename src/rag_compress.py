@@ -7,6 +7,7 @@ from src.doc_compress import compress_documents
 from src.domain.claim import Claim, ClaimOrigin
 from src.domain.source_ref import SourceRef
 from src.engenharia import rag_snippet
+from src.tokenizer import count_tokens
 
 
 def _clip(text: str, max_chars: int) -> str:
@@ -100,9 +101,10 @@ def compress_rag(
         )
         n += 1
 
-    raw_tokens = (sum(len(c["text"]) for c in struct_chunks) // 4) + int(
+    raw_tokens = sum(count_tokens(c["text"]) for c in struct_chunks) + int(
         docs_part.get("est_tokens_raw") or 0
     )
+    compressed = count_tokens(consolidated) if consolidated else 0
     return {
         "chunk_count": len(struct_chunks) + sum(d.get("chunks", 0) for d in docs_part.get("docs") or []),
         "summaries": struct_summaries + (docs_part.get("chunk_summaries") or []),
@@ -111,5 +113,5 @@ def compress_rag(
         "claims": struct_claims + list(docs_part.get("claims") or []),
         "discarded": list(docs_part.get("discarded") or []),
         "est_tokens_raw": raw_tokens,
-        "est_tokens_compressed": max(1, len(consolidated) // 4) if consolidated else 0,
+        "est_tokens_compressed": max(1, compressed) if consolidated else 0,
     }

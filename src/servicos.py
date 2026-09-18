@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from src.tokenizer import est_raw
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MAPA = ROOT / "inputs" / "mapa-servicos.yaml"
 
@@ -213,7 +215,7 @@ def partition_documents(
             "text": text,
             "meta": meta,
             "sources": sorted(set(sources.get(sid) or [])),
-            "est_tokens_raw": max(1, len(text) // 4),
+            "est_tokens_raw": est_raw(text),
             "lines": text.count("\n") + 1,
         }
     return result

@@ -45,6 +45,7 @@ from src.servicos import (  # noqa: E402
 )
 from src.spec.builder import build_canonical_spec  # noqa: E402
 from src.state_store import write_state  # noqa: E402
+from src.tokenizer import chars_for_token_budget, configure_from_cfg  # noqa: E402
 from src.validators import (  # noqa: E402
     PipelineBlocked,
     validate_derived_artifact,
@@ -327,6 +328,8 @@ def _run_single(
         "outputs": outputs,
         "llm_packages": packages,
         "est_tokens": context_pkg["est_tokens"],
+        "est_tokens_method": context_pkg.get("est_tokens_method"),
+        "token_usage": context_pkg.get("token_usage"),
         "rag": context_pkg["rag_stats"],
         "claims": list(rag.get("claims") or []),
         "discarded": list(rag.get("discarded") or []),
@@ -349,9 +352,10 @@ def run(
     run_id: str | None = None,
 ) -> dict:
     cfg = load_cfg()
+    configure_from_cfg(cfg)
     budget = cfg.get("budget") or {}
     max_ctx = int(budget.get("max_context_tokens", 2000))
-    consolidated_chars = int(budget.get("consolidated_summary_max_tokens", 200)) * 4
+    consolidated_chars = chars_for_token_budget(int(budget.get("consolidated_summary_max_tokens", 200)))
     lines_per_chunk = int(budget.get("doc_lines_per_chunk", 40))
     chunk_summary_chars = int(budget.get("rag_chunk_max_tokens", 120)) * 2
     pipeline_version = str(cfg.get("version") or "1.0")
