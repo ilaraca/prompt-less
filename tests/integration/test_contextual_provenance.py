@@ -45,15 +45,17 @@ def test_multi_contexto_nao_perde_claims(tmp_path: Path):
     assert len(prov["claims"]) > 2, "regressão: dedup por id colidia entre contextos"
 
     ids = [c["id"] for c in prov["claims"]]
-    assert len(ids) == len(set(ids))
-    namespaces = {
-        str(c.get("context") or c.get("service_id") or "") for c in prov["claims"]
-    }
+    keys = {(c["context"], c["id"]) for c in prov["claims"]}
+    assert len(keys) == len(prov["claims"])
+    namespaces = {str(c.get("context") or "") for c in prov["claims"]}
     assert "ms-cliente" in namespaces
     assert "ms-pagamento" in namespaces
     for cid in ids:
         assert cid.startswith("CLM-")
-        assert "ms-cliente" in cid or "ms-pagamento" in cid or "default" in cid
+        assert "ms-cliente" not in cid
+        assert "ms-pagamento" not in cid
+    assert "uid" not in prov["claims"][0]
+    assert "local_id" not in prov["claims"][0]
 
 
 def test_dedup_por_identidade_completa_preserva_colisao_de_id():
@@ -84,14 +86,36 @@ def test_dedup_por_identidade_completa_preserva_colisao_de_id():
     merged = merge_claims([a, b, duplicate])
     assert len(merged) == 2
     ids = [m["id"] for m in merged]
-    assert len(set(ids)) == 2
-    assert "CLM-0001" in ids
-    renamed = next(m for m in merged if m["text"] == "beta")
-    assert renamed["id"] != "CLM-0001"
-    assert renamed["local_id"] == "CLM-0001"
-    assert renamed["context"] == "s2"
-    kept = next(m for m in merged if m["text"] == "alpha")
-    assert kept["id"] == "CLM-0001"
+    assert ids == ["CLM-0001", "CLM-0001"]
+    beta = next(m for m in merged if m["text"] == "beta")
+    alpha = next(m for m in merged if m["text"] == "alpha")
+    assert alpha["context"] == "s1"
+    assert beta["context"] == "s2"
+    assert "uid" not in alpha
+    assert "local_id" not in beta
+
+
+def test_dedup_preserva_mesmo_conteudo_em_contextos_distintos():
+    shared = {
+        "id": "CLM-0001",
+        "text": "alpha",
+        "origin": "declared",
+        "service_id": "shared",
+        "chunk_id": "c1",
+        "sources": [{"document": "a.yaml"}],
+    }
+    merged = merge_claims(
+        [
+            {**shared, "context": "ms-cliente"},
+            {**shared, "context": "ms-pagamento"},
+            {**shared, "id": "CLM-0002", "context": "ms-cliente"},
+        ]
+    )
+    assert len(merged) == 2
+    by_ctx = {m["context"]: m for m in merged}
+    assert set(by_ctx) == {"ms-cliente", "ms-pagamento"}
+    assert by_ctx["ms-cliente"]["id"] == "CLM-0001"
+    assert by_ctx["ms-pagamento"]["id"] == "CLM-0001"
 
 
 def test_adulteracao_de_evento_e_detectada(tmp_path: Path):
@@ -170,8 +194,8 @@ def test_claim_sintetico_ganha_hash_secao_e_locator():
         claims=[],
         servico={"id": "ms-demo"},
     )
-    synth = next(c for c in spec.claims if "-SYN-" in c.id)
-    assert synth.id.startswith("CLM-ms-demo-")
+    synth = next(c for c in spec.claims if c.id.startswith("CLM-SYN-"))
+    assert synth.id == "CLM-SYN-001"
     assert synth.sources
     src = synth.sources[0]
     assert src.content_hash
@@ -195,7 +219,34 @@ def test_artefatos_listam_claims_utilizados(tmp_path: Path):
     for path in (historias[0], prds[0]):
         text = path.read_text(encoding="utf-8")
         assert "## Proveniência" in text or "## 16. Proveniência" in text
-    assert "CLM-" in text
+        assert "CLM-" in text
+
+
+def test_leitura_aceita_id_namespaced_e_devolve_o_publico():
+    from src.domain.provenance import merge_claims, parse_claim_ref
+
+    assert parse_claim_ref("CLM-0001") == ("CLM-0001", None)
+    assert parse_claim_ref("CLM-R001") == ("CLM-R001", None)
+    assert parse_claim_ref("CLM-low-0001") == ("CLM-low-0001", None)
+    assert parse_claim_ref("CLM-Z") == ("CLM-Z", None)
+    assert parse_claim_ref("CLM-ms-cliente-0001") == ("CLM-0001", "ms-cliente")
+    assert parse_claim_ref("CLM-ms-cliente-R001") == ("CLM-R001", "ms-cliente")
+    assert parse_claim_ref("CLM-ms-cliente-SYN-001") == ("CLM-SYN-001", "ms-cliente")
+    assert parse_claim_ref("ms-cliente:CLM-0001") == ("CLM-0001", "ms-cliente")
+    merged = merge_claims(
+        [
+            {
+                "id": "CLM-ms-cliente-0001",
+                "text": "alpha",
+                "origin": "declared",
+                "service_id": "ms-cliente",
+                "sources": [],
+            }
+        ]
+    )
+    assert merged[0]["id"] == "CLM-0001"
+    assert merged[0]["context"] == "ms-cliente"
+    assert "uid" not in merged[0]
 
 
 def test_emit_sem_chave_e_fail_closed(tmp_path: Path, monkeypatch):
@@ -252,3 +303,67 @@ def test_verify_com_chave_errada_falha(tmp_path: Path, monkeypatch):
     out = verify_run_dir(run_dir)
     assert out["ok"] is False
     assert any("hmac" in e.lower() for e in out["errors"])
+
+
+def test_id_repetido_sem_contexto_e_fail_closed():
+    from src.domain.provenance import AmbiguousClaimRef, merge_claims, resolve_claim
+
+    merged = merge_claims(
+        [
+            {
+                "id": "CLM-0001",
+                "text": "alpha",
+                "origin": "declared",
+                "service_id": "s1",
+                "sources": [],
+            },
+            {
+                "id": "CLM-0001",
+                "text": "beta",
+                "origin": "declared",
+                "service_id": "s2",
+                "sources": [],
+            },
+        ]
+    )
+    with pytest.raises(AmbiguousClaimRef):
+        resolve_claim(merged, "CLM-0001")
+    assert resolve_claim(merged, "CLM-0001", context="s1")["text"] == "alpha"
+    assert resolve_claim(merged, "s2:CLM-0001")["text"] == "beta"
+
+
+def test_events_tip_e_o_ultimo_hmac(tmp_path: Path):
+    result = run(
+        "historia",
+        dry_run=True,
+        inputs_dir=FIXTURES / "happy_path",
+        output_root=tmp_path,
+        run_id="prov-tip-1",
+    )
+    run_dir = Path(result["run_dir"])
+    rows = [
+        json.loads(line)
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert rows[-1]["event"] == "run_finished"
+    assert manifest["integrity"]["events_tip"] == rows[-1]["hmac"]
+    assert manifest["integrity"]["kid"] == "v1"
+    assert verify_run_dir(run_dir)["ok"] is True
+
+
+def test_rotacao_kid_verifica_run_antiga(tmp_path: Path, monkeypatch):
+    antiga = "test-integrity-key-not-for-prod"
+    result = run(
+        "historia",
+        dry_run=True,
+        inputs_dir=FIXTURES / "happy_path",
+        output_root=tmp_path,
+        run_id="prov-kid-1",
+    )
+    run_dir = Path(result["run_dir"])
+    monkeypatch.setenv("PROMPTLESS_INTEGRITY_KEY", "nova-chave-de-teste-xxxx")
+    monkeypatch.setenv("PROMPTLESS_INTEGRITY_KID", "v2")
+    monkeypatch.setenv("PROMPTLESS_INTEGRITY_KEYS", f"v1={antiga}")
+    assert verify_run_dir(run_dir)["ok"] is True, verify_run_dir(run_dir)["errors"]

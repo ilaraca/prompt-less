@@ -12,7 +12,7 @@ from typing import Any
 
 from src.domain.claim import Claim, ClaimOrigin
 from src.domain.chunk import ChunkSummary, DocumentChunk, content_hash
-from src.domain.provenance import claim_namespace, make_claim_id
+from src.domain.provenance import make_claim_id
 from src.domain.source_ref import SourceRef
 
 SIGNAL_RE = re.compile(
@@ -265,7 +265,6 @@ def compress_documents(
     raw_tokens = 0
     counter = 1
     claim_n = 1
-    ns = claim_namespace(service_id)
 
     for doc in docs:
         text = doc.get("text") or ""
@@ -282,7 +281,7 @@ def compress_documents(
                 discarded.append(summary.to_dict())
             else:
                 doc_summaries.append(summary.summary)
-                claim = claim_from_summary(summary, make_claim_id(ns, claim_n))
+                claim = claim_from_summary(summary, make_claim_id(claim_n))
                 claim_n += 1
                 if claim:
                     claim.service_id = service_id or doc.get("service_id")

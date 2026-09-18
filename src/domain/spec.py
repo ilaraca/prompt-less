@@ -15,14 +15,18 @@ class ClaimLink:
     method: str = "lexical"
     score: float = 1.0
     requires_review: bool = False
+    context: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "claim_id": self.claim_id,
             "method": self.method,
             "score": self.score,
             "requires_review": self.requires_review,
         }
+        if self.context:
+            data["context"] = self.context
+        return data
 
 
 @dataclass

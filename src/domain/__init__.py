@@ -5,10 +5,12 @@ from src.domain.claim import Claim, ClaimOrigin
 from src.domain.chunk import ChunkSummary, DocumentChunk
 from src.domain.provenance import (
     MATCH_REVIEW_THRESHOLD,
+    AmbiguousClaimRef,
     claim_fingerprint,
     claim_namespace,
     make_claim_id,
     merge_claims,
+    resolve_claim,
 )
 from src.domain.source_ref import SourceRef
 from src.domain.spec import (
@@ -20,6 +22,7 @@ from src.domain.spec import (
 )
 
 __all__ = [
+    "AmbiguousClaimRef",
     "AcceptanceCriterion",
     "CanonicalSpec",
     "Claim",
@@ -35,4 +38,5 @@ __all__ = [
     "claim_namespace",
     "make_claim_id",
     "merge_claims",
+    "resolve_claim",
 ]

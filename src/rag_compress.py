@@ -6,7 +6,7 @@ from typing import Any
 from src.doc_compress import compress_documents
 from src.domain.claim import Claim, ClaimOrigin
 from src.domain.chunk import content_hash
-from src.domain.provenance import claim_namespace, make_claim_id
+from src.domain.provenance import make_claim_id
 from src.domain.source_ref import SourceRef
 from src.engenharia import rag_snippet
 
@@ -88,7 +88,6 @@ def compress_rag(
     parts = [p for p in (struct_part, docs_part.get("consolidated") or "") if p]
     consolidated = consolidate(parts, max_chars=consolidated_chars)
 
-    ns = claim_namespace(service_id)
     # claims estruturados das regras (declared)
     struct_claims: list[dict] = []
     n = 1
@@ -96,7 +95,7 @@ def compress_rag(
         text = f"block status={b.get('status')} trigger={b.get('trigger')}"
         struct_claims.append(
             Claim(
-                id=make_claim_id(ns, n, kind="R"),
+                id=make_claim_id(n, kind="R"),
                 text=text,
                 origin=ClaimOrigin.DECLARED,
                 confidence=1.0,

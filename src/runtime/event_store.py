@@ -8,9 +8,10 @@ from typing import Any
 
 from src.runtime.integrity import (
     GENESIS_HASH,
+    current_kid,
     event_hash,
     event_hmac,
-    load_integrity_key,
+    lookup_integrity_key,
 )
 
 
@@ -23,18 +24,20 @@ class EventStore:
         self._tip_hash: str | None = None
 
     def emit(self, event: str, **details: Any) -> dict[str, Any]:
-        key = load_integrity_key()
+        kid = current_kid()
+        key = lookup_integrity_key(kid)
         prev_hmac, prev_hash = self._tips()
         record = {
             "event": event,
             "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "kid": kid,
             "prev_hash": prev_hash,
             "prev_hmac": prev_hmac,
             **details,
         }
         content = event_hash(record)
         record["hash"] = content
-        record["hmac"] = event_hmac(prev_hmac, content, key=key)
+        record["hmac"] = event_hmac(prev_hmac, content, key=key, kid=kid)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")

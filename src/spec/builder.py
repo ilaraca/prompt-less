@@ -8,9 +8,9 @@ from src.domain.chunk import content_hash
 from src.domain.claim import Claim, ClaimOrigin
 from src.domain.provenance import (
     MATCH_REVIEW_THRESHOLD,
-    claim_namespace,
     lexical_match_score,
     make_claim_id,
+    parse_claim_ref,
 )
 from src.domain.source_ref import SourceRef
 from src.domain.spec import (
@@ -55,9 +55,10 @@ def _claims_from_dicts(raw: list[dict[str, Any]]) -> list[Claim]:
             origin_e = ClaimOrigin(origin)
         except ValueError:
             origin_e = ClaimOrigin.INFERRED
+        public_id, parsed_ns = parse_claim_ref(str(c.get("id") or ""))
         out.append(
             Claim(
-                id=str(c.get("id") or make_claim_id("default", len(out) + 1)),
+                id=public_id or make_claim_id(len(out) + 1),
                 text=str(c.get("text") or ""),
                 origin=origin_e,
                 confidence=_parse_confidence(c.get("confidence"), default=0.5),
@@ -76,7 +77,9 @@ def _selected_lines(raw: Any) -> tuple[int, ...] | None:
     return tuple(int(x) for x in raw)
 
 
-def _match_claim_links(text: str, claims: list[Claim]) -> list[ClaimLink]:
+def _match_claim_links(
+    text: str, claims: list[Claim], *, context: str | None = None
+) -> list[ClaimLink]:
     matched: list[ClaimLink] = []
     for c in claims:
         score = lexical_match_score(c.text, text)
@@ -88,6 +91,7 @@ def _match_claim_links(text: str, claims: list[Claim]) -> list[ClaimLink]:
                 method="lexical",
                 score=round(score, 3),
                 requires_review=score < MATCH_REVIEW_THRESHOLD,
+                context=context or c.service_id,
             )
         )
     return matched
@@ -118,7 +122,6 @@ def build_canonical_spec(
     svc = servico or {}
     claim_objs = _claims_from_dicts(claims or [])
     service_id = str(svc.get("id") or "default")
-    ns = claim_namespace(service_id)
     service_name = svc.get("nome")
     repos = {"all": list(svc.get("repos") or [])} if svc.get("repos") else {}
 
@@ -187,10 +190,12 @@ def build_canonical_spec(
         else:
             text = f"Validar: {trigger} → HTTP status a confirmar"
             then = "retornar HTTP status a confirmar"
-        src_links = _match_claim_links(f"{trigger} {status_i}", claim_objs)
+        src_links = _match_claim_links(
+            f"{trigger} {status_i}", claim_objs, context=service_id
+        )
         if not src_links:
             synth = Claim(
-                id=make_claim_id(ns, i, kind="SYN"),
+                id=make_claim_id(i, kind="SYN"),
                 text=text,
                 origin=ClaimOrigin.DECLARED,
                 confidence=1.0,
@@ -208,6 +213,7 @@ def build_canonical_spec(
                     method="synthetic",
                     score=1.0,
                     requires_review=False,
+                    context=service_id,
                 )
             ]
         src = _ids_from_links(src_links)
@@ -256,10 +262,10 @@ def build_canonical_spec(
             text = f"Decisão: {d}"
             when = str(d)
             then = "sucesso"
-        src_links = _match_claim_links(text, claim_objs)
+        src_links = _match_claim_links(text, claim_objs, context=service_id)
         if not src_links:
             synth = Claim(
-                id=make_claim_id(ns, j, kind="SYND"),
+                id=make_claim_id(j, kind="SYND"),
                 text=text,
                 origin=ClaimOrigin.DECLARED,
                 confidence=1.0,
@@ -277,6 +283,7 @@ def build_canonical_spec(
                     method="synthetic",
                     score=1.0,
                     requires_review=False,
+                    context=service_id,
                 )
             ]
         src = _ids_from_links(src_links)
@@ -299,7 +306,11 @@ def build_canonical_spec(
         fallback_ids = [c.id for c in claim_objs[:1]]
         fallback_links = [
             ClaimLink(
-                claim_id=cid, method="declared", score=1.0, requires_review=False
+                claim_id=cid,
+                method="declared",
+                score=1.0,
+                requires_review=False,
+                context=service_id,
             )
             for cid in fallback_ids
         ]

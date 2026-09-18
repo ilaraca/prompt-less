@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.context_builder import build_context  # noqa: E402
-from src.domain.provenance import merge_claims  # noqa: E402
+from src.domain.provenance import merge_claims, stamp_claim_identity  # noqa: E402
 from src.emit import emit  # noqa: E402
 from src.ingest import ARTIFACT_TEMPLATES, load_inputs  # noqa: E402
 from src.preprocess import preprocess  # noqa: E402
@@ -269,9 +269,7 @@ def _run_single(
         payload = claim.to_dict()
         if not payload.get("service_id"):
             payload["service_id"] = (servico or {}).get("id")
-        payload.setdefault("context", ns)
-        payload.setdefault("local_id", payload.get("id"))
-        claims_out.append(payload)
+        claims_out.append(stamp_claim_identity(payload, context=ns))
     return {
         "context": context,
         "servico": {k: v for k, v in (servico or {}).items() if k != "indice"} or None,
@@ -359,8 +357,8 @@ def run(
         unique_claims = merge_claims(claims)
         prov_path = store.write_provenance(claims=unique_claims, discarded=discarded)
         store.mirror_artifacts_to_outputs(compat_root)
-        store.seal_artifacts()
         store.finish(status, result)
+        store.seal_artifacts()
         return {
             **result,
             "run_id": run_ctx.run_id,
@@ -386,11 +384,9 @@ def run(
         claims: list[dict[str, Any]] = []
         for claim in (exc.spec.claims if exc.spec else []):
             payload = claim.to_dict()
-            payload.setdefault("context", ctx)
-            payload.setdefault("local_id", payload.get("id"))
             if not payload.get("service_id") and exc.spec is not None:
                 payload["service_id"] = exc.spec.service_id
-            claims.append(payload)
+            claims.append(stamp_claim_identity(payload, context=ctx))
         discarded = list(exc.discarded or [])
         return {
             "context": ctx,
