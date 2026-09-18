@@ -48,6 +48,7 @@ def _read_doc_legacy(path: Path) -> str:
             capture_output=True,
             text=True,
             timeout=60,
+            shell=False,
         )
         if r.stdout.strip():
             return r.stdout
@@ -61,6 +62,7 @@ def _read_doc_legacy(path: Path) -> str:
             capture_output=True,
             text=True,
             timeout=60,
+            shell=False,
         )
         return r.stdout
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:

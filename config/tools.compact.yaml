@@ -8,5 +8,7 @@ tools:
     sig: map_errors(regras: object) -> [{status, trigger}]
   - id: fill_template
     sig: fill_template(template: str, payload: object) -> artifact
-  - id: emit
-    sig: emit(artifact: str, path: str) -> ok
+  - id: search_claims
+    sig: search_claims(query: str, service_id?: str) -> Claim[]
+  - id: get_claim
+    sig: get_claim(claim_id: str) -> Claim | null

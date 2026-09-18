@@ -15,7 +15,7 @@ from src.runtime.checkpoint import (
 from src.runtime.graph import StageSpec, load_stage_graph
 from src.runtime.handlers import default_registry
 from src.runtime.run_store import RunStore
-from src.runtime.atomic_io import UnsafePath
+from src.runtime.atomic_io import UnsafePath, read_json
 from src.runtime.stage import (
     GraphError,
     HandlerRegistry,
@@ -329,6 +329,11 @@ def blocked_payload(exc: PipelineBlocked, ctx: StageContext) -> dict[str, Any]:
     else:
         report = ctx.run_ctx.validations_dir / "spec-validation.json"
     claims = [claim.to_dict() for claim in exc.spec.claims] if exc.spec else []
+    scan = None
+    if exc.report_path:
+        loaded = read_json(Path(exc.report_path))
+        if isinstance(loaded, dict) and loaded.get("findings") is not None:
+            scan = loaded
     return {
         "context": sid,
         "status": "blocked",
@@ -341,6 +346,8 @@ def blocked_payload(exc: PipelineBlocked, ctx: StageContext) -> dict[str, Any]:
         "canonical_spec_service": exc.spec.service_id if exc.spec else None,
         "outputs": {},
         "output": None,
+        "input_scan": scan,
+        "input_scan_path": exc.report_path,
     }
 
 

@@ -6,7 +6,12 @@ from typing import Any
 
 from src.domain.spec import CanonicalSpec
 from src.executors.base import ExecutionResult
-from src.executors.policy import check_command_allowed, check_write_allowed, load_profiles
+from src.executors.policy import (
+    KNOWN_LAYERS,
+    check_command_allowed,
+    check_write_allowed,
+    load_profiles,
+)
 
 
 @dataclass
@@ -48,6 +53,7 @@ def verify_execution(
     profiles: dict[str, Any] | None = None,
     max_unresolved: int = 0,
     tests_required: bool | None = None,
+    repo_root: str | None = None,
 ) -> VerifyResult:
     issues: list[VerifyIssue] = []
     layer_name = layer or result.layer or _infer_layer(result.repository)
@@ -80,7 +86,7 @@ def verify_execution(
 
     # arquivos fora da policy
     for path in result.changed_files:
-        if not check_write_allowed(path, profile):
+        if not check_write_allowed(path, profile, repo_root=repo_root):
             issues.append(
                 VerifyIssue(
                     code="FILE_OUT_OF_SCOPE",
@@ -92,7 +98,7 @@ def verify_execution(
 
     # comandos negados
     for cmd in result.commands_executed:
-        if not check_command_allowed(cmd, profile):
+        if not check_command_allowed(cmd, profile, repo_root=repo_root):
             issues.append(
                 VerifyIssue(
                     code="COMMAND_DENIED",
@@ -200,7 +206,7 @@ def _is_code_change(changed_files: list[str]) -> bool:
 
 def _infer_layer(repository: str) -> str | None:
     name = repository.lower()
-    for layer in ("bff", "mfe", "api", "gtw"):
+    for layer in KNOWN_LAYERS:
         if layer in name.split("-") or name.endswith(f"-{layer}"):
             return layer
     return None

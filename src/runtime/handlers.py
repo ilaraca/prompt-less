@@ -12,6 +12,7 @@ from src.emit import emit
 from src.ingest import ARTIFACT_TEMPLATES, load_inputs
 from src.preprocess import preprocess as preprocess_inputs
 from src.rag_compress import compress_rag, retrieve_chunks
+from src.hardening.input_scan import collect_untrusted_blobs, scan_blobs
 from src.reason import build_llm_package, dry_run_scaffold
 from src.renderers import render_historia, render_mermaid, render_openapi, render_prd
 from src.repo_index import load_index, service_evidence
@@ -25,7 +26,13 @@ from src.servicos import (
 )
 from src.spec.builder import build_canonical_spec
 from src.state_store import write_state
-from src.validators import PipelineBlocked, validate_derived_artifact, validate_spec
+from src.validators import (
+    PipelineBlocked,
+    ValidationIssue,
+    ValidationResult,
+    validate_derived_artifact,
+    validate_spec,
+)
 
 REGISTRY = HandlerRegistry()
 
@@ -357,11 +364,45 @@ def _render_artifact(tipo: str, slim: dict, rag: dict, spec: Any, dry_run: bool,
 @REGISTRY.register("reason")
 def reason(ctx: StageContext) -> None:
     slot = ctx.slot()
+    scan_report = scan_blobs(collect_untrusted_blobs(ctx.payload, slot))
+    run_scan_path = ctx.run_ctx.validations_dir / "input-scan.json"
+    ctx.write_json(run_scan_path, scan_report.to_dict())
+    scan_path = run_scan_path
+    if ctx.context_id:
+        scan_path = ctx.run_ctx.context_validations_dir(ctx.context_id) / "input-scan.json"
+        ctx.write_json(scan_path, scan_report.to_dict())
+    slot["input_scan"] = scan_report.to_dict()
+    slot["input_scan_path"] = str(scan_path)
+    if scan_report.blocks:
+        issues = [
+            ValidationIssue(
+                code=f.code,
+                severity=f.severity,
+                message=f.message,
+                subject_id=f.source,
+            )
+            for f in scan_report.findings
+        ]
+        raise PipelineBlocked(
+            ValidationResult(issues=issues),
+            slot.get("spec"),
+            discarded=list((slot.get("rag") or {}).get("discarded") or []),
+            context=ctx.context_id,
+            reason="input_scan_failed",
+            report_path=str(scan_path),
+        )
+
     artifacts: dict[str, str] = {}
     packages: dict[str, Path] = {}
     artifacts_root = ctx.run_ctx.artifacts_dir
+    claims = list((slot.get("rag") or {}).get("claims") or [])
     for tipo, context_pkg in (slot.get("context_by_tipo") or {}).items():
-        package = build_llm_package(context_pkg)
+        package = build_llm_package(
+            context_pkg,
+            claims=claims,
+            run_id=ctx.run_ctx.run_id,
+            scan_inputs=False,
+        )
         pkg_name = f"llm_package_{tipo}.json"
         if ctx.context_id:
             pkg_path = ctx.run_ctx.context_artifacts_dir(ctx.context_id) / pkg_name
@@ -445,4 +486,6 @@ def emit_stage(ctx: StageContext) -> None:
         "canonical_spec": str(spec_path) if spec_path else None,
         "validation": validation.to_dict() if validation is not None else None,
         "validation_report": str(slot["val_path"]) if slot.get("val_path") else None,
+        "input_scan": slot.get("input_scan"),
+        "input_scan_path": slot.get("input_scan_path"),
     }

@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from src.hardening.claim_tools import claude_tools, claim_tool_specs, openai_tools
+from src.hardening.input_scan import InputScanBlocked, scan_blobs
 from src.engenharia import (
     format_arquitetura,
     format_documentacao,
@@ -16,15 +18,30 @@ from src.engenharia import (
 )
 
 
-def build_llm_package(context: dict[str, Any]) -> dict[str, Any]:
+def build_llm_package(
+    context: dict[str, Any],
+    *,
+    claims: list[dict[str, Any]] | None = None,
+    run_id: str | None = None,
+    scan_inputs: bool = True,
+) -> dict[str, Any]:
     """Pacote pronto p/ OpenAI Responses (previous_response_id) ou Claude cache_control."""
     system = context["system"]
     dynamic = context["dynamic"]
+    if scan_inputs:
+        report = scan_blobs(
+            [("llm_package.dynamic", json.dumps(dynamic, ensure_ascii=False))]
+        )
+        if report.blocks:
+            raise InputScanBlocked(report)
+    claim_list = list(claims or [])
+    tools = claim_tool_specs()
     return {
         "openai": {
             "instructions": system,
             "input": json.dumps(dynamic, ensure_ascii=False),
             "store": True,
+            "tools": openai_tools(),
         },
         "claude": {
             "system": [
@@ -40,11 +57,18 @@ def build_llm_package(context: dict[str, Any]) -> dict[str, Any]:
                     "content": json.dumps(dynamic, ensure_ascii=False),
                 }
             ],
+            "tools": claude_tools(),
         },
+        "tools": tools,
         "meta": {
             "est_tokens": context.get("est_tokens"),
             "rag_stats": context.get("rag_stats"),
             "comando": dynamic.get("comando"),
+            "run_id": run_id,
+            "claim_index": {
+                "count": len(claim_list),
+                "ids": [str(c.get("id")) for c in claim_list if c.get("id")][:50],
+            },
         },
     }
 

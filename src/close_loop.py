@@ -29,8 +29,10 @@ from src.domain.spec import (  # noqa: E402
     Requirement,
     SpecError,
 )
+from src.hardening.debugger import build_debugger_report  # noqa: E402
 from src.executors import DevinAdapter, build_repair_request, verify_execution  # noqa: E402
 from src.executors.base import ExecutionResult  # noqa: E402
+from src.runtime.atomic_io import atomic_write_json  # noqa: E402
 
 
 def _parse_confidence(raw, *, default: float = 1.0) -> float:
@@ -111,11 +113,18 @@ def close_loop(
         "repair": repair,
         "execution": execution.to_dict(),
     }
+    debugger = build_debugger_report(
+        verify=verify,
+        execution=execution,
+        repair=repair,
+        stage="close_loop",
+        run_status=verify.status,
+    )
+    report["debugger"] = debugger
     if out_dir:
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "verify-report.json").write_text(
-            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        atomic_write_json(out_dir / "verify-report.json", report)
+        atomic_write_json(out_dir / "debugger.json", debugger)
     return report
 
 

@@ -22,6 +22,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from src.hardening.debugger import build_debugger_report  # noqa: E402
 from src.runtime import (  # noqa: E402
     HashMismatch,
     HandlerRegistry,
@@ -107,6 +108,41 @@ def run(
         if output_root is None and legacy_state is None:
             write_state(data)
 
+    def _scan_from_result(result: dict) -> dict | None:
+        if isinstance(result.get("input_scan"), dict):
+            return result["input_scan"]
+        for ctx_result in result.get("by_context") or []:
+            if isinstance(ctx_result.get("input_scan"), dict):
+                return ctx_result["input_scan"]
+        return None
+
+    def _reason_from_result(result: dict) -> str | None:
+        if result.get("reason"):
+            return str(result["reason"])
+        for ctx_result in result.get("by_context") or []:
+            if ctx_result.get("reason"):
+                return str(ctx_result["reason"])
+        return None
+
+    def _write_debugger(
+        result: dict,
+        *,
+        status: str,
+        exc: BaseException | None = None,
+    ) -> None:
+        store.write_debugger(
+            build_debugger_report(
+                scan=_scan_from_result(result),
+                blocked_reason=_reason_from_result(result),
+                validation=result.get("validation")
+                if isinstance(result.get("validation"), dict)
+                else None,
+                run_status=status,
+                stage=store.read_manifest().get("current_stage"),
+                exception=exc,
+            )
+        )
+
     def _finalize(result: dict, *, status: str = "completed") -> dict:
         claims: list[dict[str, Any]] = list(result.get("claims") or [])
         discarded: list[dict[str, Any]] = list(result.get("discarded") or [])
@@ -122,6 +158,8 @@ def run(
                 seen.add(cid)
                 unique_claims.append(c)
         prov_path = store.write_provenance(claims=unique_claims, discarded=discarded)
+        if status in {"blocked", "failed"}:
+            _write_debugger(result, status=status)
         store.mirror_artifacts_to_outputs(compat_root)
         store.finish(status, result)
         return {
@@ -176,11 +214,13 @@ def run(
         return _finalize(assembled, status="blocked")
     except (StageError, HashMismatch) as exc:
         store.events.emit("run_failed", error=str(exc))
+        _write_debugger({}, status="failed", exc=exc)
         if not store.is_finished:
             store.finish("failed")
         raise
     except Exception as exc:
         store.events.emit("run_failed", error=str(exc))
+        _write_debugger({}, status="failed", exc=exc)
         if not store.is_finished:
             store.finish("failed")
         raise

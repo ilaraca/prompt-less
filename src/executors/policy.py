@@ -11,9 +11,15 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PROFILES = ROOT / "config" / "permission_profiles.yaml"
+KNOWN_LAYERS = ("bff", "api", "mfe", "gtw", "worker", "batch")
 
 # Metacaracteres de shell — presença = comando composto / injection
 _SHELL_META = re.compile(r"[;&|`$()<>\n]|\s&&\s|\s\|\|\s")
+_FLAG_RE = re.compile(r"^--?[A-Za-z0-9][\w.-]*(=.*)?$")
+_EXT_RE = re.compile(
+    r"\.(?:java|py|ts|tsx|js|jsx|kt|go|yaml|yml|json|xml|md|txt|properties|gradle)$",
+    re.IGNORECASE,
+)
 
 
 def load_profiles(path: Path | None = None) -> dict[str, Any]:
@@ -33,7 +39,6 @@ def normalize_repo_path(raw: str) -> str | None:
     value = str(raw).strip().replace("\\", "/")
     if not value:
         return None
-    # absolutos POSIX ou UNC
     if value.startswith("/") or value.startswith("//"):
         return None
 
@@ -44,24 +49,66 @@ def normalize_repo_path(raw: str) -> str | None:
     parts = path.parts
     if not parts:
         return None
-    # Windows drive (C:) ou volume
     if parts[0].endswith(":"):
         return None
     if any(part in {"", ".", ".."} for part in parts):
         return None
-    # defesa extra: string ainda contém traversal após normalização parcial
     if ".." in value.split("/"):
         return None
 
     return path.as_posix()
 
 
+def _stays_in_root(root: Path, candidate: Path) -> bool:
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return False
+    return resolved == root or root in resolved.parents
+
+
+def resolve_repo_path(raw: str, repo_root: Path | str | None = None) -> str | None:
+    """
+    Normaliza e, com `repo_root`, resolve realpath/symlinks.
+
+    Qualquer componente existente cujo resolve() saia do repositório é recusado.
+    """
+    normalized = normalize_repo_path(raw)
+    if normalized is None:
+        return None
+    if repo_root is None:
+        return normalized
+
+    try:
+        root = Path(repo_root).resolve()
+    except OSError:
+        return None
+
+    current = root
+    for part in PurePosixPath(normalized).parts:
+        current = current / part
+        if current.exists() or current.is_symlink():
+            if not _stays_in_root(root, current):
+                return None
+
+    parent = (root / normalized).parent
+    if parent.exists() or parent.is_symlink():
+        if not _stays_in_root(root, parent):
+            return None
+    return normalized
+
+
 def _match_any(path: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(path, pat) for pat in patterns)
 
 
-def check_write_allowed(path: str, profile: dict[str, Any]) -> bool:
-    normalized = normalize_repo_path(path)
+def check_write_allowed(
+    path: str,
+    profile: dict[str, Any],
+    *,
+    repo_root: Path | str | None = None,
+) -> bool:
+    normalized = resolve_repo_path(path, repo_root)
     if normalized is None:
         return False
 
@@ -74,8 +121,15 @@ def check_write_allowed(path: str, profile: dict[str, Any]) -> bool:
     return _match_any(normalized, allow)
 
 
-def parse_command(command: str | dict[str, Any]) -> list[str] | None:
+def parse_command(command: str | dict[str, Any] | list[str]) -> list[str] | None:
     """Normaliza comando para argv. Retorna None se inválido / shell composto."""
+    if isinstance(command, list):
+        if not command:
+            return None
+        argv = [str(a) for a in command]
+        if any(_SHELL_META.search(a) for a in argv):
+            return None
+        return argv
     if isinstance(command, dict):
         exe = command.get("executable") or command.get("cmd")
         if not exe:
@@ -83,7 +137,10 @@ def parse_command(command: str | dict[str, Any]) -> list[str] | None:
         args = command.get("args") or []
         if not isinstance(args, list):
             return None
-        return [str(exe), *[str(a) for a in args]]
+        argv = [str(exe), *[str(a) for a in args]]
+        if any(_SHELL_META.search(a) for a in argv):
+            return None
+        return argv
 
     cmd = (command or "").strip()
     if not cmd:
@@ -97,36 +154,110 @@ def parse_command(command: str | dict[str, Any]) -> list[str] | None:
     return argv or None
 
 
-def _argv_matches_rule(argv: list[str], rule: str) -> bool:
-    """True se argv == rule ou argv é prefixo exato do rule (por tokens)."""
+def _rule_prefix(rule: str | dict[str, Any]) -> list[str] | None:
+    """Prefixo semântico da regra: executable + args exigidos (tokens exatos)."""
+    if isinstance(rule, dict):
+        exe = rule.get("executable") or rule.get("cmd")
+        if not exe:
+            return None
+        extra = rule.get("args") if rule.get("args") is not None else rule.get("subcommands")
+        if extra is None:
+            extra = []
+        if not isinstance(extra, list):
+            return None
+        prefix = [str(exe), *[str(a) for a in extra]]
+        if any(_SHELL_META.search(a) for a in prefix):
+            return None
+        return prefix
+    if not isinstance(rule, str):
+        return None
     try:
-        rule_argv = shlex.split(rule.strip())
+        parsed = shlex.split(rule.strip())
     except ValueError:
-        return False
-    if not rule_argv:
-        return False
-    if len(argv) < len(rule_argv):
-        return False
-    return argv[: len(rule_argv)] == rule_argv
+        return None
+    return parsed or None
 
 
-def check_command_allowed(command: str | dict[str, Any], profile: dict[str, Any]) -> bool:
+def _argv_matches_prefix(argv: list[str], prefix: list[str]) -> bool:
+    if not prefix or len(argv) < len(prefix):
+        return False
+    return argv[: len(prefix)] == prefix
+
+
+def _looks_like_path(value: str) -> bool:
+    if not value:
+        return False
+    if value.startswith(("/", "~")) or (len(value) >= 2 and value[1] == ":"):
+        return True
+    if ".." in value.split("/") or "\\" in value:
+        return True
+    if "/" in value:
+        return True
+    return bool(_EXT_RE.search(value))
+
+
+def _flag_value(arg: str) -> str | None:
+    if arg.startswith("-") and "=" in arg:
+        return arg.split("=", 1)[1]
+    return None
+
+
+def extra_args_allowed(argv: list[str], prefix_len: int, *, repo_root: Path | str | None = None) -> bool:
+    """Valida argumentos além do prefixo da allowlist (paths relativos, flags)."""
+    for arg in argv[prefix_len:]:
+        if not arg or _SHELL_META.search(arg):
+            return False
+        value = _flag_value(arg)
+        candidate = value if value is not None else arg
+        if value is None and _FLAG_RE.match(arg) and "=" not in arg:
+            continue
+        if _looks_like_path(candidate):
+            if resolve_repo_path(candidate, repo_root) is None:
+                return False
+            continue
+        if value is not None:
+            continue
+        if _FLAG_RE.match(arg):
+            continue
+        # posicional que não parece path: só aceita se for relativo canônico
+        if resolve_repo_path(arg, repo_root) is None:
+            return False
+    return True
+
+
+def check_command_allowed(
+    command: str | dict[str, Any] | list[str],
+    profile: dict[str, Any],
+    *,
+    repo_root: Path | str | None = None,
+) -> bool:
     """
     Valida comando como argv (sem shell).
 
-    Comandos com metacaracteres (&&, ;, ||, pipes, etc.) são sempre negados.
-    Allow/deny comparam tokens, não prefixo de string — evita
-    `./mvnw test && terraform apply` passar pela allowlist de `./mvnw test`.
+    Allow/deny comparam tokens, não prefixo de string. Argumentos extras são
+    checados semanticamente: path tem de sobreviver a `realpath`/normalize.
     """
     argv = parse_command(command)
     if argv is None:
         return False
+    if any(_SHELL_META.search(a) for a in argv):
+        return False
 
     for denied in profile.get("commands_deny") or []:
-        if _argv_matches_rule(argv, denied):
+        prefix = _rule_prefix(denied)
+        if prefix and _argv_matches_prefix(argv, prefix):
             return False
 
     allow = list(profile.get("commands_allow") or [])
     if not allow:
-        return True
-    return any(_argv_matches_rule(argv, a) for a in allow)
+        return extra_args_allowed(argv, 1, repo_root=repo_root)
+
+    for rule in allow:
+        prefix = _rule_prefix(rule)
+        if not prefix:
+            continue
+        if not _argv_matches_prefix(argv, prefix):
+            continue
+        if extra_args_allowed(argv, len(prefix), repo_root=repo_root):
+            return True
+    return False

@@ -212,6 +212,17 @@ class RunStore:
         )
         return path
 
+    def write_debugger(self, report: dict[str, Any]) -> Path:
+        """Persiste o Agent Debugger em validations/debugger.json."""
+        path = self.ctx.validations_dir / "debugger.json"
+        atomic_write_json(path, report)
+        self.events.emit(
+            "debugger_recorded",
+            terminal_cause=(report.get("failure") or {}).get("terminal_cause"),
+            owner=(report.get("harness_component") or {}).get("probable_owner"),
+        )
+        return path
+
     # --------------------------------------------------------------- mirror
 
     def mirror_artifacts_to_outputs(self, compat_root: Path) -> dict[str, Any] | None:
