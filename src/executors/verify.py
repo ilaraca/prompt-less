@@ -10,6 +10,7 @@ from src.executors.base import ExecutionResult
 from src.executors.evidence import (
     AdapterLog,
     GitInspection,
+    assert_clean_worktree,
     build_evidence_hashes,
     canonical_command_set,
     command_argv,
@@ -198,6 +199,11 @@ def _verify_git_evidence(
         issues.append(VerifyIssue(code=code, severity="error", message=message))
     if not git.ok:
         return git
+
+    for code, message in assert_clean_worktree(
+        repo, expect_head=str(result.result_commit)
+    ):
+        issues.append(VerifyIssue(code=code, severity="error", message=message))
 
     declared = {p.replace("\\", "/") for p in result.changed_files}
     actual = set(git.changed_files)

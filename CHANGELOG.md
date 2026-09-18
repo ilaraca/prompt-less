@@ -9,6 +9,20 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Devin CLI real no close_loop** (`10-devin-e2e`): `DevinAdapter.execute`
+  invoca `devin --print --prompt-file …`, grava `adapter-log.jsonl` (comandos
+  de build/teste) + `devin-session.json` (metadados da sessão), commit automático
+  do resultado e `execution.json` com `base_commit`/`result_commit` derivados do
+  Git — não do payload do agente
+- `scripts/devin-from-promptless.sh` chama `python -m src.executors.devin
+  --close-loop` ao final (traço em `runs/<id>/validations/verify-report.json`)
+- Worktree sujo vs `result_commit` é fail-closed (`DIRTY_WORKTREE` /
+  `HEAD_NOT_RESULT_COMMIT`) antes/durante o verify
+- E2E opcional: `DEVIN_E2E=1` (+ CLI autenticado); CI sem credencial faz skip
+- Testes com subprocess mock: `tests/integration/test_devin_adapter.py`
+- Aprovação humana continua via `python -m src.approval` (sem
+  `close_loop --approve`); `promote` permanece selo em `promotion.json`
+
 - **Modo `--live`** (`09-live-llm`): `src/reason.py` chama OpenAI Responses
   (`OPENAI_API_KEY`) ou Claude Messages (`ANTHROPIC_API_KEY`) com o
   `llm_package_*.json`; dry-run permanece o default
@@ -292,13 +306,11 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Riscos aceitos (`20-evidence-backed-verification`, 2026-09-18)
 
-- Adapter Devin continua stub; o runner real grava o JSONL no `10-devin-e2e`
-- Worktree sujo vs `result_commit` não é checado (verify lê o commit); débito do `10`
 - Sem `PROMPTLESS_INTEGRITY_KEY`, `evidence_hashes.hmac` fica nulo (SHA-256 permanece); selo da aprovação é o `21`
+- *(mitigado pelo `10`)* Adapter Devin deixou de ser stub; worktree limpo é exigido no verify
 
 ### Planejado (série 2)
 
-- Devin CLI real no `close_loop` (`10`)
 - Redis opcional (state backend) (`12b`)
 - Execução concorrente por ondas (`13`)
 - Client `--live` para Gemini / embeddings opcionais na retrieval híbrida
@@ -320,7 +332,7 @@ gates endurecidos.
   verificável (`canonical-spec.yaml`) + quality gate (`src/validators/`)
 - **Renderizadores** (`src/renderers/`): história/PRD alinhados ao IR
 - **Ciclo executor** (`src/close_loop.py`, `src/executors/`): verify contra spec
-  e policy de camada, aprovação e reparo limitado; adapter Devin (stub)
+  e policy de camada, aprovação e reparo limitado; adapter Devin (CLI real no `10`)
 - **Policy de camada** (`config/permission_profiles.yaml`, `policy.py`): allow/deny
   de escrita e comandos por profile (`bff` / `api` / `mfe` / …)
 - **Plano multi-repo** (`src/plan_repos.py`, `src/planning/`): grafo, camadas e

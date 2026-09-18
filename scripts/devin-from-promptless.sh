@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prompt-less → Devin CLI
+# Prompt-less → Devin CLI → ExecutionResult → close_loop
 #
 # Uso:
 #   ./scripts/devin-from-promptless.sh /caminho/do/app
@@ -7,8 +7,12 @@
 #   ./scripts/devin-from-promptless.sh /caminho/do/app --dry-prep
 #   ./scripts/devin-from-promptless.sh /caminho/do/app --context ms-cliente --dry-prep
 #   ./scripts/devin-from-promptless.sh /caminho/do/app --all-contexts --dry-prep
+#   ./scripts/devin-from-promptless.sh /caminho/do/app --run-id <id> --spec path/canonical-spec.yaml
 #
 # Docs: https://docs.devin.ai/  |  https://github.com/ilaraca/prompt-less
+#
+# Aprovação humana NÃO passa por close_loop --approve:
+#   python -m src.approval request-approval|approve|promote
 
 set -euo pipefail
 
@@ -23,25 +27,37 @@ WORKSPACE=""
 SCAN=1
 INDEX=1
 MARCAR=1
+RUN_ID=""
+SPEC=""
+LAYER=""
+CLOSE_LOOP=1
+TIMEOUT="3600"
 
 usage() {
   cat <<'EOF'
 Uso: ./scripts/devin-from-promptless.sh <APP_ROOT> [opções]
      ./scripts/devin-from-promptless.sh --workspace <DIR_COM_TODOS_OS_REPOS> [opções]
 
-  APP_ROOT          Repo único onde o Devin implementa
+  APP_ROOT          Repo único onde o Devin implementa (workspace isolado)
   --workspace DIR   Pasta com TODOS os repos: escaneia → mapa → marcadores →
                     artefatos por serviço → docs/prompt-less em cada repo
-  --run             (default) gera + copia + chama devin
+  --run             (default) gera + copia + DevinAdapter + close_loop
   --full            também openapi + mermaid
-  --dry-prep        só gera e copia (sem devin)
+  --dry-prep        só gera e copia (sem Devin / sem close_loop)
   --context ID      só este microsserviço (ex.: gestao-de-ofertas)
   --all-contexts    gera todos os serviços do mapa
   --no-scan         em modo workspace, reusa o mapa-servicos.yaml atual
   --no-index        não reindexa o código (reusa state/repo_index.json)
   --no-marcar       não injeta [[service:id]] nos docs
+  --run-id ID       run_id canônico (default: gerado)
+  --spec PATH       canonical-spec.yaml para o close_loop
+  --layer NAME      profile de policy (bff|api|mfe|…)
+  --no-close-loop   executa DevinAdapter sem verify
+  --timeout SEC     timeout do CLI Devin (default 3600)
 
 Com --context, artefatos vêm de outputs/contextos/<ID>/.
+close_loop grava runs/<id>/validations/verify-report.json.
+Aprovação: python -m src.approval (não use close_loop --approve).
 EOF
 }
 
@@ -55,6 +71,11 @@ while [[ $# -gt 0 ]]; do
     --no-scan) SCAN=0; shift ;;
     --no-index) INDEX=0; shift ;;
     --no-marcar) MARCAR=0; shift ;;
+    --run-id) RUN_ID="${2:-}"; shift 2 ;;
+    --spec) SPEC="${2:-}"; shift 2 ;;
+    --layer) LAYER="${2:-}"; shift 2 ;;
+    --no-close-loop) CLOSE_LOOP=0; shift ;;
+    --timeout) TIMEOUT="${2:-}"; shift 2 ;;
     *)
       if [[ -z "$APP_ROOT" ]]; then APP_ROOT="$1"; shift
       else echo "arg desconhecido: $1" >&2; usage; exit 1
@@ -72,6 +93,51 @@ if [[ ! -x "$PYTHON" ]]; then
   echo "erro: venv ausente em ${PIPELINE_ROOT}/.venv" >&2
   exit 1
 fi
+
+run_devin_adapter() {
+  local repo="$1"
+  local repository="$2"
+  local artifacts="${3:-}"
+  local extra_spec="${4:-}"
+  local args=(
+    -m src.executors.devin
+    --repo "$repo"
+    --repository "$repository"
+    --timeout "$TIMEOUT"
+  )
+  if [[ -n "$RUN_ID" ]]; then
+    args+=(--run-id "$RUN_ID")
+  fi
+  if [[ -n "$LAYER" ]]; then
+    args+=(--layer "$LAYER")
+  fi
+  if [[ -n "$artifacts" && -d "$artifacts" ]]; then
+    args+=(--artifacts "$artifacts")
+  fi
+  local spec_path=""
+  if [[ -n "$extra_spec" && -f "$extra_spec" ]]; then
+    spec_path="$extra_spec"
+  elif [[ -n "$SPEC" && -f "$SPEC" ]]; then
+    spec_path="$SPEC"
+  elif [[ -n "$artifacts" && -f "$artifacts/canonical-spec.yaml" ]]; then
+    spec_path="$artifacts/canonical-spec.yaml"
+  elif [[ -f "$PIPELINE_ROOT/outputs/canonical-spec.yaml" ]]; then
+    spec_path="$PIPELINE_ROOT/outputs/canonical-spec.yaml"
+  fi
+  if [[ "$CLOSE_LOOP" -eq 1 ]]; then
+    if [[ -z "$spec_path" ]]; then
+      echo "erro: close_loop exige canonical-spec (--spec ou artifacts). Use --no-close-loop ou --dry-prep." >&2
+      exit 1
+    fi
+    args+=(--close-loop --spec "$spec_path")
+  fi
+  local prompt="${repo}/docs/prompt-less/DEVIN_PROMPT.md"
+  if [[ -f "$prompt" ]]; then
+    args+=(--prompt-file "$prompt")
+  fi
+  echo "==> DevinAdapter em ${repo}"
+  ( cd "$PIPELINE_ROOT" && PYTHONPATH=. "$PYTHON" "${args[@]}" )
+}
 
 # ---------------------------------------------------------------------------
 # Modo workspace: repos → mapa → marcadores → artefato por serviço → cada repo
@@ -130,6 +196,7 @@ for i in r.get('ignorados') or []:
     cp -f "$src"/PRD.md "$src"/historia.md "$dest/" 2>/dev/null || true
     [[ -f "$src/openapi.yaml" ]] && cp -f "$src/openapi.yaml" "$dest/"
     [[ -f "$src/sequence.mmd" ]] && cp -f "$src/sequence.mmd" "$dest/"
+    [[ -f "$src/canonical-spec.yaml" ]] && cp -f "$src/canonical-spec.yaml" "$dest/"
     cp -f inputs/engenharia.yaml inputs/mapa-servicos.yaml "$dest/" 2>/dev/null || true
 
     {
@@ -147,7 +214,8 @@ for i in r.get('ignorados') or []:
       echo "1. Não releia specs brutas fora de \`docs/prompt-less/\`."
       echo "2. Respeite RF/AC e NFR-R/O/S/D (inclui README, CHANGELOG e docs de API da stack)."
       echo "3. Fora de escopo: o que pertence às outras camadas do serviço."
-      echo "4. Ao final, rastreie \`RF-xx\`/\`AC-xx\`/\`NFR-*\` e abra PR se houver remoto."
+      echo "4. Ao final, rastreie \`RF-xx\`/\`AC-xx\`/\`NFR-*\` (opcional: docs/prompt-less/execution-result.json)."
+      echo "5. Não integre mudanças sem verify aprovado (close_loop + src.approval)."
       echo ""
       echo "Gerado por https://github.com/ilaraca/prompt-less"
     } > "${dest}/DEVIN_PROMPT.md"
@@ -160,13 +228,8 @@ for i in r.get('ignorados') or []:
 
   if [[ "$MODE" == "--dry-prep" ]]; then
     echo "==> --dry-prep: Devin não iniciado. Para rodar em um repo:"
-    echo "    cd ${WORKSPACE}/<repo> && devin -- \"\$(cat docs/prompt-less/DEVIN_PROMPT.md)\""
+    echo "    ./scripts/devin-from-promptless.sh ${WORKSPACE}/<repo> --spec outputs/contextos/<id>/canonical-spec.yaml --layer <tier>"
     exit 0
-  fi
-
-  if ! command -v devin >/dev/null 2>&1; then
-    echo "erro: \`devin\` não está no PATH. Use --dry-prep ou instale o CLI." >&2
-    exit 1
   fi
 
   while IFS=$'\t' read -r sid repo tier; do
@@ -174,8 +237,11 @@ for i in r.get('ignorados') or []:
     [[ -n "$CONTEXT" && "$sid" != "$CONTEXT" ]] && continue
     prompt="${WORKSPACE}/${repo}/docs/prompt-less/DEVIN_PROMPT.md"
     [[ -f "$prompt" ]] || continue
-    echo "==> devin em ${repo}"
-    ( cd "${WORKSPACE}/${repo}" && devin -- "$(cat "$prompt")" )
+    art="outputs/contextos/${sid}"
+    LAYER_SAVE="$LAYER"
+    if [[ -z "$LAYER" ]]; then LAYER="$tier"; fi
+    run_devin_adapter "${WORKSPACE}/${repo}" "$repo" "$art" "${art}/canonical-spec.yaml"
+    LAYER="$LAYER_SAVE"
   done <<< "$PLAN"
   exit 0
 fi
@@ -211,7 +277,6 @@ fi
 if [[ -n "$CONTEXT" && -d "outputs/contextos/$CONTEXT" ]]; then
   SRC_DIR="outputs/contextos/$CONTEXT"
 elif [[ "$ALL_CONTEXTS" -eq 1 ]]; then
-  # pega o primeiro contexto gerado
   SRC_DIR="$(find outputs/contextos -mindepth 1 -maxdepth 1 -type d | head -1 || true)"
   if [[ -z "${SRC_DIR:-}" ]]; then
     echo "erro: nenhum outputs/contextos/* gerado" >&2
@@ -224,13 +289,14 @@ fi
 
 echo "==> Copiando $SRC_DIR → ${DOC_DIR}"
 cp -f "$SRC_DIR/PRD.md" "$SRC_DIR/historia.md" "$DOC_DIR/" 2>/dev/null || {
-  # fallback raiz
   cp -f outputs/PRD.md outputs/historia.md "$DOC_DIR/"
 }
 [[ -f "$SRC_DIR/openapi.yaml" ]] && cp -f "$SRC_DIR/openapi.yaml" "$DOC_DIR/" || true
 [[ -f "$SRC_DIR/sequence.mmd" ]] && cp -f "$SRC_DIR/sequence.mmd" "$DOC_DIR/" || true
+[[ -f "$SRC_DIR/canonical-spec.yaml" ]] && cp -f "$SRC_DIR/canonical-spec.yaml" "$DOC_DIR/" || true
 [[ -f outputs/openapi.yaml && ! -f "$DOC_DIR/openapi.yaml" ]] && cp -f outputs/openapi.yaml "$DOC_DIR/" || true
 [[ -f outputs/sequence.mmd && ! -f "$DOC_DIR/sequence.mmd" ]] && cp -f outputs/sequence.mmd "$DOC_DIR/" || true
+[[ -f outputs/canonical-spec.yaml && ! -f "$DOC_DIR/canonical-spec.yaml" ]] && cp -f outputs/canonical-spec.yaml "$DOC_DIR/" || true
 [[ -f inputs/engenharia.yaml ]] && cp -f inputs/engenharia.yaml "$DOC_DIR/" || true
 [[ -f inputs/mapa-servicos.yaml ]] && cp -f inputs/mapa-servicos.yaml "$DOC_DIR/" || true
 
@@ -251,7 +317,8 @@ Implemente neste repositório conforme \`docs/prompt-less/\` (contexto: **${CTX_
 ## Regras
 1. **Não** releia specs brutas fora de \`docs/prompt-less/\`.
 2. Respeite RF/AC e NFR-R/O/S/D (inclui README, CHANGELOG e docs de API da stack); implemente só o ownership deste contexto/repos.
-3. Ao final: mapeie \`RF-xx\` / \`AC-xx\` / \`NFR-*\` e abra PR se houver remoto.
+3. Ao final: mapeie \`RF-xx\` / \`AC-xx\` / \`NFR-*\` (opcional: \`docs/prompt-less/execution-result.json\`).
+4. Não integre mudanças sem verify (\`close_loop\`) + aprovação humana (\`src.approval\`).
 
 Gerado por https://github.com/ilaraca/prompt-less
 EOF
@@ -264,10 +331,8 @@ if [[ "$MODE" == "--dry-prep" ]]; then
   exit 0
 fi
 
-if ! command -v devin >/dev/null 2>&1; then
-  echo "erro: \`devin\` não está no PATH. Use --dry-prep ou instale o CLI." >&2
-  exit 1
+ARTIFACTS_DIR=""
+if [[ -d "$SRC_DIR" ]]; then
+  ARTIFACTS_DIR="$PIPELINE_ROOT/$SRC_DIR"
 fi
-
-cd "$APP_ROOT"
-exec devin -- "$(cat "$PROMPT_FILE")"
+run_devin_adapter "$APP_ROOT" "$(basename "$APP_ROOT")" "$ARTIFACTS_DIR" ""

@@ -56,7 +56,7 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 
 | Cenário | Motivo |
 |--------|--------|
-| Geração 100% automática em produção sem revisão humana | `--live` chama OpenAI/Claude, mas revisão humana + gates de IR continuam; apply em config exige risco `low` ou aprovação (`21`); Devin E2E é `10` |
+| Geração 100% automática em produção sem revisão humana | `--live` chama OpenAI/Claude, mas revisão humana + gates de IR continuam; apply em config exige risco `low` ou aprovação (`21`); Devin E2E grava evidência e exige `src.approval` antes do promote |
 | Documentos sem sinais lexicais de negócio | Resumo extrativo prioriza termos (regra, HTTP, endpoint…); texto só narrativo pode ser filtrado demais |
 | Extração fiel linha a linha de PDFs jurídicos/contratos | Foco é **sinal para artefato técnico**, não arquivo íntegro |
 | `.doc` legado fora do macOS sem `antiword` | Conversão depende de `textutil` (macOS) ou `antiword` |
@@ -739,9 +739,9 @@ cat state/workflow.json
 # → tipo, fluxo, inputs, bloqueios, metadados de docs (sem texto bruto)
 ```
 
-### 10. Prompt-less → Devin CLI (implementação)
+### 10. Prompt-less → Devin CLI → close_loop
 
-A pipeline **gera** o contexto curto; o [Devin CLI](https://docs.devin.ai/) **implementa** no repo de código. Não aponte o Devin para `inputs/` brutos (ex.: txt de 3000 linhas) — só para `outputs/` / `docs/prompt-less/`.
+A pipeline **gera** o contexto curto; o [Devin CLI](https://docs.devin.ai/) **implementa** num checkout isolado; o `DevinAdapter` grava evidência e o `close_loop` verifica. Não aponte o Devin para `inputs/` brutos — só para `outputs/` / `docs/prompt-less/`.
 
 ```
 inputs/ (Figma, regras, engenharia, docs)
@@ -750,16 +750,16 @@ inputs/ (Figma, regras, engenharia, docs)
    Prompt-less (compressão + artefatos)
         │
         ▼
- outputs/PRD.md + historia.md (+ openapi/mermaid)
+  docs/prompt-less/ no repo do app (workspace isolado)
         │
         ▼
-  docs/prompt-less/ no repo do app
+   DevinAdapter → CLI → commit → execution.json + adapter-log.jsonl
         │
         ▼
-   Devin CLI → código + PR
+   close_loop → runs/<id>/validations/verify-report.json
         │
-        ▼  (opcional)
-   /handoff → Devin Cloud
+        ▼
+   src.approval request-approval → approve → promote (selo)
 ```
 
 **Script incluso**
@@ -767,18 +767,21 @@ inputs/ (Figma, regras, engenharia, docs)
 ```bash
 chmod +x scripts/devin-from-promptless.sh
 
-# Gera historia+PRD, copia para o app e abre o Devin
-./scripts/devin-from-promptless.sh /caminho/do/seu-bff
+# Gera historia+PRD, copia, roda DevinAdapter + close_loop
+./scripts/devin-from-promptless.sh /caminho/do/seu-bff \
+  --spec outputs/canonical-spec.yaml --layer bff
 
 # Também gera OpenAPI + Mermaid
-./scripts/devin-from-promptless.sh /caminho/do/seu-bff --full
+./scripts/devin-from-promptless.sh /caminho/do/seu-bff --full --layer bff
 
-# Só prepara docs/prompt-less/ (sem chamar `devin`)
+# Só prepara docs/prompt-less/ (sem Devin / sem close_loop)
 ./scripts/devin-from-promptless.sh /caminho/do/seu-bff --dry-prep
 
 # Pasta com TODOS os repos: escaneia → mapa → marcadores → um pacote por repo
 ./scripts/devin-from-promptless.sh --workspace ~/dev/repos --dry-prep
 ```
+
+Flags úteis: `--run-id`, `--spec`, `--layer`, `--no-close-loop`, `--timeout`.
 
 O script grava em `APP/docs/prompt-less/`:
 
@@ -787,20 +790,30 @@ O script grava em `APP/docs/prompt-less/`:
 | `PRD.md` / `historia.md` | Fonte da verdade (RF/AC/NFR) |
 | `openapi.yaml` / `sequence.mmd` | Contrato e fluxo (se `--full` ou já existirem) |
 | `engenharia.yaml` | Stack + baseline NFR v1 |
-| `DEVIN_PROMPT.md` | Prompt enxuto passado ao `devin -- …` |
+| `DEVIN_PROMPT.md` | Prompt enxuto passado ao adapter |
 
-**Manual (sem script)**
+**CLI direto**
 
 ```bash
-.venv/bin/python -m src.run historia --dry-run
-mkdir -p ../meu-app/docs/prompt-less
-cp outputs/PRD.md outputs/historia.md ../meu-app/docs/prompt-less/
-cd ../meu-app
-devin -- "Implemente docs/prompt-less/PRD.md e historia.md. Respeite NFR-R/O/S/D (README, CHANGELOG, docs de API). Não releia specs brutas."
+PYTHONPATH=. .venv/bin/python -m src.executors.devin \
+  --repo /caminho/do/seu-bff \
+  --spec runs/<id>/artifacts/canonical-spec.yaml \
+  --layer bff --run-id <id> --close-loop
 ```
 
-Instalação do CLI (se ainda não tiver): `curl -fsSL https://cli.devin.ai/install.sh | bash`  
-Handoff cloud, se a tarefa crescer: `/handoff` na sessão Devin ([docs](https://cognitionai.mintlify.app/work-with-devin/devin-cli)).
+Aprovação humana **não** usa `close_loop --approve`:
+
+```bash
+.venv/bin/python -m src.approval request-approval --root . --run-id <id>
+.venv/bin/python -m src.approval approve --root . --run-id <id> \
+  --actor alice --justification "…"
+.venv/bin/python -m src.approval promote --root . --run-id <id>
+```
+
+E2E opcional (skip no CI sem credencial): `DEVIN_E2E=1 pytest -q tests/integration/test_devin_adapter.py`.
+
+Instalação do CLI: `curl -fsSL https://cli.devin.ai/install.sh | bash`  
+Handoff cloud: `/handoff` ([docs](https://docs.devin.ai/work-with-devin/devin-cli)).
 
 ### 11. Microsserviços — como a pipeline descobre o serviço
 
@@ -1169,7 +1182,10 @@ Policy (`config/permission_profiles.yaml` + `src/executors/policy.py`):
 
 O `close_loop` também grava `debugger.json` ao lado do `verify-report.json` (e a pipeline grava `runs/<id>/validations/debugger.json` em blocked/failed). Campos: `failure`, `agent_behavior`, `harness_component`, `root_cause`.
 
-O adapter Devin (`src/executors/devin.py`) é stub até o ticket E2E da série 2.
+O adapter Devin (`src/executors/devin.py`) invoca o CLI, grava JSONL +
+`execution.json` e exige worktree limpo vs `result_commit` antes do verify.
+Metadados da sessão ficam em `devin-session.json` (fora do JSONL de policy).
+
 
 ### Apply + rollback (`src.apply`)
 
@@ -1530,11 +1546,11 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   IDs Anthropic curtos mapeiam para snapshot pinned; `cost_usd` usa tabela local
   (`economia.MODELOS`), não a fatura do vendor; artefato live ainda passa pelo
   gate `derived_artifact` (saída fora do IR bloqueia — intencional) (`09`)
-- Adapter Devin no `close_loop` é stub (E2E real = `10`); o verify já exige
-  checkout Git (`--repo`), `base_commit`/`result_commit` e log JSONL do adapter
-  — **aceito** (20, 2026-09-18)
-- Worktree sujo vs `result_commit` não é checado (verify lê o commit) — **aceito**;
-  worktree limpo antes do close_loop é o `10`
+- Devin E2E (`10`): o adapter não captura automaticamente os comandos internos
+  da sessão Devin — testes/build precisam constar no sidecar
+  `docs/prompt-less/execution-result.json` (ou JSONL) com artefato/log; sem
+  isso o verify falha fechado em code change (`NO_TESTS_REPORTED` /
+  `TEST_NOT_EVIDENCED`)
 - Sem `PROMPTLESS_INTEGRITY_KEY`, `evidence_hashes.hmac` fica nulo (SHA-256
   permanece) — **aceito**; selo tamper-evident da aprovação é o `21`
 - `improve` aplica propostas só no workspace candidato; `python -m src.apply`
@@ -1561,7 +1577,8 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   por substring — falso positivo/negativo possível; gap `GAP-NFR-*` marca origem
   `heuristic` quando o baseline exige e o código não mostra sinal (`28`)
 - Alertas/ADRs/bulkhead ainda não entram no catálogo v2
-- Nenhuma task do SDD é despachada a executor (`10`)
+- Tasks do SDD ainda não são despachadas automaticamente pelo grafo de ondas
+  (`13`); o handoff Devin é via script/CLI do `10`
 - Resumo de docs é **extrativo por regex**, não LLM small (bom custo; pode perder nuance)
 - Tokenizer oficial cobre OpenAI via `tiktoken`; Anthropic/Gemini e ausência da lib usam heurística `chars÷4` (`method=heuristic`), nunca como contagem exata
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
@@ -1573,13 +1590,12 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 
 **Próximos passos (série 2 — ver CHANGELOG [Unreleased])**
 
-1. Devin CLI real no `close_loop` (`10`)
-2. Redis opcional (state backend) (`12b`)
-3. Execução concorrente por ondas (`13`)
-4. Client `--live` para Gemini / endurecer o agent loop de tools
-5. Embeddings opcionais na 2ª camada de retrieval (hoje sinônimos locais)
-6. Alertas / ADRs / bulkhead no catálogo de engenharia (extensão do `28`)
-7. Ligar estágios opcionais de scan/index/marcar no grafo default
+1. Redis opcional (state backend) (`12b`)
+2. Execução concorrente por ondas (`13`)
+3. Client `--live` para Gemini / endurecer o agent loop de tools
+4. Embeddings opcionais na 2ª camada de retrieval (hoje sinônimos locais)
+5. Alertas / ADRs / bulkhead no catálogo de engenharia (extensão do `28`)
+6. Ligar estágios opcionais de scan/index/marcar no grafo default
 
 
 ---
