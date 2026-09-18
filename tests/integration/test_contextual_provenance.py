@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from src.domain.provenance import claim_fingerprint, merge_claims
 from src.run import run
 from src.runtime import verify_run_dir
@@ -193,4 +195,60 @@ def test_artefatos_listam_claims_utilizados(tmp_path: Path):
     for path in (historias[0], prds[0]):
         text = path.read_text(encoding="utf-8")
         assert "## Proveniência" in text or "## 16. Proveniência" in text
-        assert "CLM-" in text
+    assert "CLM-" in text
+
+
+def test_emit_sem_chave_e_fail_closed(tmp_path: Path, monkeypatch):
+    from src.runtime.event_store import EventStore
+    from src.runtime.integrity import MissingIntegrityKey
+
+    monkeypatch.delenv("PROMPTLESS_INTEGRITY_KEY", raising=False)
+    store = EventStore(tmp_path / "events.jsonl")
+    with pytest.raises(MissingIntegrityKey):
+        store.emit("run_started", run_id="x")
+
+
+def test_evento_forjado_com_prev_hash_correto_falha_hmac(tmp_path: Path):
+    result = run(
+        "historia",
+        dry_run=True,
+        inputs_dir=FIXTURES / "happy_path",
+        output_root=tmp_path,
+        run_id="prov-forged-hmac",
+    )
+    run_dir = Path(result["run_dir"])
+    assert verify_run_dir(run_dir)["ok"] is True
+    events = run_dir / "events.jsonl"
+    lines = events.read_text(encoding="utf-8").splitlines()
+    last = json.loads(lines[-1])
+    forged = {
+        "event": "forged",
+        "timestamp": last["timestamp"],
+        "prev_hash": last["hash"],
+        "prev_hmac": last["hmac"],
+        "hash": "0" * 64,
+        "hmac": "0" * 64,
+    }
+    events.write_text(
+        "\n".join(lines + [json.dumps(forged, ensure_ascii=False)]) + "\n",
+        encoding="utf-8",
+    )
+    out = verify_run_dir(run_dir)
+    assert out["ok"] is False
+    assert any("hmac" in e for e in out["errors"])
+
+
+def test_verify_com_chave_errada_falha(tmp_path: Path, monkeypatch):
+    result = run(
+        "historia",
+        dry_run=True,
+        inputs_dir=FIXTURES / "happy_path",
+        output_root=tmp_path,
+        run_id="prov-wrong-key",
+    )
+    run_dir = Path(result["run_dir"])
+    assert verify_run_dir(run_dir)["ok"] is True
+    monkeypatch.setenv("PROMPTLESS_INTEGRITY_KEY", "outra-chave-de-teste-xx")
+    out = verify_run_dir(run_dir)
+    assert out["ok"] is False
+    assert any("hmac" in e.lower() for e in out["errors"])

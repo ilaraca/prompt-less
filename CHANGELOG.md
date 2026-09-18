@@ -36,9 +36,10 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   `status`
 - `SourceRef.selected_lines` e `locator` (`$.bloqueios[0]`) para o trecho
   realmente usado; claims sintéticos ganham `content_hash` + seção
-- Cadeia de hash SHA-256 em `events.jsonl` (`prev_hash`/`hash`) e selo de
-  artefatos em `manifest.integrity`; `verify_run_dir` detecta adulteração
-  (sem HMAC)
+- Cadeia HMAC-SHA256 em `events.jsonl` (`prev_hmac`/`hmac`, chave em
+  `PROMPTLESS_INTEGRITY_KEY`, fail-closed se ausente) e selo HMAC de
+  artefatos em `manifest.integrity`; `verify_run_dir` detecta evento
+  forjado mesmo com `prev_hash` correto
 - Testes (`tests/integration/test_contextual_provenance.py`): multi-contexto
   sem perda, dedup por identidade, adulteração de evento/artefato e match
   de baixa confiança

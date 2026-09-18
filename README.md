@@ -519,7 +519,11 @@ Workflow GitHub Actions (`.github/workflows/ci.yml`): `compileall` + validação
 
 ## Exemplos de uso
 
-Os exemplos abaixo assumem que você está em `pipeline/` com o venv ativo (ou use o prefixo `.venv/bin/python`).
+Os exemplos abaixo assumem que você está em `pipeline/` com o venv ativo (ou use o prefixo `.venv/bin/python`). A trilha de eventos é assinada: exporte `PROMPTLESS_INTEGRITY_KEY` (≥16 caracteres) antes de `src.run` — sem ela o bootstrap falha fechado.
+
+```bash
+export PROMPTLESS_INTEGRITY_KEY="$(openssl rand -hex 32)"
+```
 
 ### 1. Quickstart com os insumos de exemplo
 
@@ -906,8 +910,8 @@ Cada `python -m src.run …` cria um diretório isolado e espelha artefatos em `
 
 | Caminho | Conteúdo |
 |---------|----------|
-| `runs/<id>/events.jsonl` | trilha append-only com cadeia de hash (`prev_hash` / `hash`) |
-| `runs/<id>/manifest.json` | status versionado, objective, timestamps, `status_history`, `integrity` (selo sha256) |
+| `runs/<id>/events.jsonl` | trilha append-only com cadeia HMAC (`prev_hmac` / `hmac`; `hash` é SHA-256 do payload) |
+| `runs/<id>/manifest.json` | status versionado, objective, timestamps, `status_history`, `integrity` (selo HMAC-SHA256) |
 | `runs/<id>/artifacts/` | artefatos da run (incl. `canonical-spec.yaml`) |
 | `runs/<id>/artifacts/contextos/<svc>/` | pacotes por serviço (`--all-contexts`) |
 | `runs/<id>/validations/` | `provenance.json`, `spec-validation.json` |
@@ -925,7 +929,7 @@ Cada `python -m src.run …` cria um diretório isolado e espelha artefatos em `
 | `run_id` canônico | `[A-Za-z0-9_][A-Za-z0-9_-]*` até 64 chars; `..`, `/`, `\`, espaço, ponto e `latest` são `InvalidRunId` |
 | Sem escape de diretório | `run_dir.resolve()` precisa ficar sob `<root>/runs` (pega até symlink plantado) → `UnsafeRunPath` |
 | Sem JSON parcial | manifest, `state.json`, `provenance.json`, `latest.json`, `canonical-spec.yaml` e pacotes LLM usam write-temp + `os.replace` (`src/runtime/atomic_io.py`); `emit` também |
-| Integridade da trilha | cada evento em `events.jsonl` encadeia `prev_hash` → `hash` (SHA-256, sem HMAC); `RunStore.seal_artifacts()` ancora os sha256 de `artifacts/` e `validations/` em `manifest.integrity` **depois** do provenance e **antes** de `finish`; `verify_run_dir(run_dir)` detecta adulteração de evento ou artefato |
+| Integridade da trilha | cada evento em `events.jsonl` encadeia `prev_hmac` → `hmac` (HMAC-SHA256 de `prev_hmac:hash`). A chave vem de `PROMPTLESS_INTEGRITY_KEY` (≥16 chars), fail-closed se ausente. `RunStore.seal_artifacts()` ancora os sha256 em `manifest.integrity` com o mesmo HMAC **depois** do provenance e **antes** de `finish`. `verify_run_dir(run_dir)` detecta evento forjado (mesmo com `prev_hash` correto), chave errada e artefato adulterado |
 | Colisão de id | `bootstrap()` cria o diretório com `mkdir` exclusivo; id repetido = `RunIdCollision` (retomada explícita: `bootstrap(resume=True)`) |
 | Transição de status | `set_status` valida a transição e usa `version` monotônica; escrita com versão obsoleta = `RunStateConflict`; estado terminal não reabre |
 | Espelho publicado por manifesto | `outputs/.mirror-manifest.json` (run_id + sha256 por arquivo) é o ponto de commit; obsoletos da publicação anterior são removidos depois, symlinks são ignorados e arquivos nunca publicados nunca são apagados |
