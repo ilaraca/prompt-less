@@ -24,7 +24,7 @@ Blockers **rebloqueados pela §5** do documento de propostas (decisão humana de
 |----|--------|--------|------------|
 | 08-ir-openapi-mermaid | IR → OpenAPI / Mermaid | **Done** | 04 |
 | 09-live-llm | Modo `--live` (OpenAI/Claude) | **Done** | 08, 15, 18, 19 |
-| 10-devin-e2e | Devin CLI real no close_loop | Todo | 09, 20, 21 |
+| 10-devin-e2e | Devin CLI real no close_loop | **Done** | 09, 20, 21 |
 | 11-stages-yaml | Orquestração via pipeline.yaml | **Done** | 18 |
 | 12-ci-tokenizer-redis | CI no GitHub Actions (parte entregue) | **Done** | 01, 02 |
 | 12a-official-tokenizer | Tokenizer oficial por provider | **Done** | 01, 02 |
@@ -153,9 +153,15 @@ Onda da frontier:
   **sem blocker aberto**.
 
 Onda C aprovada e **Done** em 2026-09-18 (integração no pai
-`feature/onda-frontier`). Nada em **In progress** / **Feedback**.
-`12b` permanece parqueado. `10` desbloqueado pelo Done do `09` (ainda
-espera decisão humana para iniciar). `13` espera `10` e `12b`.
+`feature/onda-frontier`). `10-devin-e2e` **Done** (Onda D). `12b`
+permanece parqueado (futuro). `13` desbloqueado pelo Done do `10` —
+implementar CAS/lock no file backend (sem Redis/`12b`).
+
+Riscos residuais aceitos do `10` (não reabrir worktree filha):
+
+| Ticket | HEAD | Residuais aceitos |
+|---|---|---|
+| `10-devin-e2e` | `dca477f` | Comandos internos da sessão Devin não vão sozinhos ao JSONL (sidecar `execution-result.json` necessário); `DEVIN_E2E=1` exige CLI autenticado (CI skipa); auto-commit só no checkout isolado (sem push/PR) |
 
 Riscos residuais aceitos (não reabrir worktree filha):
 
@@ -166,18 +172,20 @@ Riscos residuais aceitos (não reabrir worktree filha):
 | `26-hybrid-document-retrieval` | `5f5c447` | 2ª camada = sinônimos locais + TF (não embeddings); `doc_preface` CLI não é estágio da pipeline |
 | `28-engineering-baseline-v2` | `5a2ddb2` | Sinais NFR no índice por substring (gaps `heuristic`); alertas/ADRs/bulkhead fora do catálogo v2; sem despacho a executor |
 
+**Onda D** aprovada e **Done** em 2026-09-18 — HEAD `dca477f` em
+`feature/devin-e2e`. `12b` parqueado. Frontier seguinte: `13-parallel-exec`
+(CAS/lock no file backend; sem Redis).
+
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
+| 10-devin-e2e | **Done** | filha, HEAD `dca477f` | `.worktrees/10-devin-e2e` · `feature/devin-e2e` |
 | 09-live-llm | **Done** | filha, HEAD `af3e67b` | `.worktrees/09-live-llm` · `feature/live-llm` |
 | 14-apply-rollback | **Done** | filha, HEAD `f9f2950` | `.worktrees/14-apply-rollback` · `feature/apply-rollback` |
 | 26-hybrid-document-retrieval | **Done** | filha, HEAD `5f5c447` | `.worktrees/26-hybrid-document-retrieval` · `feature/hybrid-document-retrieval` |
 | 28-engineering-baseline-v2 | **Done** | filha, HEAD `5a2ddb2` | `.worktrees/28-engineering-baseline-v2` · `feature/engineering-baseline-v2` |
-| 24-evidence-based-planning | **Done** (`main`) | filha, HEAD `2a26f44` | PR [#17](https://github.com/ilaraca/prompt-less/pull/17) |
-| 27-sdd-consumer | **Done** (`main`) | filha, HEAD `8317275` | PR [#17](https://github.com/ilaraca/prompt-less/pull/17) |
+| 12b-state-backend-redis | Todo ⏸ | parqueado | futuro |
+| 13-parallel-exec | Todo | bloqueado por `10` (+ CAS file, sem Redis) | — |
 | (pai) onda-frontier | — | integra filhas; único PR contra `main` | `.worktrees/onda-merge` · `feature/onda-frontier` |
-
-Onda C (`09`, `14`, `26`, `28`) Done — riscos acima aceitos. Frontier
-seguinte: `10-devin-e2e` (desbloqueado). `13` e `12b` permanecem.
 
 ## Dependências (visão)
 
