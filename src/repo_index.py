@@ -232,6 +232,227 @@ def _strip_suffix(name: str) -> str:
     return name
 
 
+BUILD_FILENAMES = {
+    "pom.xml",
+    "package.json",
+    "go.mod",
+    "build.gradle",
+    "build.gradle.kts",
+    "pyproject.toml",
+    "requirements.txt",
+    "Cargo.toml",
+}
+
+FEIGN_CLIENT_RE = re.compile(
+    r"@FeignClient\(\s*(?:name\s*=\s*|value\s*=\s*)?[\"']([^\"']+)[\"']"
+)
+OPENAPI_INPUT_RE = re.compile(
+    r"(?:inputSpec|schemaPath|openapi(?:File|Path)?)\s*[:=]\s*[\"']([^\"']+)[\"']",
+    re.I,
+)
+IMPORT_RES = [
+    re.compile(r"^(?:import|from)\s+([A-Za-z0-9_./@~\-]+)", re.M),
+    re.compile(r"""(?:import|from)\s+[\"']([^\"']+)[\"']"""),
+    re.compile(r"""require\(\s*[\"']([^\"']+)[\"']"""),
+]
+URL_RE = re.compile(
+    r"""[\"']https?://([A-Za-z0-9._\-]+)(?::\d+)?(/[^\"'\s]*)?[\"']"""
+)
+EVENT_PRODUCE_RES = [
+    re.compile(
+        r"""(?:KafkaTemplate|ProducerRecord|\.send|\.publish|\.emit)\(\s*[\"']([^\"']+)[\"']"""
+    ),
+]
+EVENT_CONSUME_RES = [
+    re.compile(
+        r"@KafkaListener\(\s*(?:topics\s*=\s*)?[\"']([^\"']+)[\"']"
+    ),
+    re.compile(
+        r"@RabbitListener\(\s*(?:queues\s*=\s*)?[\"']([^\"']+)[\"']"
+    ),
+    re.compile(r"""\.subscribe\(\s*[\"']([^\"']+)[\"']"""),
+]
+POM_ARTIFACT_RE = re.compile(r"<artifactId>\s*([^<]+?)\s*</artifactId>")
+POM_MODULE_RE = re.compile(r"<module>\s*([^<]+?)\s*</module>")
+GRADLE_PROJECT_RE = re.compile(r"""project\(\s*['\"]:([^'\"]+)['\"]\s*\)""")
+GRADLE_COORD_RE = re.compile(
+    r"""(?:implementation|api|compileOnly|runtimeOnly)\s+['\"]([^'\"]+)['\"]"""
+)
+GOMOD_REQUIRE_RE = re.compile(r"^\s*(?:require\s+)?(\S+)\s+v\d", re.M)
+PY_REQ_RE = re.compile(r"^([A-Za-z0-9_.\-]+)", re.M)
+
+
+def _dep_hit(
+    *,
+    kind: str,
+    line: int | None,
+    symbol: str | None,
+    target: str,
+    role: str,
+    confidence: float,
+    origin: str = "observed",
+) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "line": line,
+        "symbol": symbol,
+        "target": target,
+        "role": role,
+        "confidence": confidence,
+        "origin": origin,
+    }
+
+
+def _extract_dependency_hits(conteudo: str) -> list[dict[str, Any]]:
+    """Sinais de dependência observados: clients, imports, URLs, eventos."""
+    hits: list[dict[str, Any]] = []
+    for m in FEIGN_CLIENT_RE.finditer(conteudo):
+        hits.append(
+            _dep_hit(
+                kind="openapi-client",
+                line=_line_of(conteudo, m.start()),
+                symbol=_nearest_symbol(conteudo, m.start()),
+                target=m.group(1),
+                role="client",
+                confidence=0.9,
+            )
+        )
+    for m in OPENAPI_INPUT_RE.finditer(conteudo):
+        hits.append(
+            _dep_hit(
+                kind="openapi-client",
+                line=_line_of(conteudo, m.start()),
+                symbol=_nearest_symbol(conteudo, m.start()),
+                target=m.group(1),
+                role="client",
+                confidence=0.85,
+            )
+        )
+    for regex in IMPORT_RES:
+        for m in regex.finditer(conteudo):
+            target = (m.group(1) or "").strip()
+            if not target or target.startswith(("java.", "javax.", "jakarta.", "kotlin.")):
+                continue
+            hits.append(
+                _dep_hit(
+                    kind="import",
+                    line=_line_of(conteudo, m.start()),
+                    symbol=_nearest_symbol(conteudo, m.start()),
+                    target=target,
+                    role="import",
+                    confidence=0.7,
+                )
+            )
+    for m in URL_RE.finditer(conteudo):
+        host, path = m.group(1), m.group(2) or ""
+        hits.append(
+            _dep_hit(
+                kind="url",
+                line=_line_of(conteudo, m.start()),
+                symbol=_nearest_symbol(conteudo, m.start()),
+                target=f"{host}{path}",
+                role="url",
+                confidence=0.85,
+            )
+        )
+    for regex in EVENT_PRODUCE_RES:
+        for m in regex.finditer(conteudo):
+            hits.append(
+                _dep_hit(
+                    kind="event",
+                    line=_line_of(conteudo, m.start()),
+                    symbol=_nearest_symbol(conteudo, m.start()),
+                    target=m.group(1),
+                    role="produce",
+                    confidence=0.8,
+                )
+            )
+    for regex in EVENT_CONSUME_RES:
+        for m in regex.finditer(conteudo):
+            hits.append(
+                _dep_hit(
+                    kind="event",
+                    line=_line_of(conteudo, m.start()),
+                    symbol=_nearest_symbol(conteudo, m.start()),
+                    target=m.group(1),
+                    role="consume",
+                    confidence=0.8,
+                )
+            )
+    return hits
+
+
+def _extract_build_hits(path: Path, conteudo: str) -> list[dict[str, Any]]:
+    """Dependências declaradas em arquivos de build."""
+    name = path.name
+    hits: list[dict[str, Any]] = []
+
+    def add(target: str, line: int | None) -> None:
+        target = target.strip()
+        if not target:
+            return
+        hits.append(
+            _dep_hit(
+                kind="build",
+                line=line,
+                symbol=None,
+                target=target,
+                role="build",
+                confidence=0.9,
+            )
+        )
+
+    if name == "pom.xml":
+        for regex in (POM_ARTIFACT_RE, POM_MODULE_RE):
+            for m in regex.finditer(conteudo):
+                add(m.group(1), _line_of(conteudo, m.start()))
+    elif name == "package.json":
+        try:
+            data = json.loads(conteudo)
+        except json.JSONDecodeError:
+            return hits
+        for bucket in ("dependencies", "devDependencies", "peerDependencies"):
+            for key in (data.get(bucket) or {}):
+                add(str(key), None)
+    elif name in {"build.gradle", "build.gradle.kts"}:
+        for m in GRADLE_PROJECT_RE.finditer(conteudo):
+            add(m.group(1), _line_of(conteudo, m.start()))
+        for m in GRADLE_COORD_RE.finditer(conteudo):
+            coord = m.group(1)
+            artifact = coord.split(":")[1] if ":" in coord else coord
+            add(artifact, _line_of(conteudo, m.start()))
+    elif name == "go.mod":
+        for m in GOMOD_REQUIRE_RE.finditer(conteudo):
+            add(m.group(1).rsplit("/", 1)[-1], _line_of(conteudo, m.start()))
+    elif name in {"requirements.txt", "pyproject.toml"}:
+        if name == "pyproject.toml":
+            for m in re.finditer(
+                r"[\"']([A-Za-z0-9_.\-]+)[\"']\s*[>=<~!]", conteudo
+            ):
+                add(m.group(1), _line_of(conteudo, m.start()))
+        else:
+            for m in PY_REQ_RE.finditer(conteudo):
+                raw = m.group(1)
+                if raw.startswith("#") or raw in {"-r", "-e"}:
+                    continue
+                add(re.split(r"[<=>[~]", raw, 1)[0], _line_of(conteudo, m.start()))
+    elif name == "Cargo.toml":
+        in_deps = False
+        for i, line in enumerate(conteudo.splitlines(), start=1):
+            stripped = line.strip()
+            if stripped.startswith("[") and "dependencies" in stripped:
+                in_deps = True
+                continue
+            if stripped.startswith("["):
+                in_deps = False
+                continue
+            if in_deps:
+                key = stripped.split("=", 1)[0].strip()
+                if key and not key.startswith("#"):
+                    add(key, i)
+    return hits
+
+
 def _detect_stack(repo: Path) -> list[str]:
     stack: list[str] = []
     checks = {
@@ -275,7 +496,35 @@ def index_repo(repo: Path) -> dict[str, Any]:
     campos: Counter[str] = Counter()
     termos: Counter[str] = Counter()
     evidencias: list[dict[str, Any]] = []
+    dependencias: list[dict[str, Any]] = []
     arquivos = 0
+
+    def _read(path: Path) -> str | None:
+        try:
+            if path.stat().st_size > MAX_FILE_BYTES:
+                return None
+            return path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return None
+
+    def _append_deps(rel: str, hits: list[dict[str, Any]]) -> None:
+        for hit in hits:
+            dependencias.append({**hit, "file": rel})
+
+    for path in repo.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in IGNORE_DIRS for part in path.parts):
+            continue
+        if path.name not in BUILD_FILENAMES:
+            continue
+        conteudo = _read(path)
+        if conteudo is None:
+            continue
+        rel = str(path.relative_to(repo))
+        _append_deps(rel, _extract_build_hits(path, conteudo))
+        if path.suffix.lower() in CODE_EXTS:
+            _append_deps(rel, _extract_dependency_hits(conteudo))
 
     for path in repo.rglob("*"):
         if arquivos >= MAX_FILES_PER_REPO:
@@ -286,14 +535,14 @@ def index_repo(repo: Path) -> dict[str, Any]:
             continue
         if path.suffix.lower() not in CODE_EXTS:
             continue
-        try:
-            if path.stat().st_size > MAX_FILE_BYTES:
-                continue
-            conteudo = path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
+        if path.name in BUILD_FILENAMES:
+            continue
+        conteudo = _read(path)
+        if conteudo is None:
             continue
         arquivos += 1
         rel = str(path.relative_to(repo))
+        _append_deps(rel, _extract_dependency_hits(conteudo))
 
         for hit in _extract_route_hits(conteudo):
             rota = hit["route"]
@@ -413,6 +662,9 @@ def index_repo(repo: Path) -> dict[str, Any]:
     evidencias.sort(
         key=lambda e: (e.get("file") or "", e.get("line") or 0, e.get("kind") or "")
     )
+    dependencias.sort(
+        key=lambda e: (e.get("file") or "", e.get("line") or 0, e.get("kind") or "")
+    )
     return {
         "arquivos_lidos": arquivos,
         "stack": _detect_stack(repo),
@@ -423,6 +675,7 @@ def index_repo(repo: Path) -> dict[str, Any]:
         "campos": [c for c, _ in campos.most_common(40)],
         "termos": dict(sorted(limpos.items(), key=lambda kv: -kv[1])[:150]),
         "evidencias": evidencias[:400],
+        "dependencias": dependencias[:400],
     }
 
 
