@@ -29,7 +29,7 @@ Blockers **rebloqueados pela §5** do documento de propostas (decisão humana de
 | 12-ci-tokenizer-redis | CI no GitHub Actions (parte entregue) | **Done** | 01, 02 |
 | 12a-official-tokenizer | Tokenizer oficial por provider | **Done** | 01, 02 |
 | 12b-state-backend-redis | Backend de state em Redis | Todo ⏸ despriorizado | 02 |
-| 13-parallel-exec | Execução concorrente por ondas | Todo | 10, 12b, 18, 24 |
+| 13-parallel-exec | Execução concorrente por ondas | **Done** | 10, 12b, 18, 24 |
 | 14-apply-rollback | Apply de propostas + rollback | **Done** | 21, 23 |
 | 15-hardening-deep | Debugger, injection, recovery, golden recall | **Done** | 03, 08, 11 |
 | 16-hardening-review | Hotfix review (policy, evals, provenance) | Done | — |
@@ -173,18 +173,29 @@ Riscos residuais aceitos (não reabrir worktree filha):
 | `28-engineering-baseline-v2` | `5a2ddb2` | Sinais NFR no índice por substring (gaps `heuristic`); alertas/ADRs/bulkhead fora do catálogo v2; sem despacho a executor |
 
 **Onda D** aprovada e **Done** em 2026-09-18 — HEAD `60e9579` em
-`feature/devin-e2e`. `12b` parqueado. Frontier seguinte: `13-parallel-exec`
-(CAS/lock no file backend; sem Redis).
+`feature/devin-e2e` (PR [#19](https://github.com/ilaraca/prompt-less/pull/19)
+merged). `12b` parqueado.
+
+**Onda E** aprovada e **Done** em 2026-09-18 — HEAD `4175436` em
+`feature/parallel-exec`. Frontier ativa do harness **encerrada** salvo
+`12b-state-backend-redis` (Todo ⏸ parqueado — futuro).
+
+Riscos residuais aceitos do `13` (não reabrir worktree filha):
+
+| Ticket | HEAD | Residuais aceitos |
+|---|---|---|
+| `13-parallel-exec` | `4175436` | CLI sem Devin-por-task (`--stub` / adapter injetado); onda seguinte ainda roda após falha parcial; Redis/`12b` intocado |
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
+| 13-parallel-exec | **Done** | filha, HEAD `4175436` | `.worktrees/13-parallel-exec` · `feature/parallel-exec` |
+| 12b-state-backend-redis | Todo ⏸ | parqueado | futuro |
 | 10-devin-e2e | **Done** | filha, HEAD `60e9579` | `.worktrees/10-devin-e2e` · `feature/devin-e2e` |
 | 09-live-llm | **Done** | filha, HEAD `af3e67b` | `.worktrees/09-live-llm` · `feature/live-llm` |
 | 14-apply-rollback | **Done** | filha, HEAD `f9f2950` | `.worktrees/14-apply-rollback` · `feature/apply-rollback` |
 | 26-hybrid-document-retrieval | **Done** | filha, HEAD `5f5c447` | `.worktrees/26-hybrid-document-retrieval` · `feature/hybrid-document-retrieval` |
 | 28-engineering-baseline-v2 | **Done** | filha, HEAD `5a2ddb2` | `.worktrees/28-engineering-baseline-v2` · `feature/engineering-baseline-v2` |
 | 12b-state-backend-redis | Todo ⏸ | parqueado | futuro |
-| 13-parallel-exec | Todo | bloqueado por `10` (+ CAS file, sem Redis) | — |
 | (pai) onda-frontier | — | integra filhas; único PR contra `main` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
 ## Dependências (visão)
