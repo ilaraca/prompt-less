@@ -9,10 +9,9 @@ from typing import Any
 
 class EventStore:
     def __init__(self, path: Path) -> None:
-        self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.path.exists():
-            self.path.write_text("", encoding="utf-8")
+        # nada é criado aqui: o diretório da run só nasce no bootstrap, que
+        # depende de `mkdir` exclusivo para detectar colisão de run_id
+        self.path = Path(path)
 
     def emit(self, event: str, **details: Any) -> dict[str, Any]:
         record = {
@@ -20,6 +19,7 @@ class EventStore:
             "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             **details,
         }
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
         return record
