@@ -1176,6 +1176,19 @@ repositório, sem log do adapter ou com teste apenas “declarado”, o verify
 falha fechado. `--approve` **não** marca mais `approved=True` — o comando
 sai com erro e aponta para `src.approval`.
 
+Pedido de reparo (`build_repair_request` / `--attempt`):
+
+- cada invocação de `close_loop` **reexecuta verify completo** antes de montar
+  o repair (também após correção do executor)
+- a superfície editável **reaplica a política da camada** (profile +
+  `repo_root` com `realpath`/symlink) — não basta filtrar padrões protegidos
+- caminhos externos, absolutos, `..` e escapes por symlink entram em
+  `denied_paths`, nunca em `editable_surface`
+- `subject_id` de `TEST_FAILED` só entra se parecer caminho **e** a política
+  autorizar escrita; IDs `RF-*` / `AC-*` não são caminhos
+- `FILE_OUT_OF_SCOPE` → só `required_reverts` (separado dos editáveis)
+- `attempt > max` → `status=exhausted`, `unresolved=true` (falha persistente)
+
 ### Aprovação auditável (`src.approval`)
 
 Pedido, decisão humana e promoção são comandos separados. O registro em
@@ -1209,6 +1222,8 @@ Policy (`config/permission_profiles.yaml` + `src/executors/policy.py`):
 - execução nova vai por `src/executors/safe_exec.run_argv` — `shell=True` é erro
 - verify fail-closed para layer desconhecido; `NO_TESTS_REPORTED` é error em code change
 - `FILE_OUT_OF_SCOPE` → `required_reverts` (não amplia `editable_surface`)
+- reparo reaplica profile + raiz autorizada a cada tentativa (`denied_paths`
+  para escapes / write negado; IDs RF/AC nunca viram caminho)
 - rastreio RF/AC precisa existir no `result_commit` (arquivo e linha)
 
 O `close_loop` também grava `debugger.json` ao lado do `verify-report.json` (e a pipeline grava `runs/<id>/validations/debugger.json` em blocked/failed). Campos: `failure`, `agent_behavior`, `harness_component`, `root_cause`.

@@ -285,7 +285,9 @@ def test_repair_request_requires_approval(tmp_path: Path):
     verify = verify_execution(
         result, spec, layer="bff", repo_path=repo, adapter_log=adapter_log
     )
-    repair = build_repair_request(verify, result, attempt=1)
+    repair = build_repair_request(
+        verify, result, attempt=1, profile=load_profiles()["bff"], layer="bff", repo_root=repo
+    )
     assert repair is not None
     assert repair["status"] == "repair_requested"
     assert repair["requires_approval"] is True
@@ -293,8 +295,12 @@ def test_repair_request_requires_approval(tmp_path: Path):
     assert ".github/workflows/deploy.yml" in repair["required_reverts"]
     assert "infra/prod/deploy.yaml" not in repair["editable_surface"]
     assert "RF-001" not in repair["editable_surface"]
-    exhausted = build_repair_request(verify, result, attempt=3)
+    assert "src/main/java/ClienteService.java" in repair["editable_surface"]
+    exhausted = build_repair_request(
+        verify, result, attempt=3, profile=load_profiles()["bff"], layer="bff"
+    )
     assert exhausted["status"] == "exhausted"
+    assert exhausted["unresolved"] is True
 
 
 def test_devin_adapter_prepare_and_collect(tmp_path: Path):
