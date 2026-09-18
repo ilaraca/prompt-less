@@ -309,21 +309,22 @@ def bind_code_evidence(
             if s.origin == "observed" and s.confidence >= _OBSERVED_MIN
         ]
         status = ResolvedInt.from_raw(op.success_status)
-        if not status.resolved and len({s.status for s in observed_2xx}) == 1:
+        observed_status_vals = [s.status for s in observed_2xx if s.status is not None]
+        if not status.resolved and len(set(observed_status_vals)) == 1:
             ev = observed_2xx[0]
             op.success_status = ResolvedInt(
-                value=int(ev.status),
+                value=int(observed_status_vals[0]),
                 origin="observed",
                 confidence=ev.confidence,
                 requires_review=False,
             )
         elif (
             status.resolved
-            and observed_2xx
-            and status.value not in {s.status for s in observed_2xx}
+            and observed_status_vals
+            and status.value not in set(observed_status_vals)
         ):
             ev = observed_2xx[0]
-            observed = str(sorted({s.status for s in observed_2xx})[0])
+            observed = str(sorted(observed_status_vals)[0])
             _gap(
                 kind="conflict",
                 text=(

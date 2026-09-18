@@ -211,8 +211,12 @@ def build_openapi_document(
                 }
             )
             continue
-        item = paths.setdefault(op.path, {})
-        item[op.method.strip().lower()] = _operation_object(spec, op, registry)
+        path = op.path
+        method = op.method
+        if not path or not method:
+            continue
+        item = paths.setdefault(path, {})
+        item[method.strip().lower()] = _operation_object(spec, op, registry)
 
     # ordem canônica das chaves — o resto do skeleton é preservado ao final
     doc: dict[str, Any] = {

@@ -308,7 +308,6 @@ def _tipos_to_emit(ctx: StageContext) -> list[str]:
 @REGISTRY.register("context_build")
 def context_build(ctx: StageContext) -> None:
     slot = ctx.slot()
-    slim_ctx = slot["slim_ctx"]
     state = slot["state"]
     rag = slot["rag"]
     servico = slot.get("servico")

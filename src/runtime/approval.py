@@ -30,6 +30,10 @@ DECISIONS = frozenset({"requested", "approved", "rejected"})
 _UNSIGNED = frozenset({"hmac"})
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 class ApprovalError(RuntimeError):
     """Falha fail-closed do fluxo de aprovação."""
 
@@ -122,10 +126,10 @@ def extract_result_commit(
     if execution and execution.get("result_commit"):
         return str(execution["result_commit"]).strip()
     report = report or {}
-    nested = report.get("execution") if isinstance(report.get("execution"), dict) else {}
+    nested = _as_dict(report.get("execution"))
     if nested.get("result_commit"):
         return str(nested["result_commit"]).strip()
-    hashes = report.get("verify") if isinstance(report.get("verify"), dict) else {}
+    hashes = _as_dict(report.get("verify"))
     evidence = hashes.get("evidence_hashes") if isinstance(hashes, dict) else {}
     if isinstance(evidence, dict) and evidence.get("result_commit"):
         return str(evidence["result_commit"]).strip()
@@ -135,7 +139,7 @@ def extract_result_commit(
 def extract_diff_sha256(report: dict[str, Any] | None) -> str | None:
     if not isinstance(report, dict):
         return None
-    verify = report.get("verify") if isinstance(report.get("verify"), dict) else {}
+    verify = _as_dict(report.get("verify"))
     evidence = verify.get("evidence_hashes") if isinstance(verify, dict) else {}
     if isinstance(evidence, dict) and evidence.get("diff_sha256"):
         return str(evidence["diff_sha256"])
@@ -190,7 +194,7 @@ def snapshot_binding(
 
 def current_binding(run_dir: Path, bound: dict[str, Any]) -> dict[str, Any]:
     """Recalcula o binding a partir dos arquivos apontados pelo registro."""
-    paths = bound.get("paths") if isinstance(bound.get("paths"), dict) else {}
+    paths = _as_dict(bound.get("paths"))
     spec = paths.get("canonical_spec")
     report = paths.get("verify_report")
     execution = paths.get("execution")
@@ -386,7 +390,7 @@ def decide(
     run_dir = Path(run_dir)
     ledger = load_ledger(run_dir, run_id=run_id)
     pending = _require_pending(ledger)
-    bound = pending.get("binding") if isinstance(pending.get("binding"), dict) else {}
+    bound = _as_dict(pending.get("binding"))
     actual = current_binding(run_dir, bound)
     mismatches = binding_matches(bound, actual)
     if mismatches:
@@ -442,7 +446,7 @@ def assert_promotable(run_dir: Path, *, run_id: str) -> dict[str, Any]:
         raise ApprovalMissing(
             f"promover exige aprovação vinculada (último: {decision!r})"
         )
-    bound = latest.get("binding") if isinstance(latest.get("binding"), dict) else {}
+    bound = _as_dict(latest.get("binding"))
     actual = current_binding(run_dir, bound)
     mismatches = binding_matches(bound, actual)
     if mismatches:
