@@ -66,13 +66,15 @@ def dehydrate_figma(figma: dict[str, Any]) -> dict[str, Any]:
         if isinstance(btn, str):
             actions.append({"id": btn})
         elif isinstance(btn, dict):
-            actions.append(
-                {
-                    "id": btn.get("id") or btn.get("name") or btn.get("label"),
-                    "method": btn.get("method"),
-                    "path": btn.get("path") or btn.get("endpoint"),
-                }
-            )
+            action = {
+                "id": btn.get("id") or btn.get("name") or btn.get("label"),
+                "method": btn.get("method"),
+                "path": btn.get("path") or btn.get("endpoint"),
+            }
+            owner = btn.get("owner") or btn.get("service_id") or btn.get("service")
+            if owner:
+                action["owner"] = owner
+            actions.append(action)
 
     columns = []
     for col in figma.get("list", figma.get("table", figma.get("columns", []))):

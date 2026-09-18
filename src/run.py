@@ -223,6 +223,7 @@ def _run_single(
     *,
     context: str | None = None,
     servico: dict[str, Any] | None = None,
+    mapa: dict[str, Any] | None = None,
     lines_per_chunk: int = 40,
     consolidated_chars: int = 800,
     chunk_summary_chars: int = 220,
@@ -257,6 +258,7 @@ def _run_single(
         engenharia=slim_ctx.get("engenharia") or {},
         claims=list(rag.get("claims") or []),
         servico=servico,
+        mapa=mapa,
     )
     validation = validate_spec(spec)
 
@@ -377,7 +379,7 @@ def run(
     store.write_manifest({"current_stage": "reason", "service_id": context})
 
     mapa_path = (inputs_dir / "mapa-servicos.yaml") if inputs_dir else None
-    mapa = None if no_split else load_mapa(mapa_path)
+    mapa = load_mapa(mapa_path)
     documents = slim.get("documents") or []
     single_kwargs = dict(
         lines_per_chunk=lines_per_chunk,
@@ -387,6 +389,7 @@ def run(
         output_root=compat_root,
         state_path=effective_state,
         artifacts_root=run_ctx.artifacts_dir,
+        mapa=mapa,
     )
 
     def _mirror_state(data: dict) -> None:
