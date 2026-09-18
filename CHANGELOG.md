@@ -17,6 +17,19 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   avisos informativos (`ORPHAN_CLAIM`, `NFR_FROM_BASELINE`) seguem não bloqueantes
 - Modelo `ReviewDecision` em `src/domain/review.py`; testes de approve/reject/
   stale em `tests/integration/test_contextual_provenance.py`
+- **Falha inequívoca na CLI** (`34-cli-failure-exit`): `python -m src.run`
+  imprime o JSON da run e sai com código **2** quando `status` é `blocked` ou
+  `failed` (sucesso continua 0). Exceções viram JSON `{status, error,
+  error_type}` legível para automação
+- `assert_run_ready_for_executor` (`src/runtime/consume.py`) e gate no
+  `python -m src.executors.devin`: run blocked/failed ou `run_id` divergente
+  não despacha; espelho `outputs/.mirror-manifest.json` com status ≠ completed
+  também recusa reutilização de história antiga
+- Flags `--inputs-dir` / `--output-root` em `src.run` (isolamento de testes e
+  workspaces)
+- Em blocked/failed, o espelho é **invalidado** (podando o que a publicação
+  anterior listou) e `manifest.result_summary.reason` alinha com o JSON da CLI
+- Testes de subprocesso: `tests/integration/test_cli_failure_exit.py`
 
 - **Execução concorrente por ondas** (`13-parallel-exec`): scheduler
   `src/executors/scheduler.py` consome `waves` do `implementation_plan`, limita
