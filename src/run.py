@@ -26,10 +26,11 @@ from src.emit import emit  # noqa: E402
 from src.ingest import ARTIFACT_TEMPLATES, load_inputs  # noqa: E402
 from src.preprocess import preprocess  # noqa: E402
 from src.rag_compress import compress_rag  # noqa: E402
+from src.runtime.atomic_io import atomic_write_json, atomic_write_text  # noqa: E402
 from src.reason import build_llm_package, dry_run_scaffold  # noqa: E402
 from src.renderers import render_historia, render_prd  # noqa: E402
 from src.repo_index import load_index, service_evidence  # noqa: E402
-from src.runtime import RunContext, RunStore  # noqa: E402
+from src.runtime import RunContext, RunStore, context_subdir  # noqa: E402
 from src.servicos import (  # noqa: E402
     docs_for_service,
     get_service,
@@ -90,20 +91,19 @@ def _build_one(
         emit_root = artifacts_root.parent
         emit_subdir = "artifacts"
         if context:
-            pkg_path = artifacts_root / "contextos" / context / pkg_name
+            pkg_path = context_subdir(artifacts_root, context) / pkg_name
         else:
             pkg_path = artifacts_root / pkg_name
     else:
         emit_root = output_root
         emit_subdir = "outputs"
-        base = output_root or ROOT
+        base = (output_root or ROOT) / "outputs"
         if context:
-            pkg_path = base / "outputs" / "contextos" / context / pkg_name
+            pkg_path = context_subdir(base, context) / pkg_name
         else:
-            pkg_path = base / "outputs" / pkg_name
+            pkg_path = base / pkg_name
 
-    pkg_path.parent.mkdir(parents=True, exist_ok=True)
-    pkg_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(pkg_path, package)
 
     if dry_run:
         if tipo == "historia" and canonical_spec is not None:
@@ -204,22 +204,18 @@ def _run_single(
 
     # persiste IR + validação antes de qualquer render
     if artifacts_root is not None:
-        spec_dir = artifacts_root / "contextos" / context if context else artifacts_root
-        spec_dir.mkdir(parents=True, exist_ok=True)
+        spec_dir = context_subdir(artifacts_root, context) if context else artifacts_root
         spec_path = spec_dir / "canonical-spec.yaml"
-        spec_path.write_text(
+        atomic_write_text(
+            spec_path,
             yaml.safe_dump(spec.to_dict(), allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
         )
-        val_dir = artifacts_root.parent / "validations"
-        if context:
-            val_dir = val_dir / context
-        val_dir.mkdir(parents=True, exist_ok=True)
+        validations_root = artifacts_root.parent / "validations"
+        val_dir = (
+            context_subdir(validations_root, context) if context else validations_root
+        )
         val_path = val_dir / "spec-validation.json"
-        val_path.write_text(
-            json.dumps(validation.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        atomic_write_json(val_path, validation.to_dict())
     else:
         spec_path = None
         val_path = None
@@ -376,8 +372,10 @@ def run(
             errors=len(exc.validation.errors),
             context=ctx,
         )
-        report = run_ctx.validations_dir / (
-            f"{ctx}/spec-validation.json" if ctx else "spec-validation.json"
+        report = (
+            run_ctx.context_validations_dir(ctx) / "spec-validation.json"
+            if ctx
+            else run_ctx.validations_dir / "spec-validation.json"
         )
         claims = (
             [claim.to_dict() for claim in exc.spec.claims] if exc.spec else []
@@ -552,7 +550,9 @@ def run(
         return _finalize(_blocked_payload(exc), status="blocked")
     except Exception as exc:
         store.events.emit("run_failed", error=str(exc))
-        store.finish("failed")
+        # a run já pode ter sido finalizada antes da falha — não reabre estado terminal
+        if not store.is_finished:
+            store.finish("failed")
         raise
 
 
