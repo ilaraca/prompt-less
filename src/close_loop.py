@@ -2,6 +2,10 @@
 """
 Fecha o ciclo: carrega ExecutionResult + Canonical Spec → verify (Git + logs) → repair.
 
+Cada invocação reexecuta verify completo antes de montar o pedido de reparo.
+`build_repair_request` reaplica a política da camada (profile + raiz do repo)
+a cada `--attempt`. Tentativas além do limite terminam `exhausted` / unresolved.
+
 Uso:
   python -m src.close_loop --spec path/canonical-spec.yaml --result path/execution.json --repo path/checkout
   python -m src.close_loop --spec ... --result ... --repo ... --adapter-log path/adapter-log.jsonl
@@ -36,6 +40,7 @@ from src.domain.spec import (  # noqa: E402
 from src.hardening.debugger import build_debugger_report  # noqa: E402
 from src.executors import DevinAdapter, build_repair_request, verify_execution  # noqa: E402
 from src.executors.base import ExecutionResult  # noqa: E402
+from src.executors.policy import load_profiles  # noqa: E402
 from src.runtime.atomic_io import atomic_write_json  # noqa: E402
 
 
@@ -112,6 +117,7 @@ def close_loop(
     execution = adapter.collect_result()
 
     log_path = adapter_log or _default_adapter_log(result_path, execution)
+    # Sempre re-verify completo (também após cada tentativa de reparo).
     verify = verify_execution(
         execution,
         spec,
@@ -121,7 +127,17 @@ def close_loop(
     )
     repair = None
     if verify.has_errors and verify.status != "needs_approval":
-        repair = build_repair_request(verify, execution, attempt=attempt)
+        profiles = load_profiles()
+        layer_name = layer or execution.layer
+        profile = profiles.get(layer_name) if layer_name else None
+        repair = build_repair_request(
+            verify,
+            execution,
+            attempt=attempt,
+            profile=profile,
+            layer=layer_name,
+            repo_root=repo_path,
+        )
     elif verify.status == "needs_approval":
         repair = {
             "status": "awaiting_approval",

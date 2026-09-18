@@ -9,6 +9,14 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- **Política completa no reparo** (`36-repair-policy`): `build_repair_request`
+  deixa de filtrar só padrões protegidos — reaplica profile da camada +
+  `repo_root` (`resolve_repo_path` / realpath / symlink) a cada tentativa.
+  Escapes (absoluto, `..`, symlink fora do repo) e writes negados vão para
+  `denied_paths`; `TEST_FAILED` só amplia `editable_surface` se autorizado;
+  IDs RF/AC não são caminhos; `FILE_OUT_OF_SCOPE` permanece só em
+  `required_reverts`; `attempt > max` → `exhausted` com `unresolved=true`.
+  `close_loop` passa profile/`--repo` e sempre re-verifica antes do repair.
 - **Gates obrigatórios de avaliação** (`30-eval-required-gates`): `score_case()`
   separa diagnóstico (`layer_scores`) de aprovação (`required_gates` /
   `fail_reasons`). Dimensões obrigatórias — spec presente/com sinais, artefatos
