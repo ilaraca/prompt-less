@@ -586,11 +586,10 @@ def validate_openapi_against_spec(
 
     issues: list[ValidationIssue] = []
     allowed_statuses = spec.http_statuses()
-    ir_paths = {op.path for op in spec.operations if op.path}
+    ir_paths = {op.path for op in spec.contract_operations()}
     ir_calls = {
         (op.path, (op.method or "").strip().lower())
-        for op in spec.operations
-        if op.path and op.method
+        for op in spec.contract_operations()
     }
     by_op_id = {op.id: op for op in spec.operations}
     error_ids = {e.id for e in spec.errors}
@@ -706,7 +705,7 @@ def validate_mermaid_against_spec(spec: CanonicalSpec, content: str) -> Validati
     """Sequência não pode citar status ou path ausente no Canonical Spec."""
     issues: list[ValidationIssue] = []
     allowed_statuses = spec.http_statuses()
-    ir_paths = {op.path for op in spec.operations if op.path}
+    ir_paths = {op.path for op in spec.contract_operations()}
 
     for match in re.finditer(r"(?<![-\w.])([1-5]\d{2})(?![\w.])", content):
         status = int(match.group(1))

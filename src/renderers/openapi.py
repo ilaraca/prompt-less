@@ -201,7 +201,7 @@ def build_openapi_document(
     paths: dict[str, Any] = {}
     pendentes: list[dict[str, Any]] = []
     for op in spec.operations:
-        if not op.method or not op.path:
+        if not op.is_contract():
             pendentes.append(
                 {
                     "id": op.id,
