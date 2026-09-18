@@ -1,0 +1,6 @@
+No dia a dia do time de onboarding ficou combinado que toda tentativa de abrir
+conta sem conseguir comprovar quem e a pessoa deve ser barrada na entrada.
+Ninguem descreveu isso com termos tecnicos; apenas que a recusa acontece e o
+cliente recebe um aviso de que o cadastro nao pode seguir.
+Tambem ha o entendimento de que, sem sessao reconhecida, a pessoa nao enxerga
+os dados sensiveis do produto.

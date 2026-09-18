@@ -129,8 +129,15 @@ def _service_trace(spec: CanonicalSpec) -> tuple[list[str], list[str]]:
     )
 
 
-def _nfr_ids(spec: CanonicalSpec) -> list[str]:
-    return [n.id for n in spec.nfrs]
+def _nfr_ids(spec: CanonicalSpec, *, layer: str | None = None) -> list[str]:
+    """IDs de NFR do IR; com `layer`, só os aplicáveis à camada da task."""
+    ids: list[str] = []
+    for n in spec.nfrs:
+        n_layers = getattr(n, "layers", None) or []
+        if layer and n_layers and layer not in n_layers:
+            continue
+        ids.append(n.id)
+    return ids
 
 
 def _evidence_for(spec: CanonicalSpec, *, repo: str | None, op: Operation | None) -> dict[str, Any]:
@@ -386,7 +393,7 @@ def _sdd_task(
         "operation_id": op.id if op else None,
         "rf_ids": list(rf_ids),
         "ac_ids": list(ac_ids),
-        "nfr_ids": _nfr_ids(spec),
+        "nfr_ids": _nfr_ids(spec, layer=plan_task.get("layer")),
         "evidence": evidence["items"],
         "evidence_status": evidence["status"],
         "depends_on": list(depends_on),

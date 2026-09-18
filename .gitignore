@@ -10,9 +10,13 @@ coverage.xml
 reports/
 state/workflow.json
 state/repo_index.json
+state/doc_section_index.json
 state/knowledge/
 outputs/*
 !outputs/.gitkeep
 runs/
 *.bak
-.scratch/
+# Scratch local de experimentos; o Kanban do harness é versionado.
+.scratch/*
+!.scratch/harness/
+!.scratch/harness/**

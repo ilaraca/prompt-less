@@ -19,8 +19,12 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 - prefixo de system/tools **estável e cacheável** (OpenAI / Claude);
 - budget explícito de tokens (alvo ~650; teto ~2000);
 - **PRD.md** gerado junto com a história, como insumo canônico para **SDD**;
-- baseline de engenharia (**stack + NFR v1**: timeout/retry + logs + README/changelog/Javadoc) via `inputs/engenharia.yaml`;
-- **harness**: runtime por `run_id`, provenance/claims, Canonical Spec + quality gate, ciclo verify/repair, plano multi-repo e melhoria com evals (sem apply automático).
+- baseline de engenharia (**stack + NFR v2**: timeout/retry/circuit breaker/
+  metrics/tracing/idempotência/segurança, selecionados por camada/criticidade)
+  via `inputs/engenharia.yaml` (schema versionado);
+- **harness**: runtime por `run_id`, provenance/claims, Canonical Spec + quality gate,
+  ciclo verify/repair, plano multi-repo, melhoria com evals e `src.apply` (config
+  versionada com snapshot/rollback).
 
 **Princípio:** nunca enviar dados brutos ao modelo se puderem ser filtrados ou comprimidos antes.
 
@@ -52,7 +56,7 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 
 | Cenário | Motivo |
 |--------|--------|
-| Geração 100% automática em produção sem revisão humana | Dry-run preenche esqueleto; `--live` (API) ainda é slot a plugar; Devin E2E e apply+rollback são série 2 |
+| Geração 100% automática em produção sem revisão humana | `--live` chama OpenAI/Claude, mas revisão humana + gates de IR continuam; apply em config exige risco `low` ou aprovação (`21`); Devin E2E é `10` |
 | Documentos sem sinais lexicais de negócio | Resumo extrativo prioriza termos (regra, HTTP, endpoint…); texto só narrativo pode ser filtrado demais |
 | Extração fiel linha a linha de PDFs jurídicos/contratos | Foco é **sinal para artefato técnico**, não arquivo íntegro |
 | `.doc` legado fora do macOS sem `antiword` | Conversão depende de `textutil` (macOS) ou `antiword` |
@@ -101,6 +105,7 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
  [approval] ─────────────── request-approval → approve|reject → promote (HMAC)
  [plan_repos] ───────────── mapa + evidência de código/contratos → implementation_plan (ondas)
  [improve] ──────────────── diagnose → apply no candidato → evals distintas → accepted / approved_for_experiment / rejected
+ [apply] ────────────────── snapshot → change.key/value em config/ → re-eval → keep ou rollback
 ```
 
 ### Técnicas de economia de tokens (mapeamento do artigo)
@@ -193,7 +198,7 @@ O padrão **Retrieve → Augment → Generate** aparece assim:
 |--------------------|----------------|
 | **Retrieve** | Selecionar e fatiar o que já está nos insumos da execução (UI, regras, docs em `inputs/`) |
 | **Augment** | Comprimir e juntar num `consolidated` ≤ budget |
-| **Generate** | Montar pacote LLM / dry-run scaffold / (futuro) chamada `--live` |
+| **Generate** | Montar pacote LLM / dry-run scaffold / chamada `--live` (OpenAI Responses ou Claude Messages) |
 
 Fluxo interno de `compress_rag()`:
 
@@ -221,7 +226,7 @@ Esse `consolidated` é o que vai para o campo `contexto_comprimido` do pacote LL
 
 | Recurso típico de RAG “full” | Status aqui |
 |------------------------------|-------------|
-| Embeddings (OpenAI, sentence-transformers, etc.) | Não |
+| Embeddings (OpenAI, sentence-transformers, etc.) | Não (2ª camada híbrida = sinônimos locais + TF) |
 | Vector DB (Chroma, Pinecone, pgvector…) | Não |
 | Similarity search / top-k por query | Não |
 | Índice persistente entre execuções | **Sim** — `state/repo_index.json` (código dos repos, ver seção 13) |
@@ -234,6 +239,14 @@ Esse `consolidated` é o que vai para o campo `contexto_comprimido` do pacote LL
 
 - **RAG desta pipeline:** “pegue estes arquivos desta pasta, fatie, filtre o que parece regra/API, comprima, entregue ao modelo.”
 - **RAG vetorial:** “indexe milhares de docs; para esta pergunta, busque os k trechos mais similares semanticamente.”
+
+Além do caminho flat (`doc_compress`), o roteador em `src/hybrid_retrieval.py`
+classifica o insumo (`structured` | `flat`). Documento com títulos usa âncoras
+de seção (`doc_preface.parse_sections` + TF-IDF); documento plano mantém
+chunk + `SIGNAL_RE`. Segunda camada semântica é **opcional** e limitada por
+budget (fallback local com sinônimos — sem provider externo). Secrets/PII são
+scrubados antes. Índice invertido por seção em `state/doc_section_index.json`
+(como `repo_index`), **não** no prompt.
 
 Evolução natural (próximo passo): manter `doc_compress` / budget e trocar só o **Retrieve** por embeddings + top-k, sem mudar o resto do pipeline.
 
@@ -262,7 +275,7 @@ Estimativa de tokens: tokenizer do provider configurado em `models.provider` / `
 - **`src/renderers/`**: com Canonical Spec disponível, os artefatos são renderizados do IR (`render_historia`, `render_prd`, `render_openapi`, `render_mermaid`, `render_sdd`).
 - **`dry_run_scaffold`**: fallback legado (sem IR) que preenche o template localmente, sem API.
 - Na história/PRD, o render usa o IR + **`engenharia`** + `consolidated` (RF/AC + stack/NFR + handoff SDD). Estado atual e gaps saem de `current_state` / `gaps` do Canonical Spec — sem índice a seção declara *índice não aplicado*, nunca “sem gaps”.
-- **`--live`**: slot ainda não implementado — deve consumir o pacote já comprimido.
+- **`--live`**: chama OpenAI Responses ou Claude Messages consumindo o `llm_package_*.json` já comprimido (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`).
 
 ### 8. `emit` (`src/emit.py` + `also_emit` em `run.py`)
 
@@ -276,7 +289,7 @@ Estimativa de tokens: tokenizer do provider configurado em `models.provider` / `
 ```
 figma.json ──────► preprocess ──► ui {inputs, actions, columns} ──┐
 regras.yaml ─────► preprocess ──► regras {bloqueios, …} ──────────┤
-engenharia.yaml ► preprocess ──► engenharia {stack, NFR v1} ─────┼─► rag_compress ─► consolidated
+engenharia.yaml ► preprocess ──► engenharia {stack, NFR v2 selecionados} ─┼─► rag_compress ─► consolidated
 docs *.txt ──────► doc_compress ─► resumos/consolidado docs ─────┘         │
                                                                             ▼
 state/workflow.json ◄── só metadados                               context_builder
@@ -308,7 +321,7 @@ Além do artefato, a pipeline grava o **pacote LLM** (contexto já comprimido):
 - `outputs/llm_package_historia.json`
 - `outputs/llm_package_prd.json`
 
-Cada pacote inclui variantes `openai` e `claude` para plugar a API no modo `--live`.
+Cada pacote inclui variantes `openai` e `claude` consumidas pelo modo `--live`.
 
 ### PRD → SDD
 
@@ -317,7 +330,7 @@ O `PRD.md` nasce com:
 - **frontmatter YAML** (`id`, `artifacts`, `sdd.expected`, `nfr_ids`) para parsers de SDD
 - RF (`RF-xx`) a partir das regras/UI
 - AC (`AC-xx`) BDD alinhados à história
-- NFR (`NFR-R|O|S|D-xx`) a partir de `engenharia.yaml` (baseline v1)
+- NFR (`NFR-R|O|S|D-xx`) a partir de `engenharia.yaml` (baseline v2, selecionados)
 - contrato de dados (entrada/saída/ações)
 - seção **Handoff para SDD** (o que o próximo estágio deve gerar)
 - contexto comprimido do Prompt-less (sem texto bruto)
@@ -371,7 +384,7 @@ Figma + regras + docs
 - Título, Contexto (1 linha), Critérios BDD (Dado/Quando/Então), Dependências
 - Critérios = tradução das condições de `regras.yaml`
 - Payloads alinhados ao Figma
-- Escopo técnico + DoD NFR a partir de `engenharia.yaml` (baseline v1: timeout/retry + logs + documentação)
+- Escopo técnico + DoD NFR a partir de `engenharia.yaml` (baseline v2)
 
 **PRD**
 
@@ -541,7 +554,20 @@ Gera scaffold do artefato + pacote LLM comprimido:
 
 ### Live (API)
 
-`--live` está reservado para plugar clientes OpenAI/Claude em `src/reason.py` usando o JSON já montado em `outputs/llm_package_*.json`. Hoje levanta `NotImplementedError` de propósito.
+Por padrão a pipeline é **dry-run** (sem rede). Com `--live`, `src/reason.py` envia o `llm_package_*.json` ao vendor conforme `models.provider` em `config/pipeline.yaml`:
+
+| Provider | API | Variável de ambiente |
+|---|---|---|
+| `openai` (default) | OpenAI Responses (`/v1/responses`) | `OPENAI_API_KEY` |
+| `anthropic` | Claude Messages (`/v1/messages`) | `ANTHROPIC_API_KEY` |
+
+```bash
+export OPENAI_API_KEY=sk-...          # ou ANTHROPIC_API_KEY=...
+export PROMPTLESS_INTEGRITY_KEY="$(openssl rand -hex 32)"
+.venv/bin/python -m src.run historia --live
+```
+
+Telemetria real grava em `token_usage` / `llm_package.meta`: `billable`, `delta` (vs estimado), `cache_hit` / `cache_read_tokens` quando o vendor reporta, e `cost_usd` (tabela de `src/economia.py`). Falha de API aborta o estágio `reason` **sem** gravar o pacote/artefato live daquele tipo — `runs/<id>/` permanece íntegro (manifest `failed`).
 
 ### Testes e CI
 
@@ -1145,6 +1171,22 @@ O `close_loop` também grava `debugger.json` ao lado do `verify-report.json` (e 
 
 O adapter Devin (`src/executors/devin.py`) é stub até o ticket E2E da série 2.
 
+### Apply + rollback (`src.apply`)
+
+```bash
+.venv/bin/python -m src.apply --root . --proposal-json /tmp/prop.json --cases happy_path
+# risco medium+ exige run aprovada:
+.venv/bin/python -m src.apply --root . --proposal-json /tmp/medium.json \
+  --run-dir runs/<id> --run-id <id> --cases happy_path
+```
+
+Fluxo: gate de risco → snapshot de bytes em `state/knowledge/snapshots/<id>/` → aplica
+`change.key/value` em arquivos versionados sob `config/` (YAML nomeado quando o prefixo
+bate, senão `proposal-overlay.yaml`) → re-roda a eval suite com o cfg mesclado
+(baseline pré-apply × candidate pós-apply) → regressão restaura bytes e marca
+`rejected`; sem regressão mantém a mudança e registra `accepted` com
+`applied_to_production`.
+
 ### Hardening (`src/hardening/`)
 
 Camada de confiança da run, **antes** do `--live`:
@@ -1251,6 +1293,7 @@ pipeline/
 │   ├── fixtures/                  # evals + executor samples
 │   └── integration/
 └── src/
+    ├── apply.py                   # apply em config + snapshot/rollback
     ├── run.py                     # pipeline + Canonical Spec + runtime
     ├── close_loop.py              # verify por evidência (Git + logs) / repair
     ├── approval.py                # request-approval / approve / promote (HMAC)
@@ -1474,15 +1517,19 @@ Na amostra incluída (~3000 linhas + microserviços + docx), a calculadora típi
 **Contagem naive (baseline):** docs brutos + figma/regras/engenharia/template + ~2,5k system + ~1,8k tools + ~3k histórico.  
 **Contagem Prompt-less:** pacote de `build_context` (system compacto + state + consolidado + template) + tools compactas — **sem** histórico e **sem** texto bruto.
 
-Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `src/economia.py` se o vendor mudar a lista. A contagem usa o tokenizer do `--modelo` (`method=official` via tiktoken no OpenAI). Sem a lib oficial, ou em Anthropic/Gemini, o fallback é `chars÷4` com `method=heuristic` e **não** é apresentado como contagem exata. O campo `token_usage.delta` (estimado vs billable) fica pronto para o modo live.
+Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `src/economia.py` se o vendor mudar a lista. A contagem pré-chamada usa o tokenizer do `--modelo` (`method=official` via tiktoken no OpenAI). Sem a lib oficial, ou em Anthropic/Gemini, o fallback é `chars÷4` com `method=heuristic` e **não** é apresentado como contagem exata. No `--live`, `token_usage.billable` / `delta` / `cache_hit` vêm da resposta do vendor (`observe_billable`).
 
 ---
 
 ## Limitações atuais e próximos passos
 
-**Limitações**
+**Limitações** (riscos residuais da Onda C aceitos em 2026-09-18 — ver board)
 
-- Modo `--live` (chamada real OpenAI/Claude) ainda não implementado
+- `--live` cobre OpenAI Responses e Claude Messages (HTTP stdlib); Google Gemini
+  ainda não tem client; loop de tools de recovery é limitado a poucas rodadas;
+  IDs Anthropic curtos mapeiam para snapshot pinned; `cost_usd` usa tabela local
+  (`economia.MODELOS`), não a fatura do vendor; artefato live ainda passa pelo
+  gate `derived_artifact` (saída fora do IR bloqueia — intencional) (`09`)
 - Adapter Devin no `close_loop` é stub (E2E real = `10`); o verify já exige
   checkout Git (`--repo`), `base_commit`/`result_commit` e log JSONL do adapter
   — **aceito** (20, 2026-09-18)
@@ -1490,11 +1537,16 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   worktree limpo antes do close_loop é o `10`
 - Sem `PROMPTLESS_INTEGRITY_KEY`, `evidence_hashes.hmac` fica nulo (SHA-256
   permanece) — **aceito**; selo tamper-evident da aprovação é o `21`
-- `improve` aplica propostas só no workspace candidato e compara evals distintas; apply + rollback em produção continua no ticket `14`
+- `improve` aplica propostas só no workspace candidato; `python -m src.apply`
+  promove config versionada com snapshot/rollback (`14`). Overlay/keys ainda sem
+  consumidor completo de negócio no IR (persistência + anti-regressão). Jitter de
+  `avg_latency_ms` sozinho não prova melhoria. `promote` continua só selo.
+  Sem `--cases`, a suíte default de apply é a completa (custo alto)
+- Recuperação híbrida: 2ª camada semântica = sinônimos locais + TF (não
+  embeddings); `doc_preface` CLI permanece navegação do agente, não estágio (`26`)
 - OpenAPI/Mermaid derivam do IR já fatiado por `owner`: `--all-contexts` não
   replica a action de um serviço no contrato de outro; operação sem dono e
   erro órfão ficam `unresolved`
-
 - Status de sucesso só é resolvido com evidência: um 2xx declarado inequívoco
   (uma operação + um 2xx nas decisões) **ou** um 2xx único observado no código
   na rota casada (`origin: observed`); fora disso permanece `unresolved`
@@ -1503,8 +1555,13 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 - Plano multi-repo sem evidência de código cai na topologia por camada
   (`origin: heuristic`, exige revisão); execução paralela das ondas ainda não roda (ticket `13`)
 - O pacote SDD lê o grafo multi-repo observado quando há evidência; fallback
-  heurístico continua `requires_review`. Não classifica NFR por tipo (28)
-- Nenhuma task do SDD é despachada a executor (`10`) nem passa por apply/rollback (`14`)
+  heurístico continua `requires_review`. NFRs são selecionados por camada +
+  criticidade (`28`); tasks recebem o subconjunto da sua `layer`
+- Sinais de NFR no índice (CircuitBreaker, MeterRegistry, OTel…) são heurísticos
+  por substring — falso positivo/negativo possível; gap `GAP-NFR-*` marca origem
+  `heuristic` quando o baseline exige e o código não mostra sinal (`28`)
+- Alertas/ADRs/bulkhead ainda não entram no catálogo v2
+- Nenhuma task do SDD é despachada a executor (`10`)
 - Resumo de docs é **extrativo por regex**, não LLM small (bom custo; pode perder nuance)
 - Tokenizer oficial cobre OpenAI via `tiktoken`; Anthropic/Gemini e ausência da lib usam heurística `chars÷4` (`method=heuristic`), nunca como contagem exata
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
@@ -1516,14 +1573,12 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 
 **Próximos passos (série 2 — ver CHANGELOG [Unreleased])**
 
-1. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`) — consome as tools já no pacote
-2. Devin CLI real no `close_loop`
-1. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`) — consome as tools já no pacote
-2. Devin CLI real no `close_loop`
-3. Redis opcional (state backend)
-4. Execução concorrente por ondas + apply/rollback de propostas em produção (`14`)
-5. NFR por tipo (resiliência / observabilidade / segurança) no consumidor SDD (`28`)
-6. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
+1. Devin CLI real no `close_loop` (`10`)
+2. Redis opcional (state backend) (`12b`)
+3. Execução concorrente por ondas (`13`)
+4. Client `--live` para Gemini / endurecer o agent loop de tools
+5. Embeddings opcionais na 2ª camada de retrieval (hoje sinônimos locais)
+6. Alertas / ADRs / bulkhead no catálogo de engenharia (extensão do `28`)
 7. Ligar estágios opcionais de scan/index/marcar no grafo default
 
 

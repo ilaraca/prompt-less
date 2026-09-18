@@ -17,8 +17,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -35,6 +33,7 @@ from src.runtime import (  # noqa: E402
     build_run_result,
     default_registry,
 )
+from src.runtime.config_load import load_merged_cfg  # noqa: E402
 from src.runtime.orchestrator import blocked_payload  # noqa: E402
 from src.state_store import write_state  # noqa: E402
 from src.tokenizer import chars_for_token_budget, configure_from_cfg  # noqa: E402
@@ -42,7 +41,7 @@ from src.validators import PipelineBlocked  # noqa: E402
 
 
 def load_cfg() -> dict:
-    return yaml.safe_load((ROOT / "config" / "pipeline.yaml").read_text(encoding="utf-8"))
+    return load_merged_cfg(ROOT)
 
 
 def run(

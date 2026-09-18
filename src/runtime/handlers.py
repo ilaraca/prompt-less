@@ -7,17 +7,24 @@ from typing import Any
 import yaml
 
 from src.context_builder import build_context
-from src.doc_compress import compress_documents
+from src.hybrid_retrieval import build_query_from_ctx, compress_documents_hybrid
 from src.domain.provenance import stamp_claim_identity
 from src.emit import emit
 from src.ingest import ARTIFACT_TEMPLATES, load_inputs
 from src.preprocess import preprocess as preprocess_inputs
 from src.rag_compress import compress_rag, retrieve_chunks
 from src.hardening.input_scan import collect_untrusted_blobs, scan_blobs
-from src.reason import build_llm_package, dry_run_scaffold
+from src.reason import (
+    LiveApiError,
+    build_live_telemetry,
+    build_llm_package,
+    dry_run_scaffold,
+    live_generate,
+)
 from src.renderers import render_historia, render_mermaid, render_openapi, render_prd, render_sdd
 from src.repo_index import load_index, service_evidence
 from src.runtime.stage import HandlerRegistry, StageContext, StageError
+from src.tokenizer import TokenEstimate
 from src.servicos import (
     docs_for_service,
     get_service,
@@ -229,11 +236,15 @@ def state_write(ctx: StageContext) -> None:
 def doc_compress(ctx: StageContext) -> None:
     slot = ctx.slot()
     slim_ctx = slot.get("slim_ctx") or _prepare_slot(ctx)["slim_ctx"]
-    slot["doc_compressed"] = compress_documents(
+    state_dir = getattr(ctx.run_ctx, "state_dir", None) or (ctx.run_ctx.root / "state")
+    slot["doc_compressed"] = compress_documents_hybrid(
         slim_ctx.get("documents") or [],
+        query=build_query_from_ctx(slim_ctx),
         lines_per_chunk=int(ctx.payload.get("lines_per_chunk") or 40),
         chunk_summary_chars=int(ctx.payload.get("chunk_summary_chars") or 220),
         consolidated_chars=int(ctx.payload.get("consolidated_chars") or 800),
+        enable_semantic=bool(ctx.payload.get("enable_semantic", True)),
+        state_dir=state_dir,
     )
 
 
@@ -336,10 +347,29 @@ def context_build(ctx: StageContext) -> None:
     slot["context_pkg"] = by_tipo[ctx.payload["tipo"]]
 
 
+def _estimate_from_context(context_pkg: dict[str, Any]) -> TokenEstimate | dict[str, Any] | None:
+    usage = context_pkg.get("token_usage")
+    if isinstance(usage, dict) and usage.get("estimated") is not None:
+        return usage
+    tokens = context_pkg.get("est_tokens")
+    if tokens is None:
+        return None
+    usage_dict = usage if isinstance(usage, dict) else {}
+    method = context_pkg.get("est_tokens_method") or usage_dict.get("method") or "heuristic"
+    if method not in ("official", "heuristic"):
+        method = "heuristic"
+    return TokenEstimate(
+        tokens=int(tokens),
+        method=method,  # type: ignore[arg-type]
+        provider=str(usage_dict.get("provider") or "unknown"),
+        model=str(usage_dict.get("model") or "unknown"),
+    )
+
+
 def _render_artifact(tipo: str, slim: dict, rag: dict, spec: Any, dry_run: bool, servico: dict | None) -> str:
     template = ARTIFACT_TEMPLATES[tipo].read_text(encoding="utf-8")
     if not dry_run:
-        raise NotImplementedError("Mode --live: plugar client OpenAI/Claude no reason.py")
+        raise StageError("modo --live deve passar por live_generate antes de _render_artifact")
     if tipo == "historia" and spec is not None:
         return render_historia(spec, template, engenharia=slim.get("engenharia") or {})
     if tipo == "prd" and spec is not None:
@@ -399,8 +429,13 @@ def reason(ctx: StageContext) -> None:
 
     artifacts: dict[str, str] = {}
     packages: dict[str, Path] = {}
+    live_telemetry: dict[str, Any] | None = None
     artifacts_root = ctx.run_ctx.artifacts_dir
     claims = list((slot.get("rag") or {}).get("claims") or [])
+    dry_run = bool(ctx.payload.get("dry_run", True))
+    models_cfg = ctx.cfg.get("models") or {}
+    provider = str(models_cfg.get("provider") or "openai")
+    model = str(models_cfg.get("name") or "gpt-4o")
     for tipo, context_pkg in (slot.get("context_by_tipo") or {}).items():
         package = build_llm_package(
             context_pkg,
@@ -413,18 +448,49 @@ def reason(ctx: StageContext) -> None:
             pkg_path = ctx.run_ctx.context_artifacts_dir(ctx.context_id) / pkg_name
         else:
             pkg_path = artifacts_root / pkg_name
-        ctx.write_json(pkg_path, package)
-        artifacts[tipo] = _render_artifact(
-            tipo,
-            slot["slim_ctx"],
-            slot["rag"],
-            slot.get("spec"),
-            bool(ctx.payload.get("dry_run", True)),
-            slot.get("servico"),
-        )
+        if dry_run:
+            # Pacote + scaffold locais: dry-run permanece o default sem API.
+            ctx.write_json(pkg_path, package)
+            artifacts[tipo] = _render_artifact(
+                tipo,
+                slot["slim_ctx"],
+                slot["rag"],
+                slot.get("spec"),
+                True,
+                slot.get("servico"),
+            )
+        else:
+            # Chama a API antes de gravar artefato/pacote live — falha não
+            # corrompe runs/<id>/ (nada parcial deste tipo é commitado).
+            try:
+                live = live_generate(
+                    package,
+                    provider=provider,
+                    model=model,
+                    claims=claims,
+                )
+            except LiveApiError as exc:
+                raise StageError(f"--live falhou ({tipo}): {exc}") from exc
+            telemetry = build_live_telemetry(_estimate_from_context(context_pkg), live)
+            meta = package.setdefault("meta", {})
+            if isinstance(meta, dict):
+                meta["token_usage"] = telemetry
+                meta["live"] = {
+                    "provider": live.provider,
+                    "model": live.model,
+                    "response_id": live.response_id,
+                    "tool_rounds": live.tool_rounds,
+                    "cache_hit": live.usage.cache_hit_ratio,
+                    "billable_tokens": live.usage.billable_tokens,
+                }
+            live_telemetry = telemetry
+            ctx.write_json(pkg_path, package)
+            artifacts[tipo] = live.text
         packages[tipo] = pkg_path
     slot["artifacts"] = artifacts
     slot["package_paths"] = packages
+    if live_telemetry is not None:
+        slot["live_token_usage"] = live_telemetry
 
 
 def _gate_derived(ctx: StageContext, tipo: str, artifact: str) -> None:
@@ -501,7 +567,7 @@ def emit_stage(ctx: StageContext) -> None:
         "llm_packages": packages,
         "est_tokens": context_pkg.get("est_tokens"),
         "est_tokens_method": context_pkg.get("est_tokens_method"),
-        "token_usage": context_pkg.get("token_usage"),
+        "token_usage": slot.get("live_token_usage") or context_pkg.get("token_usage"),
         "rag": context_pkg.get("rag_stats"),
         "claims": claims_out,
         "discarded": list(rag.get("discarded") or []),

@@ -23,10 +23,7 @@ sdd:
     - api_contract.yaml
     - tasks.md
   nfr_ids:
-    - NFR-R
-    - NFR-O
-    - NFR-S
-    - NFR-D
+{{nfr_ids_yaml}}
 ---
 
 # PRD — {{titulo}}
@@ -71,8 +68,9 @@ sdd:
 
 {{criterios_bdd}}
 
-## 10. Requisitos não-funcionais (baseline v1)
-> Fonte: `inputs/engenharia.yaml`. Expandir em versões futuras (circuit breaker, metrics, tracing…).
+## 10. Requisitos não-funcionais (baseline v2)
+> Fonte: `inputs/engenharia.yaml` (schema v2). NFRs selecionados por camada/criticidade;
+> IDs estáveis compartilhados com história e tasks SDD.
 
 ### Stack e arquitetura
 {{nfr_stack_arch}}

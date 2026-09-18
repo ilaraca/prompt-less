@@ -69,6 +69,8 @@ def build_context(
         "rag_stats": {
             "raw": rag.get("est_tokens_raw"),
             "compressed": rag.get("est_tokens_compressed"),
+            "semantic": rag.get("est_tokens_semantic"),
+            "hybrid": rag.get("hybrid"),
             "method": est.method,
             "docs": (rag.get("documents") or {}).get("docs"),
             "doc_reduction_pct": (rag.get("documents") or {}).get("reduction_pct"),

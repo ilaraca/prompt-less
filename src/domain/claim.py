@@ -27,9 +27,11 @@ class Claim:
     service_id: str | None = None
     requires_review: bool = False
     chunk_id: str | None = None
+    retrieval_score: float | None = None
+    retrieval_strategy: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "id": self.id,
             "text": self.text,
             "origin": self.origin.value,
@@ -39,3 +41,8 @@ class Claim:
             "requires_review": self.requires_review,
             "chunk_id": self.chunk_id,
         }
+        if self.retrieval_score is not None:
+            data["retrieval_score"] = self.retrieval_score
+        if self.retrieval_strategy is not None:
+            data["retrieval_strategy"] = self.retrieval_strategy
+        return data

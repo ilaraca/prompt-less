@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.doc_compress import compress_documents
+from src.hybrid_retrieval import build_query_from_ctx, compress_documents_hybrid
 from src.domain.claim import Claim, ClaimOrigin
 from src.domain.chunk import content_hash
 from src.domain.provenance import make_claim_id
@@ -78,12 +78,15 @@ def compress_rag(
 
     docs = ctx.get("documents") or []
     doc_budget = max(200, consolidated_chars - len(struct_part) - 3)
-    docs_part = compress_documents(
+    docs_part = compress_documents_hybrid(
         docs,
+        query=build_query_from_ctx(ctx),
         lines_per_chunk=lines_per_chunk,
         chunk_summary_chars=chunk_summary_chars,
         consolidated_chars=doc_budget,
         service_id=service_id,
+        enable_semantic=bool(ctx.get("enable_semantic", True)),
+        state_dir=ctx.get("state_dir"),
     )
 
     parts = [p for p in (struct_part, docs_part.get("consolidated") or "") if p]
@@ -126,4 +129,7 @@ def compress_rag(
         "discarded": list(docs_part.get("discarded") or []),
         "est_tokens_raw": raw_tokens,
         "est_tokens_compressed": max(1, compressed) if consolidated else 0,
+        "est_tokens_semantic": int(docs_part.get("est_tokens_semantic") or 0),
+        "hybrid": docs_part.get("hybrid"),
+        "retrieved": docs_part.get("retrieved") or [],
     }

@@ -1,0 +1,513 @@
+Validei a main no commit a6cac20, comparando com a versão anterior db3001e.
+
+Resultado geral: a arquitetura evoluiu corretamente e o CI está verde, mas eu ainda não classificaria a solução como pronta para execução autônoma em repositórios reais. Existem alguns gates que hoje parecem seguros, porém podem ser contornados ou não estão validando a qualidade semântica.
+
+A evolução foi grande: 26 commits, Canonical Spec, provenance, runtime isolado, renderizadores, executor loop, planejamento multi-repo, learning loop e testes automatizados.
+
+Situação atual
+Área	Avaliação
+Arquitetura do harness	Muito boa
+Separação de responsabilidades	Boa
+Testes automatizados	Boa base
+Runtime por run_id	Correto
+Provenance	Boa implementação inicial
+Canonical Spec	Funcional, precisa endurecimento
+Políticas de execução	Ainda inseguras para execução real
+Evals semânticos	Insuficientes
+Self-improvement	Ainda demonstrativo
+Prontidão para produção	Ainda não
+
+O GitHub Actions da main executou com sucesso tanto o pytest quanto o smoke test do plan_repos.
+
+Achados prioritários
+1. Crítico: comandos permitidos podem carregar comandos proibidos
+
+No src/executors/policy.py, a validação usa prefixo:
+
+return any(cmd == a or cmd.startswith(a) for a in allow)
+
+Isso significa que, se este comando é permitido:
+
+./mvnw test
+
+este também passa pela allowlist:
+
+./mvnw test && terraform apply
+
+O comando não começa com terraform apply, então também não é capturado pela denylist.
+
+Outros exemplos:
+
+pytest; kubectl delete ...
+npm test && comando-não-permitido
+./mvnw test || outro-comando
+Recomendação
+
+Não valide comandos como strings prefixadas. Represente-os como argumentos:
+
+{
+  "executable": "./mvnw",
+  "args": ["test"]
+}
+
+Use execução sem shell:
+
+subprocess.run(
+    ["./mvnw", "test"],
+    shell=False,
+    check=True,
+)
+
+Se o resultado vier somente como relatório do Devin, trate a verificação como auditoria posterior, não como enforcement de segurança.
+
+Enquanto essa mudança não for feita, eu renomearia conceitualmente:
+
+permission policy
+
+para:
+
+execution audit policy
+
+porque ela ainda não impede a execução; apenas verifica o que o executor declarou ter executado.
+
+2. Alto: camada desconhecida opera em modo fail-open
+
+Em verify.py:
+
+profile = profiles.get(layer_name or "") or {}
+
+Depois, as políticas somente são verificadas quando profile possui conteúdo:
+
+if profile and not check_write_allowed(...):
+
+Se o nome do repositório não contiver bff, mfe, api ou gtw, nenhuma política é aplicada.
+
+Exemplos:
+
+processador-pagamentos
+ofertas-service
+cadastro-worker
+document-generator
+
+Esses repositórios podem resultar em layer=None e passar sem verificação de arquivos ou comandos.
+
+Recomendação
+
+Falhar fechado:
+
+if not layer_name:
+    issues.append(
+        VerifyIssue(
+            code="UNKNOWN_EXECUTION_LAYER",
+            severity="error",
+            message=f"Não foi possível determinar a camada de {result.repository}",
+        )
+    )
+    return VerifyResult(status="failed", issues=issues)
+
+O mesmo para profile inexistente:
+
+if layer_name not in profiles:
+    # bloquear
+3. Alto: arquivo fora do escopo entra na superfície editável de reparo
+
+No src/executors/loop.py, a construção de editable_surface inclui o subject_id de erros FILE_OUT_OF_SCOPE:
+
+if i.code in {
+    "FILE_OUT_OF_SCOPE",
+    "RF_NOT_MAPPED",
+    "TEST_FAILED",
+}
+
+Se o executor alterou:
+
+infra/prod/deploy.yaml
+
+o pedido de reparo pode gerar simultaneamente:
+
+editable_surface:
+  - infra/prod/deploy.yaml
+
+protected:
+  - infra/prod/**
+
+Isso cria uma instrução contraditória.
+
+Correção
+
+FILE_OUT_OF_SCOPE nunca deve virar superfície editável. Deve virar uma ação de reversão:
+
+required_reverts:
+  - infra/prod/deploy.yaml
+
+editable_surface:
+  - arquivos permitidos pelo profile
+
+Além disso, RF_NOT_MAPPED usa como subject_id algo como RF-001, que também não é um caminho editável. Portanto, editable_surface deveria ser calculado a partir do profile e dos arquivos efetivamente autorizados, não diretamente dos IDs dos erros.
+
+4. Alto: os evals verificam status, não conteúdo esperado
+
+No src/learning/evals.py, um caso é considerado correto basicamente quando:
+
+result["status"] == "completed"
+
+Ou, no caso ambíguo:
+
+result["status"] == "blocked"
+
+Porém, cada fixture possui um expected.yaml, e esse resultado esperado não está sendo realmente comparado com:
+
+requisitos extraídos;
+status HTTP;
+serviço identificado;
+ownership;
+claims;
+ACs;
+conteúdo descartado;
+artefatos renderizados.
+
+Isso permite uma regressão semântica grave passar no eval:
+
+Esperado: acesso negado retorna 403
+Gerado: acesso negado retorna 422
+Status da pipeline: completed
+Resultado do eval: passou
+Recomendação
+
+Criar scorers por domínio:
+
+def score_case(expected: dict, result: dict, spec: dict) -> CaseScore:
+    return CaseScore(
+        service_match=...,
+        expected_requirements_recall=...,
+        forbidden_requirements_count=...,
+        expected_status_match=...,
+        traceability_coverage=...,
+        unexpected_inferences=...,
+    )
+
+O primeiro conjunto de métricas deveria incluir:
+
+Métrica	Gate inicial
+Serviço esperado	100%
+Status HTTP explícito	100%
+Recall de claims críticos	100%
+RF com source claim	100%
+AC ligado a RF	100%
+Claims proibidos	0
+Decisões críticas inferidas	0 sem aprovação
+
+Esse é o principal requisito antes de chamar o ciclo de self-improvement de confiável.
+
+5. Alto: execução bloqueada perde provenance no resultado final
+
+Em src/run.py, _blocked_payload() retorna:
+
+"claims": [],
+"discarded": [],
+
+Mas PipelineBlocked recebe o próprio spec:
+
+raise PipelineBlocked(validation, spec)
+
+Portanto, no momento em que a validação encontra uma ambiguidade — justamente quando mais precisamos de evidências — os claims são removidos do payload usado pelo _finalize().
+
+O arquivo do Canonical Spec pode existir, mas o relatório consolidado de provenance da run bloqueada fica incompleto ou vazio.
+
+Correção
+
+Usar o spec contido na exceção:
+
+def _blocked_payload(exc: PipelineBlocked, ...):
+    claims = (
+        [claim.to_dict() for claim in exc.spec.claims]
+        if exc.spec
+        else []
+    )
+
+    return {
+        ...
+        "claims": claims,
+        "discarded": ...,
+    }
+
+Idealmente, PipelineBlocked também deveria carregar:
+
+rag
+discarded
+context
+
+Uma execução bloqueada não é uma execução sem memória. Na verdade, é uma das trajetórias mais valiosas para o learning loop.
+
+6. Médio: rastreabilidade valida presença do ID, mas não sua existência
+
+O validate_traceability verifica se um requisito possui source_claims, mas não confirma se esses IDs existem em spec.claims.
+
+Este requisito passa:
+
+id: RF-001
+source_claims:
+  - CLM-INEXISTENTE
+
+Também faltam verificações equivalentes para:
+
+AcceptanceCriterion.source_claims;
+SpecError.source_claims;
+OpenQuestion.source_claims;
+IDs de claims duplicados;
+Operation.error_ids inexistentes;
+operações duplicadas;
+NFRs duplicados.
+Validação sugerida
+claim_ids = {claim.id for claim in spec.claims}
+
+for rf in spec.requirements:
+    unknown = set(rf.source_claims) - claim_ids
+    if unknown:
+        issue("UNKNOWN_SOURCE_CLAIM", rf.id, unknown)
+
+Também recomendo detectar claims órfãos: existem no spec, mas nenhum requisito, erro ou decisão os utiliza.
+
+7. Médio: defaults podem aparecer como fatos confirmados
+
+No src/spec/builder.py:
+
+success_status=200
+
+Todas as operações recebem 200, independentemente de:
+
+método HTTP;
+regra de negócio;
+código existente;
+OpenAPI;
+operação assíncrona.
+
+Além disso, quando um status de bloqueio é inválido ou ausente:
+
+status_i = 422
+
+O risco é o Canonical Spec transformar um fallback técnico em requisito.
+
+Melhor representação
+@dataclass
+class ResolvedValue:
+    value: Any
+    origin: ClaimOrigin
+    confidence: float
+    requires_review: bool
+
+Exemplo:
+
+success_status:
+  value: 200
+  origin: default
+  confidence: 0.4
+  requires_review: true
+
+Para POST, a pipeline não deve inferir automaticamente 201; deve procurar evidência e, na ausência, abrir uma pergunta ou manter o campo indefinido.
+
+8. Médio: confidence=0.0 é alterado silenciosamente
+
+No builder:
+
+confidence=float(c.get("confidence") or 0.5)
+
+Se o claim tiver confiança explicitamente igual a 0.0, o operador or troca por 0.5.
+
+Em close_loop.py acontece algo semelhante:
+
+confidence=float(c.get("confidence") or 1.0)
+
+Nesse caso, 0.0 vira 1.0, o oposto do significado original.
+
+Correção
+raw_confidence = c.get("confidence")
+confidence = 0.5 if raw_confidence is None else float(raw_confidence)
+
+E no loader:
+
+confidence = 1.0 if raw_confidence is None else float(raw_confidence)
+
+Também vale validar:
+
+0.0 <= confidence <= 1.0
+9. Médio: NO_TESTS_REPORTED ainda permite aprovação
+
+Em verify.py, ausência de testes gera apenas warning:
+
+code="NO_TESTS_REPORTED",
+severity="warning"
+
+Sem outros erros, a execução pode terminar com:
+
+status = passed
+
+Para mudanças de código, isso provavelmente é permissivo demais.
+
+Sugestão
+
+A severidade deveria depender do tipo de tarefa:
+
+verification:
+  code_change:
+    tests_required: true
+  documentation_only:
+    tests_required: false
+
+E considerar não apenas se um teste foi “reportado”, mas:
+
+comando executado;
+exit code;
+quantidade;
+tipo de suíte;
+commit associado;
+log ou artefato;
+timestamp.
+
+Hoje o contrato confia bastante no autorrelato do executor.
+
+10. Médio: self-improvement ainda aceita propostas não aplicadas
+
+O src/improve.py declara corretamente no comentário:
+
+# hoje o harness não muta código; candidate = mesma eval
+
+Ou seja:
+
+baseline = harness atual
+candidate = mesmo harness atual
+
+Como os resultados naturalmente tendem a ser iguais, uma proposta de baixo risco pode ser marcada como aceita mesmo sem ter sido aplicada ou avaliada.
+
+Isso é aceitável como protótipo do gate, mas os estados deveriam ser:
+
+proposed
+approved_for_experiment
+applied_to_candidate
+evaluated
+accepted
+rejected
+
+Hoje accepted significa mais “aceita no knowledge store” do que “mudança comprovadamente melhor”.
+
+Eu mudaria imediatamente o nome para:
+
+approved_for_experiment
+
+até existir um workspace candidato separado.
+
+11. Médio: plano multi-repo impõe uma topologia genérica
+
+O src/planning/plan.py estabelece uma ordem por camada:
+
+api → gtw/bff → mfe
+
+E usa por padrão:
+
+contract_version="v2"
+
+Isso gera um bom plano inicial, mas não representa necessariamente a arquitetura real.
+
+Exemplos:
+
+BFF pode chamar outro BFF;
+gateway pode ser anterior ao BFF;
+evento pode substituir API síncrona;
+MFE pode consumir API diretamente;
+mudança pode não exigir nova versão de contrato;
+repositório chamado api pode ser consumidor, não produtor.
+Recomendação
+
+Representar dependências descobertas:
+
+dependencies:
+  - from: ofertas-bff
+    to: ofertas-api
+    evidence:
+      type: openapi-client
+      file: src/.../OfertaClient.java
+
+Quando não houver evidência suficiente, marcar o plano:
+
+origin: heuristic
+requires_review: true
+
+A topologia por camada deve ser fallback, não verdade arquitetural.
+
+12. Baixo: existe um teste que nunca pode falhar
+
+Em test_runtime_isolation.py:
+
+assert (
+    manifest1 != manifest2
+    or True
+)
+
+O or True torna a asserção sempre verdadeira.
+
+Ela pode ser removida, pois logo depois já existem verificações melhores dos run_id.
+
+13. Governança do repositório
+
+A main atualmente não está protegida e não possui required status checks. O CI está configurado e passou, mas não é obrigatório para todo merge.
+
+Eu configuraria:
+
+exigir pull request;
+exigir CI pytest;
+impedir merge com conversa pendente;
+exigir branch atualizada;
+bloquear force push;
+opcionalmente exigir uma aprovação.
+
+Também adicionaria ao CI:
+
+ruff
+mypy ou pyright
+coverage mínima
+pip-audit
+validação YAML
+compilação Python
+
+Exemplo:
+
+- name: Static checks
+  run: |
+    python -m compileall src
+    ruff check src tests
+
+- name: Tests
+  run: |
+    pytest --cov=src --cov-report=term-missing --cov-fail-under=85
+Pontos que ficaram muito bons
+
+As principais decisões arquiteturais estão coerentes com o objetivo:
+
+runtime: isolamento por run e eventos persistentes;
+domain: modelos separados da orquestração;
+spec: Canonical Spec central;
+renderers: PRD e história derivados da mesma fonte;
+validators: gate antes da renderização;
+executors: abstração do executor;
+planning: grafo e ondas de execução;
+learning: separação entre diagnóstico, proposta, avaliação e aceite;
+tests: fixtures relevantes e testes de integração.
+
+Particularmente, a separação entre Canonical Spec e renderização foi a mudança certa. Isso reduz bastante a possibilidade de PRD e história interpretarem as regras de formas diferentes.
+
+Ordem recomendada para correção
+
+Eu abriria uma PR de hardening com esta ordem:
+
+corrigir bypass de comandos;
+fazer policies falharem fechadas;
+corrigir editable_surface do reparo;
+comparar evals com expected.yaml;
+preservar provenance em runs bloqueadas;
+validar referências internas do Canonical Spec;
+diferenciar defaults, inferências e fatos;
+corrigir confiança igual a zero;
+exigir testes para alteração de código;
+renomear aceite do learning loop;
+remover teste com or True;
+proteger a branch main.

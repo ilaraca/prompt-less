@@ -36,6 +36,10 @@ class Requirement:
     source_claims: list[str] = field(default_factory=list)
     status: str = "draft"
     claim_links: list[ClaimLink] = field(default_factory=list)
+    # NFR (ticket 28): origem baseline|declared|observed; RF deixa origin/category vazios
+    origin: str | None = None
+    category: str | None = None
+    layers: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -43,6 +47,12 @@ class Requirement:
             link.to_dict() if isinstance(link, ClaimLink) else link
             for link in self.claim_links
         ]
+        if not self.origin:
+            data.pop("origin", None)
+        if not self.category:
+            data.pop("category", None)
+        if not self.layers:
+            data.pop("layers", None)
         return data
 
 

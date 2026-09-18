@@ -350,12 +350,22 @@ def validate_spec(spec: CanonicalSpec) -> ValidationResult:
     issues.extend(validate_ambiguity(spec))
     issues.extend(validate_ownership(spec))
     for nfr in spec.nfrs:
-        if nfr.status == "baseline":
+        origin = getattr(nfr, "origin", None) or nfr.status
+        if origin == "baseline":
             issues.append(
                 ValidationIssue(
                     code="NFR_FROM_BASELINE",
                     severity="warning",
                     message=f"{nfr.id} veio do baseline de engenharia",
+                    subject_id=nfr.id,
+                )
+            )
+        elif origin not in {"baseline", "declared", "observed", "draft"}:
+            issues.append(
+                ValidationIssue(
+                    code="NFR_ORIGIN_INVALID",
+                    severity="error",
+                    message=f"{nfr.id} origem inválida: {origin!r}",
                     subject_id=nfr.id,
                 )
             )
