@@ -15,7 +15,7 @@ from src.preprocess import preprocess as preprocess_inputs
 from src.rag_compress import compress_rag, retrieve_chunks
 from src.hardening.input_scan import collect_untrusted_blobs, scan_blobs
 from src.reason import build_llm_package, dry_run_scaffold
-from src.renderers import render_historia, render_mermaid, render_openapi, render_prd
+from src.renderers import render_historia, render_mermaid, render_openapi, render_prd, render_sdd
 from src.repo_index import load_index, service_evidence
 from src.runtime.stage import HandlerRegistry, StageContext, StageError
 from src.servicos import (
@@ -142,7 +142,7 @@ def servicos_split(ctx: StageContext) -> None:
             )
         targets: list[str | None] = [requested]
         ctx.payload["split"] = True
-    elif all_contexts or tipo in {"historia", "prd"}:
+    elif all_contexts or tipo in {"historia", "prd", "sdd"}:
         partitioned = partition_documents(
             documents, mapa, lines_per_chunk=lines_per_chunk
         )
@@ -353,6 +353,8 @@ def _render_artifact(tipo: str, slim: dict, rag: dict, spec: Any, dry_run: bool,
         return render_openapi(spec, template)
     if tipo == "mermaid" and spec is not None:
         return render_mermaid(spec, template)
+    if tipo == "sdd" and spec is not None:
+        return render_sdd(spec, template)
     return dry_run_scaffold(
         tipo,
         slim["ui"],

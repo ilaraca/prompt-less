@@ -1,0 +1,5 @@
+# Pacote SDD — preenchido pelo consumidor a partir do Canonical Spec.
+# Não editar à mão: a fonte de verdade é canonical-spec.yaml.
+# Nenhuma task deste pacote vai a executor antes de revisão humana.
+package_version: "1.0"
+source: canonical-spec

@@ -18,6 +18,7 @@ ARTIFACT_TEMPLATES = {
     "mermaid": TEMPLATES / "mermaid.skeleton.md",
     "historia": TEMPLATES / "historia.skeleton.md",
     "prd": TEMPLATES / "prd.skeleton.md",
+    "sdd": TEMPLATES / "sdd.skeleton.yaml",
 }
 
 

@@ -19,6 +19,17 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Consumidor SDD** (`27-sdd-consumer`): `run sdd` (e `also_emit` de história/PRD)
+  gera `sdd-package.yaml` a partir do Canonical Spec — arquitetura, API decisions
+  e tasks rastreáveis para revisão humana, sem despacho a executor
+- Cada task liga RF, AC, NFR, serviço e evidência; dependências reutilizam o
+  grafo multi-repo (`build_implementation_plan`); perguntas abertas bloqueiam
+  só o recorte afetado (`OP-*` / `ERR-*` / trigger)
+- Gate `validate_sdd_package` (`config/sdd-package.schema.yaml`): source =
+  `canonical-spec`, 100% das tasks com RF/AC, origem de decisão não pode ser
+  `renderer`, `executor_dispatch` permanece false
+- Testes (`tests/integration/test_sdd_consumer.py`): fonte IR, grafo, bloqueio
+  por escopo, isolamento two_services e rejeição de despacho prematuro
 - **Plano multi-repo baseado em evidência** (`24-evidence-based-planning`):
   dependências observadas (OpenAPI clients, imports, URLs, eventos, arquivos
   de build e contratos do Canonical Spec) passam a ser a autoridade do
