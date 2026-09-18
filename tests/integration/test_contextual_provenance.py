@@ -160,6 +160,7 @@ def test_adulteracao_de_artefato_e_detectada(tmp_path: Path):
 
 
 def test_match_baixa_confianca_exige_revisao_sem_mudar_status():
+    """Match lexical fraco marca revisão e bloqueia até decisão humana."""
     spec = build_canonical_spec(
         ui={},
         regras={"bloqueios": [{"trigger": "alpha bravo charlie", "status": 400}]},
@@ -182,9 +183,175 @@ def test_match_baixa_confianca_exige_revisao_sem_mudar_status():
     assert link.score == 0.5
     assert link.requires_review is True
     validation = validate_spec(spec)
-    assert validation.has_errors is False
+    assert validation.has_errors is True
+    assert validation.to_dict()["status"] == "blocked"
+    assert any(i.code == "REQUIRED_REVIEW_PENDING" for i in validation.errors)
+    # Avisos informativos (órfãos/baseline) não bloqueiam sozinhos.
+    informative = [i for i in validation.warnings if i.code in {"ORPHAN_CLAIM", "NFR_FROM_BASELINE"}]
+    assert all(i.severity == "warning" for i in informative)
+
+
+def test_required_review_approve_libera_validacao():
+    from src.domain.review import decide_claim_link_review
+
+    spec = build_canonical_spec(
+        ui={},
+        regras={"bloqueios": [{"trigger": "alpha bravo charlie", "status": 400}]},
+        claims=[
+            {
+                "id": "CLM-low-0001",
+                "text": "alpha bravo charlie delta echo foxtrot",
+                "origin": "declared",
+                "confidence": 1.0,
+                "sources": [{"document": "t.yaml"}],
+            }
+        ],
+    )
+    rf = next(r for r in spec.requirements if r.claim_links)
+    link = rf.claim_links[0]
+    claim = next(c for c in spec.claims if c.id == link.claim_id)
+    spec.review_decisions = [
+        decide_claim_link_review(
+            spec_version=spec.version,
+            claim=claim,
+            link=link,
+            subject_id=rf.id,
+            decision="approved",
+            actor="alice",
+            justification="match lexical aceito após leitura da fonte",
+        )
+    ]
+    # Aprovar o RF não cobre AC/ERR com o mesmo claim — decidir em todos.
+    decisions = list(spec.review_decisions)
+    for subject in (*spec.acceptance_criteria, *spec.errors):
+        for lnk in subject.claim_links:
+            if not lnk.requires_review:
+                continue
+            clm = next(c for c in spec.claims if c.id == lnk.claim_id)
+            decisions.append(
+                decide_claim_link_review(
+                    spec_version=spec.version,
+                    claim=clm,
+                    link=lnk,
+                    subject_id=subject.id,
+                    decision="approved",
+                    actor="alice",
+                    justification="aceite alinhado ao RF",
+                )
+            )
+    spec.review_decisions = decisions
+    validation = validate_spec(spec)
+    assert not any(
+        i.code.startswith("REQUIRED_REVIEW_") for i in validation.errors
+    ), validation.to_dict()
+    decision = spec.review_decisions[0]
+    assert decision.actor == "alice"
+    assert decision.justification
+    assert decision.reviewed_spec_version == spec.version
+    assert decision.reviewed_claim_fingerprint
+
+
+def test_required_review_reject_bloqueia():
+    from src.domain.review import decide_claim_link_review
+
+    spec = build_canonical_spec(
+        ui={},
+        regras={"bloqueios": [{"trigger": "alpha bravo charlie", "status": 400}]},
+        claims=[
+            {
+                "id": "CLM-low-0001",
+                "text": "alpha bravo charlie delta echo foxtrot",
+                "origin": "declared",
+                "confidence": 1.0,
+                "sources": [{"document": "t.yaml"}],
+            }
+        ],
+    )
+    decisions = []
+    for subject in (*spec.requirements, *spec.acceptance_criteria, *spec.errors):
+        for lnk in getattr(subject, "claim_links", []) or []:
+            if not lnk.requires_review:
+                continue
+            clm = next(c for c in spec.claims if c.id == lnk.claim_id)
+            decisions.append(
+                decide_claim_link_review(
+                    spec_version=spec.version,
+                    claim=clm,
+                    link=lnk,
+                    subject_id=subject.id,
+                    decision="rejected",
+                    actor="bob",
+                    justification="vínculo lexical espúrio",
+                )
+            )
+    spec.review_decisions = decisions
+    validation = validate_spec(spec)
+    assert validation.has_errors is True
+    assert any(i.code == "REQUIRED_REVIEW_REJECTED" for i in validation.errors)
+
+
+def test_required_review_stale_quando_evidencia_muda():
+    from src.domain.review import decide_claim_link_review
+
+    spec = build_canonical_spec(
+        ui={},
+        regras={"bloqueios": [{"trigger": "alpha bravo charlie", "status": 400}]},
+        claims=[
+            {
+                "id": "CLM-low-0001",
+                "text": "alpha bravo charlie delta echo foxtrot",
+                "origin": "declared",
+                "confidence": 1.0,
+                "sources": [{"document": "t.yaml"}],
+            }
+        ],
+    )
+    decisions = []
+    for subject in (*spec.requirements, *spec.acceptance_criteria, *spec.errors):
+        for lnk in getattr(subject, "claim_links", []) or []:
+            if not lnk.requires_review:
+                continue
+            clm = next(c for c in spec.claims if c.id == lnk.claim_id)
+            decisions.append(
+                decide_claim_link_review(
+                    spec_version=spec.version,
+                    claim=clm,
+                    link=lnk,
+                    subject_id=subject.id,
+                    decision="approved",
+                    actor="carol",
+                    justification="ok na versão revisada",
+                )
+            )
+    spec.review_decisions = decisions
+    # Mutação incompatível da evidência (texto do claim).
+    target = next(c for c in spec.claims if c.id == "CLM-low-0001")
+    target.text = "alpha bravo charlie delta echo foxtrot ALTERADO"
+    validation = validate_spec(spec)
+    assert validation.has_errors is True
+    assert any(i.code == "REQUIRED_REVIEW_STALE" for i in validation.errors)
+
+
+def test_avisos_informativos_nao_bloqueiam():
+    """ORPHAN_CLAIM / NFR_FROM_BASELINE permanecem warning sem erro de revisão."""
+    spec = build_canonical_spec(
+        ui={},
+        regras={"bloqueios": [{"trigger": "xyzzy-unico-sem-match-lexical", "status": 400}]},
+        claims=[
+            {
+                "id": "CLM-orphan-1",
+                "text": "texto órfão sem vínculo lexical com RF",
+                "origin": "declared",
+                "confidence": 1.0,
+                "sources": [{"document": "t.yaml"}],
+            }
+        ],
+    )
+    validation = validate_spec(spec)
+    assert not any(i.code.startswith("REQUIRED_REVIEW_") for i in validation.errors)
+    assert any(i.code == "ORPHAN_CLAIM" for i in validation.warnings)
     assert validation.to_dict()["status"] == "passed"
-    assert any(i.code == "LOW_CONFIDENCE_CLAIM_MATCH" for i in validation.warnings)
+    assert validation.has_errors is False
 
 
 def test_claim_sintetico_ganha_hash_secao_e_locator():

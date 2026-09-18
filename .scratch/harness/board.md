@@ -199,6 +199,33 @@ Riscos residuais aceitos do `13` (não reabrir worktree filha):
 | 12b-state-backend-redis | Todo ⏸ | parqueado | futuro |
 | (pai) onda-frontier | — | integra filhas; único PR contra `main` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
+### Onda F — Série 4 P0 (**integrada** no pai)
+
+P0 30–34 **Done** e merjados em `onda-merge` @ `87487fd` (2026-09-18). Filhas
+permanecem no HEAD do slice; não reabrir worktrees.
+
+| Ticket | Kanban | Papel | Onde está o código |
+|---|---|---|---|
+| 30-eval-required-gates | **Done** | filha, HEAD `5ee18c3` | `.worktrees/30-eval-required-gates` · `feature/eval-required-gates` |
+| 31-eval-run-selection | **Done** | filha, HEAD `78c763a` | `.worktrees/31-eval-run-selection` · `feature/eval-run-selection` |
+| 32-eval-typed-http | **Done** | filha, HEAD `59b7e87` | `.worktrees/32-eval-typed-http` · `feature/eval-typed-http` |
+| 33-required-review-gate | **Done** | filha, HEAD `fd89588` | `.worktrees/33-required-review-gate` · `feature/required-review-gate` |
+| 34-cli-failure-exit | **Done** | filha, HEAD `addea9a` | `.worktrees/34-cli-failure-exit` · `feature/cli-failure-exit` |
+| (pai) onda-frontier | — | P0 integrado @ `87487fd` | `.worktrees/onda-merge` · `feature/onda-frontier` |
+
+### Onda F — Série 4 P1 / regressão (em curso)
+
+Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
+
+| Ticket | Kanban | Papel | Onde está o código |
+|---|---|---|---|
+| 35-independent-test-evidence | **In progress** | filha | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
+| 36-repair-policy | **In progress** | filha | `.worktrees/36-repair-policy` · `feature/repair-policy` |
+| 37-executor-enforcement | **In progress** | filha | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
+| 39-case-regression-gates | **In progress** | filha | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
+| (pai) onda-frontier | — | integra filhas | `.worktrees/onda-merge` · `feature/onda-frontier` |
+
+
 ## Série 4 — Conformidade com o roadmap (frontier ativa)
 
 Incluída a pedido de Ilara em 2026-09-18, após comparação com
@@ -216,16 +243,16 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 
 | ID | Prioridade | Título | Kanban | Blocked by |
 |----|------------|--------|--------|------------|
-| 30-eval-required-gates | P0.1 | Gates obrigatórios de spec, artefatos e rastreabilidade | Todo | — |
-| 31-eval-run-selection | P0.1 | Seleção de resultados por run e manifesto | Todo | — |
-| 32-eval-typed-http | P0.1 | HTTP tipado por serviço e operação | Todo | — |
-| 33-required-review-gate | P0.2 | Revisão obrigatória bloqueante e auditável | Todo | — |
-| 34-cli-failure-exit | P0.3 | Exit code de falha e bloqueio de consumo | Todo | — |
-| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | Todo | 30, 31, 32, 33, 34 |
-| 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | Todo | 30, 31, 32, 33, 34 |
-| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | Todo | 30, 31, 32, 33, 34 |
+| 30-eval-required-gates | P0.1 | Gates obrigatórios de spec, artefatos e rastreabilidade | **Done** | — |
+| 31-eval-run-selection | P0.1 | Seleção de resultados por run e manifesto | **Done** | — |
+| 32-eval-typed-http | P0.1 | HTTP tipado por serviço e operação | **Done** | — |
+| 33-required-review-gate | P0.2 | Revisão obrigatória bloqueante e auditável | **Done** | — |
+| 34-cli-failure-exit | P0.3 | Exit code de falha e bloqueio de consumo | **Done** | — |
+| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **In progress** | 30, 31, 32, 33, 34 |
+| 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **In progress** | 30, 31, 32, 33, 34 |
+| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **In progress** | 30, 31, 32, 33, 34 |
 | 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | Todo | 35, 36, 37 |
-| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | Todo | 30, 31, 32 |
+| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **In progress** | 30, 31, 32 |
 
 ### Ordem de implementação e fechamento
 
@@ -255,12 +282,15 @@ Casos de bloqueio esperado devem validar também a causa esperada.
 
 **Aceite:**
 
-- [ ] Spec válida com qualquer artefato obrigatório ausente reprova.
-- [ ] Fonte inválida, rastreabilidade quebrada ou serviço incorreto reprova.
-- [ ] Uma dimensão obrigatória falsa nunca é compensada por outra.
-- [ ] Casos negativos entram na suíte e falham pelo motivo esperado.
+- [x] Spec válida com qualquer artefato obrigatório ausente reprova.
+- [x] Fonte inválida, rastreabilidade quebrada ou serviço incorreto reprova.
+- [x] Uma dimensão obrigatória falsa nunca é compensada por outra.
+- [x] Casos negativos entram na suíte e falham pelo motivo esperado.
 
 **Código:** `src/learning/evals.py` e testes de avaliação.
+
+**Kanban:** Done · HEAD filha `5ee18c3` · ver
+`issues/30-eval-required-gates.md` § Implementation note.
 
 ### 31 — Seleção por execução
 
@@ -293,10 +323,10 @@ vinculados à operação. Texto livre não serve como prova do contrato.
 
 **Aceite:**
 
-- [ ] Status tipado incorreto reprova mesmo com número correto em outra seção.
-- [ ] Status correto em outro serviço/operação não compensa a divergência.
-- [ ] Sucesso ausente ou pendente não recebe valor presumido.
-- [ ] Fixtures declaram expectativas por operação e exercitam esses negativos.
+- [x] Status tipado incorreto reprova mesmo com número correto em outra seção.
+- [x] Status correto em outro serviço/operação não compensa a divergência.
+- [x] Sucesso ausente ou pendente não recebe valor presumido.
+- [x] Fixtures declaram expectativas por operação e exercitam esses negativos.
 
 **Código:** `src/learning/evals.py`, fixtures e modelo canônico.
 
@@ -312,13 +342,16 @@ Confiança numérica não substitui evidência nem aprovação humana.
 
 **Aceite:**
 
-- [ ] Pendência obrigatória não resolvida bloqueia implementação.
-- [ ] Decisão registra responsável, justificativa e versão revisada.
-- [ ] Alteração da evidência/spec invalida decisão incompatível.
-- [ ] Avisos genuinamente informativos permanecem não bloqueantes.
-- [ ] Teste existente é ajustado ao contrato e cobre aprovação/rejeição.
+- [x] Pendência obrigatória não resolvida bloqueia implementação.
+- [x] Decisão registra responsável, justificativa e versão revisada.
+- [x] Alteração da evidência/spec invalida decisão incompatível.
+- [x] Avisos genuinamente informativos permanecem não bloqueantes.
+- [x] Teste existente é ajustado ao contrato e cobre aprovação/rejeição.
 
 **Código:** `src/validators/__init__.py`, modelo de revisão e testes de provenance.
+
+**Kanban:** Done · HEAD filha `fd89588` · ver
+`issues/33-required-review-gate.md` § Implementation note.
 
 ### 34 — Falha inequívoca na CLI
 
@@ -331,12 +364,14 @@ manter JSON/diagnóstico legível; consumidores validam identidade e estado.
 
 **Aceite:**
 
-- [ ] Teste de subprocesso real confirma exit code não zero em blocked/failed.
-- [ ] Sucesso válido mantém exit code zero.
-- [ ] Bloqueio impede despacho ao executor e reutilização de história antiga.
-- [ ] Automação recebe estado e motivo coerentes com o manifesto.
+- [x] Teste de subprocesso real confirma exit code não zero em blocked/failed.
+- [x] Sucesso válido mantém exit code zero.
+- [x] Bloqueio impede despacho ao executor e reutilização de história antiga.
+- [x] Automação recebe estado e motivo coerentes com o manifesto.
 
 **Código:** `src/run.py` e consumidores dos artefatos.
+
+**Kanban:** Done · HEAD `addea9a` · `feature/cli-failure-exit`
 
 ### 35 — Testes e critérios de aceite independentes
 

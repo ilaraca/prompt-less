@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from src.domain.claim import Claim
+from src.domain.review import ReviewDecision
 
 
 @dataclass
@@ -415,9 +416,10 @@ class CanonicalSpec:
     current_state: CurrentState = field(default_factory=CurrentState)
     gaps: list[Gap] = field(default_factory=list)
     code_evidence: list[CodeEvidence] = field(default_factory=list)
+    review_decisions: list[ReviewDecision] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "spec_version": self.version,
             "service": {
                 "id": self.service_id,
@@ -435,6 +437,12 @@ class CanonicalSpec:
             "gaps": [g.to_dict() for g in self.gaps],
             "code_evidence": [e.to_dict() for e in self.code_evidence],
         }
+        if self.review_decisions:
+            data["review_decisions"] = [
+                d.to_dict() if isinstance(d, ReviewDecision) else d
+                for d in self.review_decisions
+            ]
+        return data
 
     def requirement_ids(self) -> set[str]:
         return {r.id for r in self.requirements}

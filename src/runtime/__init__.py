@@ -26,6 +26,7 @@ from src.runtime.approval import (
     ApprovalReuse,
     ApprovalTampered,
 )
+from src.runtime.consume import RunNotReady, assert_run_ready_for_executor
 from src.runtime.event_store import EventStore
 from src.runtime.integrity import MissingIntegrityKey, verify_run_dir
 from src.runtime.run_store import (
@@ -65,6 +66,7 @@ __all__ = [
     "Orchestrator",
     "RunContext",
     "RunIdCollision",
+    "RunNotReady",
     "RunStateConflict",
     "RunStore",
     "Stage",
@@ -75,6 +77,7 @@ __all__ = [
     "StageTimeout",
     "UnsafePath",
     "UnsafeRunPath",
+    "assert_run_ready_for_executor",
     "build_run_result",
     "context_subdir",
     "default_registry",

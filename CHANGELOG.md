@@ -7,7 +7,54 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Gates obrigatórios de avaliação** (`30-eval-required-gates`): `score_case()`
+  separa diagnóstico (`layer_scores`) de aprovação (`required_gates` /
+  `fail_reasons`). Dimensões obrigatórias — spec presente/com sinais, artefatos
+  esperados presentes e com sinais, rastreabilidade, serviço, ausência de
+  pendências bloqueantes — entram em AND e **não se compensam** (spec OK não
+  salva artefato ausente). Casos `expect_blocked` validam também
+  `expected_reason` / `expected_block_codes`. Rastreabilidade deixa de ser
+  gate só em `critical`.
+
 ### Added
+
+- **Revisão obrigatória bloqueante** (`33-required-review-gate`): match lexical
+  com `requires_review=true` deixa de ser só warning — o gate emite
+  `REQUIRED_REVIEW_PENDING` até `review_decisions` registrar ator, justificativa
+  e versão revisada (spec + fingerprint do claim); aprovação compatível libera,
+  rejeição e evidência/spec divergente (`REQUIRED_REVIEW_STALE`) bloqueiam;
+  avisos informativos (`ORPHAN_CLAIM`, `NFR_FROM_BASELINE`) seguem não bloqueantes
+- Modelo `ReviewDecision` em `src/domain/review.py`; testes de approve/reject/
+  stale em `tests/integration/test_contextual_provenance.py`
+- **Falha inequívoca na CLI** (`34-cli-failure-exit`): `python -m src.run`
+  imprime o JSON da run e sai com código **2** quando `status` é `blocked` ou
+  `failed` (sucesso continua 0). Exceções viram JSON `{status, error,
+  error_type}` legível para automação
+- `assert_run_ready_for_executor` (`src/runtime/consume.py`) e gate no
+  `python -m src.executors.devin`: run blocked/failed ou `run_id` divergente
+  não despacha; espelho `outputs/.mirror-manifest.json` com status ≠ completed
+  também recusa reutilização de história antiga
+- Flags `--inputs-dir` / `--output-root` em `src.run` (isolamento de testes e
+  workspaces)
+- Em blocked/failed, o espelho é **invalidado** (podando o que a publicação
+  anterior listou) e `manifest.result_summary.reason` alinha com o JSON da CLI
+- Testes de subprocesso: `tests/integration/test_cli_failure_exit.py`
+- **Seleção de eval por execução** (`31-eval-run-selection`): `score_case` /
+  `run_eval_suite` exigem `run_id` e carregam só artefatos listados em
+  `runs/<run_id>/manifest.json` (`integrity.files`), com checagem de estado e
+  sha256. Espelho `outputs/` não participa da seleção automática. Run
+  `blocked` pode ser avaliada como bloqueio esperado, mas
+  `artifacts_released=false` (história/PRD não liberados para implementação).
+  API: `select_run_evidence`, `RunStore.sealed_file_entries` /
+  `verify_sealed_entry`. Testes em `tests/integration/test_eval_run_selection.py`.
+- **Evals com contratos HTTP tipados** (`32-eval-typed-http`): o gate deixa de
+  extrair números de RF/AC/perguntas e passa a comparar por operação
+  (`http_operations` na fixture) — serviço, método, rota, `success_status`
+  resolvido e erros vinculados; sucesso ausente/pendente não presume valor;
+  status correto noutro serviço/op não compensa. Fixtures da suíte default
+  declaram expectativas por operação; testes cobrem os negativos.
 
 - **Execução concorrente por ondas** (`13-parallel-exec`): scheduler
   `src/executors/scheduler.py` consome `waves` do `implementation_plan`, limita
@@ -239,6 +286,10 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   com `shell=False`
 
 ### Changed
+
+- `LOW_CONFIDENCE_CLAIM_MATCH` (warning) substituído por erros
+  `REQUIRED_REVIEW_PENDING` / `REQUIRED_REVIEW_REJECTED` / `REQUIRED_REVIEW_STALE`
+  no validador de traceability — pendência obrigatória bloqueia implementação
 
 - README: limitações do `13-parallel-exec` documentam riscos residuais aceitos
   (CLI sem Devin-por-task; onda seguinte após falha parcial; Redis/`12b` parqueado)

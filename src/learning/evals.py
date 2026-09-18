@@ -1,7 +1,6 @@
 """Evals leves sobre fixtures baseline — métricas de qualidade/custo."""
 from __future__ import annotations
 
-import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -9,7 +8,12 @@ from typing import Any
 
 import yaml
 
+from src.domain.spec import ResolvedInt
 from src.run import run
+from src.runtime.atomic_io import UnsafePath
+from src.runtime.integrity import verify_run_dir
+from src.runtime.run_context import InvalidRunId, RunContext, validate_run_id
+from src.runtime.run_store import TERMINAL_STATUSES, RunStore
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -21,8 +25,8 @@ DEFAULT_CASES = (
     "eval_adversarial",
     "eval_multi_context",
 )
-_HTTP_RE = re.compile(r"(?:HTTP\s+)?\b([1-5]\d{2})\b", re.IGNORECASE)
 _ARTIFACT_NAMES = {"historia.md", "prd.md"}
+_SPEC_NAME = "canonical-spec.yaml"
 _QUALITY_UP = ("claim_recall", "traceability_rate", "pass_rate")
 _QUALITY_DOWN = ("unexpected_inferences", "avg_est_tokens", "avg_latency_ms")
 
@@ -38,27 +42,52 @@ class CaseScore:
     claim_recall: float = 0.0
     traceable: bool = True
     critical: bool = False
+    selection_ok: bool = True
+    artifacts_released: bool = False
     latency_ms: float = 0.0
     layer_scores: dict[str, Any] = field(default_factory=dict)
     details: dict[str, Any] = field(default_factory=dict)
+    # Gates de aprovação (AND obrigatório; diagnóstico fica em layer_scores/details)
+    required_gates: dict[str, bool] = field(default_factory=dict)
+    fail_reasons: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
+        if self.required_gates:
+            return all(self.required_gates.values())
+        # fallback legado (não deve ocorrer após score_case)
         recall_ok = (not self.critical) or self.claim_recall >= 1.0
-        trace_ok = (not self.critical) or self.traceable
         return (
-            self.status_ok
+            self.selection_ok
+            and self.status_ok
             and self.service_match
             and self.expected_status_match
             and self.signals_present
             and self.ownership_match
             and self.unexpected_inferences == 0
             and recall_ok
-            and trace_ok
+            and self.traceable
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {**asdict(self), "passed": self.passed}
+
+
+@dataclass
+class EvalRunSelection:
+    """Evidência de uma única run, selecionada só pelo manifesto."""
+
+    run_id: str
+    status: str
+    specs: list[dict[str, Any]] = field(default_factory=list)
+    final_artifacts: list[str] = field(default_factory=list)
+    files_used: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    artifacts_released: bool = False
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
 
 
 def _load_expected(case_id: str) -> dict[str, Any]:
@@ -68,35 +97,227 @@ def _load_expected(case_id: str) -> dict[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
-def _load_specs(output_root: Path | None) -> list[dict[str, Any]]:
-    if output_root is None or not output_root.exists():
-        return []
+def _resolve_eval_root(
+    *,
+    output_root: Path | None,
+    run_dir: Path | str | None,
+) -> Path | None:
+    if run_dir is not None:
+        return Path(run_dir).resolve().parent.parent
+    if output_root is not None:
+        return Path(output_root)
+    return None
+
+
+def select_run_evidence(
+    *,
+    root: Path,
+    run_id: str,
+    verify_integrity_chain: bool = True,
+) -> EvalRunSelection:
+    """
+    Carrega specs/artefatos finais apenas do manifesto de `runs/<run_id>/`.
+
+    Espelhos de compatibilidade (`outputs/`) não entram na seleção. Manifesto
+    ausente, `run_id` divergente ou sha256 adulterado reprovam a seleção.
+    Run `blocked` pode ser avaliada, mas `artifacts_released` fica falso.
+    """
+    errors: list[str] = []
+    try:
+        rid = validate_run_id(run_id)
+    except InvalidRunId as exc:
+        return EvalRunSelection(run_id=str(run_id), status="", errors=[str(exc)])
+
+    root = Path(root)
+    run_path = root / "runs" / rid
+    if not run_path.is_dir():
+        return EvalRunSelection(
+            run_id=rid,
+            status="",
+            errors=[f"run '{rid}' ausente em {run_path}"],
+        )
+
+    store = RunStore(RunContext.create(root=root, objective="eval", run_id=rid))
+    manifest = store.read_manifest()
+    if not manifest:
+        return EvalRunSelection(
+            run_id=rid,
+            status="",
+            errors=[f"manifesto ausente para run '{rid}'"],
+        )
+
+    declared = str(manifest.get("run_id") or "")
+    if declared and declared != rid:
+        errors.append(
+            f"run divergente: manifesto declara '{declared}', seleção pediu '{rid}'"
+        )
+
+    status = str(manifest.get("status") or "")
+    if status not in TERMINAL_STATUSES:
+        errors.append(
+            f"status da run '{rid}' não é terminal para eval: {status or '<vazio>'!r}"
+        )
+
+    entries = store.sealed_file_entries()
+    if not entries:
+        errors.append(f"manifesto da run '{rid}' sem integrity.files")
+
+    if verify_integrity_chain:
+        report = verify_run_dir(run_path)
+        if not report.get("ok"):
+            for err in report.get("errors") or []:
+                msg = str(err)
+                if msg not in errors:
+                    errors.append(msg)
+
     specs: list[dict[str, Any]] = []
-    for path in output_root.rglob("canonical-spec.yaml"):
-        try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except OSError:
+    finals: list[str] = []
+    used: list[str] = []
+    for entry in entries:
+        rel = str(entry.get("path") or "")
+        name = Path(rel).name.lower()
+        if name != _SPEC_NAME and name not in _ARTIFACT_NAMES:
             continue
-        if isinstance(data, dict):
-            specs.append(data)
-    return specs
+        try:
+            path = store.verify_sealed_entry(entry)
+        except (UnsafePath, FileNotFoundError, ValueError, OSError) as exc:
+            errors.append(str(exc))
+            continue
+        used.append(rel)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"falha ao ler {rel}: {exc}")
+            continue
+        if name == _SPEC_NAME:
+            try:
+                data = yaml.safe_load(text) or {}
+            except yaml.YAMLError as exc:
+                errors.append(f"canonical-spec inválido ({rel}): {exc}")
+                continue
+            if isinstance(data, dict):
+                specs.append(data)
+            else:
+                errors.append(f"canonical-spec não-objeto em {rel}")
+        else:
+            finals.append(text)
+
+    # bloqueada pode ser scoreada; artefatos não liberados p/ implementação
+    released = status == "completed" and not errors
+    return EvalRunSelection(
+        run_id=rid,
+        status=status,
+        specs=specs,
+        final_artifacts=finals,
+        files_used=used,
+        errors=errors,
+        artifacts_released=released,
+    )
 
 
-def _load_final_artifacts(output_root: Path | None) -> list[str]:
-    """Só artefatos finais (história/PRD), não provenance/validation/packages."""
-    if output_root is None or not output_root.exists():
+def _load_specs(
+    output_root: Path | None,
+    *,
+    run_id: str | None = None,
+    run_dir: Path | str | None = None,
+    selection: EvalRunSelection | None = None,
+) -> list[dict[str, Any]]:
+    """Só specs da run selecionada — sem rglob em outputs/ nem runs antigas."""
+    if selection is not None:
+        return list(selection.specs)
+    if not run_id:
         return []
-    texts: list[str] = []
-    for path in output_root.rglob("*"):
-        if not path.is_file():
-            continue
-        if path.name.lower() not in _ARTIFACT_NAMES:
-            continue
-        try:
-            texts.append(path.read_text(encoding="utf-8"))
-        except OSError:
-            continue
-    return texts
+    root = _resolve_eval_root(output_root=output_root, run_dir=run_dir)
+    if root is None:
+        return []
+    return list(select_run_evidence(root=root, run_id=run_id).specs)
+
+
+def _load_final_artifacts(
+    output_root: Path | None,
+    *,
+    run_id: str | None = None,
+    run_dir: Path | str | None = None,
+    selection: EvalRunSelection | None = None,
+) -> list[str]:
+    """Só história/PRD selados no manifesto da run — espelho fora da seleção."""
+    if selection is not None:
+        return list(selection.final_artifacts)
+    if not run_id:
+        return []
+    root = _resolve_eval_root(output_root=output_root, run_dir=run_dir)
+    if root is None:
+        return []
+    return list(select_run_evidence(root=root, run_id=run_id).final_artifacts)
+
+
+def _artifact_filename(name: str) -> str:
+    base = str(name).strip().lower()
+    if base.endswith(".md"):
+        return base
+    return f"{base}.md"
+
+
+def _expected_artifacts_present(
+    output_root: Path | None, expected_artifacts: list[str]
+) -> tuple[bool, list[str]]:
+    """Verifica presença física dos artefatos finais declarados na fixture."""
+    if not expected_artifacts:
+        return True, []
+    if output_root is None or not output_root.exists():
+        return False, list(expected_artifacts)
+    found_names = {
+        p.name.lower()
+        for p in output_root.rglob("*")
+        if p.is_file() and p.name.lower() in _ARTIFACT_NAMES
+    }
+    missing = [
+        name
+        for name in expected_artifacts
+        if _artifact_filename(name) not in found_names
+    ]
+    return not missing, missing
+
+
+def _blocking_pendencies(specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    for spec in specs:
+        for q in spec.get("open_questions") or []:
+            if bool(q.get("blocking")):
+                found.append(
+                    {
+                        "id": q.get("id"),
+                        "text": q.get("text"),
+                        "service_id": spec.get("service_id"),
+                    }
+                )
+    return found
+
+
+def _collect_block_reasons(result: dict[str, Any]) -> set[str]:
+    reasons: set[str] = set()
+    if result.get("reason"):
+        reasons.add(str(result["reason"]))
+    for ctx in result.get("by_context") or []:
+        if ctx.get("reason"):
+            reasons.add(str(ctx["reason"]))
+    return reasons
+
+
+def _collect_block_codes(result: dict[str, Any]) -> set[str]:
+    codes: set[str] = set()
+
+    def _from_validation(val: Any) -> None:
+        if not isinstance(val, dict):
+            return
+        for issue in val.get("issues") or []:
+            if isinstance(issue, dict) and issue.get("code"):
+                codes.add(str(issue["code"]))
+
+    _from_validation(result.get("validation"))
+    for ctx in result.get("by_context") or []:
+        _from_validation(ctx.get("validation"))
+    return codes
 
 
 def _spec_text_blob(spec: dict[str, Any]) -> str:
@@ -121,28 +342,166 @@ def _spec_text_blob(spec: dict[str, Any]) -> str:
     return "\n".join(parts).lower()
 
 
-def collect_spec_statuses(spec: dict[str, Any]) -> set[int]:
-    """HTTP statuses declarados no Canonical Spec (errors + textos RF/AC/Q)."""
-    found: set[int] = set()
-    for error in spec.get("errors") or []:
-        if error.get("status") is not None:
+def _resolved_success_value(raw: Any) -> int | None:
+    """Sucesso tipado só conta quando resolvido — ausente/pendente sem presumir."""
+    status = ResolvedInt.from_raw(raw)
+    return int(status.value) if status.resolved and status.value is not None else None
+
+
+def _norm_method(raw: Any) -> str | None:
+    text = str(raw or "").strip().upper()
+    return text or None
+
+
+def _norm_path(raw: Any) -> str | None:
+    text = str(raw or "").strip()
+    return text or None
+
+
+def collect_operation_contracts(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """Contratos HTTP tipados por operação (método, rota, serviço, sucesso, erros).
+
+    Texto livre de RF/AC/perguntas **não** entra — só `operations.success_status`
+    resolvido e erros referenciados em `error_ids`.
+    """
+    errors_by_id = {
+        str(err.get("id")): err
+        for err in (spec.get("errors") or [])
+        if isinstance(err, dict) and err.get("id")
+    }
+    service_fallback = str(spec.get("service_id") or "") or None
+    contracts: list[dict[str, Any]] = []
+    for op in spec.get("operations") or []:
+        if not isinstance(op, dict):
+            continue
+        linked: list[int] = []
+        for eid in op.get("error_ids") or []:
+            err = errors_by_id.get(str(eid))
+            if not err or err.get("status") is None:
+                continue
             try:
-                found.add(int(error["status"]))
+                linked.append(int(err["status"]))
             except (TypeError, ValueError):
                 continue
-    for bucket in (
-        spec.get("requirements") or [],
-        spec.get("acceptance_criteria") or [],
-        spec.get("open_questions") or [],
-    ):
-        for item in bucket:
-            text = " ".join(
-                str(item.get(k) or "")
-                for k in ("text", "then", "when", "given")
-            )
-            for match in _HTTP_RE.finditer(text):
-                found.add(int(match.group(1)))
+        owner = str(op.get("owner") or "") or service_fallback
+        contracts.append(
+            {
+                "id": op.get("id"),
+                "name": op.get("name"),
+                "service": owner,
+                "method": _norm_method(op.get("method")),
+                "path": _norm_path(op.get("path")),
+                "success_status": _resolved_success_value(op.get("success_status")),
+                "error_statuses": sorted(set(linked)),
+            }
+        )
+    return contracts
+
+
+def collect_spec_statuses(spec: dict[str, Any]) -> set[int]:
+    """HTTP statuses tipados no Canonical Spec (sucesso resolvido + erros da op).
+
+    Números em RF/AC/perguntas **não** provam o contrato. Erros órfãos
+    (sem `error_ids` na operação) também não entram.
+    """
+    found: set[int] = set()
+    for contract in collect_operation_contracts(spec):
+        success = contract.get("success_status")
+        if success is not None:
+            found.add(int(success))
+        found.update(int(s) for s in (contract.get("error_statuses") or []))
     return found
+
+
+def _op_identity_key(op: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(op.get("service") or "").strip(),
+        str(op.get("method") or "").strip().upper(),
+        str(op.get("path") or "").strip(),
+    )
+
+
+def _error_statuses_match(
+    expected: set[int], actual: set[int], *, mode: str
+) -> bool:
+    if mode == "exact":
+        return expected == actual
+    return expected.issubset(actual)
+
+
+def match_http_operations(
+    expected_ops: list[dict[str, Any]],
+    actual_ops: list[dict[str, Any]],
+    *,
+    mode: str = "subset",
+) -> tuple[bool, list[dict[str, Any]]]:
+    """Compara expectativas por operação; status noutro serviço/op não compensa."""
+    if not expected_ops:
+        return True, []
+    remaining = list(enumerate(actual_ops))
+    mismatches: list[dict[str, Any]] = []
+    for exp in expected_ops:
+        want_key = _op_identity_key(exp)
+        hit_idx: int | None = None
+        hit: dict[str, Any] | None = None
+        for pos, (orig_i, candidate) in enumerate(remaining):
+            if _op_identity_key(candidate) == want_key:
+                hit_idx = pos
+                hit = candidate
+                _ = orig_i
+                break
+        if hit is None or hit_idx is None:
+            mismatches.append(
+                {
+                    "reason": "operation_not_found",
+                    "expected": {
+                        "service": exp.get("service"),
+                        "method": _norm_method(exp.get("method")),
+                        "path": _norm_path(exp.get("path")),
+                        "success_status": exp.get("success_status"),
+                        "error_statuses": list(exp.get("error_statuses") or []),
+                    },
+                }
+            )
+            continue
+        remaining.pop(hit_idx)
+
+        exp_success = exp.get("success_status", "__omit__")
+        got_success = hit.get("success_status")
+        if exp_success != "__omit__":
+            want_success = None if exp_success is None else int(exp_success)
+            if want_success != got_success:
+                mismatches.append(
+                    {
+                        "reason": "success_status_mismatch",
+                        "expected": {
+                            "service": exp.get("service"),
+                            "method": _norm_method(exp.get("method")),
+                            "path": _norm_path(exp.get("path")),
+                            "success_status": want_success,
+                        },
+                        "actual_success_status": got_success,
+                    }
+                )
+
+        exp_errors = {int(s) for s in (exp.get("error_statuses") or [])}
+        got_errors = {int(s) for s in (hit.get("error_statuses") or [])}
+        if exp.get("error_statuses") is not None or exp_errors:
+            if not _error_statuses_match(exp_errors, got_errors, mode=mode):
+                mismatches.append(
+                    {
+                        "reason": "error_statuses_mismatch",
+                        "expected": sorted(exp_errors),
+                        "actual": sorted(got_errors),
+                        "mode": mode,
+                        "operation": {
+                            "service": exp.get("service"),
+                            "method": _norm_method(exp.get("method")),
+                            "path": _norm_path(exp.get("path")),
+                        },
+                    }
+                )
+    return (not mismatches), mismatches
 
 
 def _collect_resolved_inferences(spec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -206,6 +565,7 @@ def score_case(
     result: dict[str, Any],
     *,
     output_root: Path | None = None,
+    run_id: str | None = None,
 ) -> CaseScore:
     expect_blocked = bool(expected.get("expect_blocked"))
     status = result.get("status")
@@ -222,12 +582,71 @@ def score_case(
         found_services = set(result.get("contexts") or [])
     service_match = expected_services.issubset(found_services) if expected_services else True
 
-    specs = _load_specs(output_root)
+    rid = run_id or (str(result["run_id"]) if result.get("run_id") else None)
+    run_dir = result.get("run_dir")
+    selection: EvalRunSelection | None = None
+    selection_ok = True
+    artifacts_released = False
+    selection_errors: list[str] = []
+
+    needs_disk = output_root is not None or run_dir is not None or rid is not None
+    if needs_disk:
+        if not rid:
+            selection_ok = False
+            selection_errors.append(
+                "run_id obrigatório para carregar evidência de eval "
+                "(seleção por execução; rglob desativado)"
+            )
+            specs: list[dict[str, Any]] = []
+            artifact_texts: list[str] = []
+        else:
+            root = _resolve_eval_root(output_root=output_root, run_dir=run_dir)
+            if root is None:
+                selection_ok = False
+                selection_errors.append(
+                    "root da run ausente: informe output_root ou result['run_dir']"
+                )
+                specs = []
+                artifact_texts = []
+            else:
+                selection = select_run_evidence(root=root, run_id=rid)
+                selection_ok = selection.ok
+                selection_errors = list(selection.errors)
+                specs = list(selection.specs)
+                # blocked: scoreável, mas artefatos não liberados p/ implementação
+                if selection.artifacts_released:
+                    artifact_texts = list(selection.final_artifacts)
+                    artifacts_released = True
+                else:
+                    artifact_texts = []
+                    artifacts_released = False
+                    if selection.status == "blocked" and expect_blocked:
+                        # specs da run bloqueada ainda alimentam o score
+                        pass
+                    elif selection.status == "blocked" and not expect_blocked:
+                        selection_ok = False
+                        if "run bloqueada sem expect_blocked" not in selection_errors:
+                            selection_errors.append(
+                                "run bloqueada: artefatos não liberados para implementação"
+                            )
+    else:
+        specs = []
+        artifact_texts = []
+
     # blocked runs ainda persistem canonical-spec antes do raise
+    actual_contracts: list[dict[str, Any]] = []
     actual_statuses: set[int] = set()
     for spec in specs:
+        contracts = collect_operation_contracts(spec)
+        actual_contracts.extend(contracts)
         actual_statuses |= collect_spec_statuses(spec)
 
+    expected_ops_raw = expected.get("http_operations")
+    expected_ops: list[dict[str, Any]] = (
+        [dict(op) for op in expected_ops_raw]
+        if isinstance(expected_ops_raw, list)
+        else []
+    )
     expected_statuses = {int(s) for s in (expected.get("http_statuses") or [])}
     critical = bool(expected.get("critical"))
     explicit_mode = expected.get("http_status_mode")
@@ -238,38 +657,53 @@ def score_case(
         mode = "exact"
     else:
         mode = "subset"
-    if not expected_statuses:
+
+    op_mismatches: list[dict[str, Any]] = []
+    if expected_ops:
+        expected_status_match, op_mismatches = match_http_operations(
+            expected_ops, actual_contracts, mode=mode
+        )
+    elif not expected_statuses:
         expected_status_match = True
     elif mode == "exact":
         expected_status_match = expected_statuses == actual_statuses
     else:
         expected_status_match = expected_statuses.issubset(actual_statuses)
 
-    # sinais: ingestion (claims) E/OU canonical spec — não provenance/packages
+    # sinais: diagnóstico por camada — aprovação NÃO permite compensação entre elas
     signals = [str(s).lower() for s in (expected.get("signals") or [])]
     claims_blob = _claims_blob_from_result(result)
     spec_blob = "\n".join(_spec_text_blob(s) for s in specs)
-    artifact_blob = "\n".join(t.lower() for t in _load_final_artifacts(output_root))
-    combined_blob = f"{claims_blob}\n{spec_blob}"
-    if signals:
-        hits = sum(1 for sig in signals if sig in combined_blob)
-        claim_recall = round(hits / len(signals), 3)
+    artifact_blob = "\n".join(t.lower() for t in artifact_texts)
+    expected_artifact_names = [str(a) for a in (expected.get("artifacts") or [])]
+    if selection is not None:
+        found_names = {Path(rel).name.lower() for rel in selection.files_used}
+        missing_artifacts = [
+            name
+            for name in expected_artifact_names
+            if _artifact_filename(name) not in found_names
+        ]
+        artifacts_present = not missing_artifacts
+        # run bloqueada / não liberada: artefatos não contam para implementação
+        if expected_artifact_names and not artifacts_released and not expect_blocked:
+            artifacts_present = False
     else:
-        claim_recall = 1.0
+        artifacts_present, missing_artifacts = _expected_artifacts_present(
+            output_root, expected_artifact_names
+        )
     if signals:
+        hits = sum(1 for sig in signals if sig in f"{claims_blob}\n{spec_blob}")
+        claim_recall = round(hits / len(signals), 3)
         ingestion_ok = all(sig in claims_blob for sig in signals)
         spec_ok = all(sig in spec_blob for sig in signals)
-        # para casos blocked sem artefato, spec/claims bastam
-        if expect_blocked:
-            signals_present = ingestion_ok or spec_ok
-        else:
-            art_ok = all(sig in artifact_blob for sig in signals) if artifact_blob else False
-            signals_present = (ingestion_ok or spec_ok) and (art_ok or spec_ok)
+        art_ok = (
+            all(sig in artifact_blob for sig in signals) if artifact_blob else False
+        )
     else:
+        claim_recall = 1.0
         ingestion_ok = True
         spec_ok = True
         art_ok = True
-        signals_present = True
 
     expected_own = expected.get("ownership") or {}
     found_own = _collect_repos(result)
@@ -301,7 +735,7 @@ def score_case(
     else:
         gate_unexpected = unexpected_inferences
 
-    # requirements traceability no spec
+    # requirements traceability no spec (fonte inválida / vínculo quebrado)
     traceable = True
     for spec in specs:
         claim_ids = {c.get("id") for c in (spec.get("claims") or []) if c.get("id")}
@@ -312,6 +746,76 @@ def score_case(
             if not src or any(s not in claim_ids for s in src):
                 traceable = False
                 break
+        if not traceable:
+            break
+
+    if not specs:
+        # run completa sem spec não é rastreável; bloqueio esperado pode não emitir
+        traceable = bool(expect_blocked)
+
+    blocking = _blocking_pendencies(specs)
+    no_blocking_pendencies = True if expect_blocked else (len(blocking) == 0)
+
+    # causa esperada em casos de bloqueio
+    actual_reasons = _collect_block_reasons(result)
+    actual_codes = _collect_block_codes(result)
+    expected_reason = expected.get("expected_reason") or expected.get("block_reason")
+    expected_codes = {
+        str(c) for c in (expected.get("expected_block_codes") or expected.get("block_codes") or [])
+    }
+    if expect_blocked:
+        reason_ok = (
+            True
+            if not expected_reason
+            else str(expected_reason) in actual_reasons
+        )
+        codes_ok = (
+            True if not expected_codes else expected_codes.issubset(actual_codes)
+        )
+        block_cause_ok = reason_ok and codes_ok
+    else:
+        block_cause_ok = True
+
+    # --- gates de aprovação (AND; uma dimensão falsa nunca compensa outra) ---
+    needs_artifact_files = bool(expected_artifact_names) and not expect_blocked
+    needs_artifact_signals = bool(signals) and needs_artifact_files
+    needs_spec_signals = bool(signals) and bool(specs or not expect_blocked)
+
+    gate_spec_signals = (not needs_spec_signals) or spec_ok
+    gate_artifacts_present = (not needs_artifact_files) or artifacts_present
+    gate_artifact_signals = (not needs_artifact_signals) or art_ok
+    # spec presente: run completa exige canonical-spec carregado
+    gate_spec_present = True if expect_blocked else bool(specs)
+    gate_recall = (not critical) or claim_recall >= 1.0
+    gate_unexpected_ok = gate_unexpected == 0
+
+    required_gates: dict[str, bool] = {
+        "selection_ok": selection_ok,
+        "status_ok": status_ok,
+        "service_match": service_match,
+        "expected_status_match": expected_status_match,
+        "ownership_match": ownership_match,
+        "unexpected_inferences_ok": gate_unexpected_ok,
+        "spec_present": gate_spec_present,
+        "spec_signals": gate_spec_signals,
+        "artifacts_present": gate_artifacts_present,
+        "artifact_signals": gate_artifact_signals,
+        "traceable": traceable,
+        "no_blocking_pendencies": no_blocking_pendencies,
+        "claim_recall_ok": gate_recall,
+        "block_cause_ok": block_cause_ok,
+    }
+
+    fail_reasons = [name for name, ok in required_gates.items() if not ok]
+    # signals_present: agregado diagnóstico (sem compensação spec→artefato)
+    if expect_blocked:
+        signals_present = (not signals) or (ingestion_ok or spec_ok)
+    elif not signals:
+        signals_present = True
+    else:
+        signals_present = gate_spec_signals and (
+            gate_artifact_signals if needs_artifact_signals else True
+        )
 
     layer_scores = {
         "ingestion": {
@@ -321,18 +825,36 @@ def score_case(
         "canonical_spec": {
             "expected_http_statuses": expected_status_match,
             "expected_signals": spec_ok if signals else True,
-            "all_requirements_traceable": traceable if specs else expect_blocked,
+            "all_requirements_traceable": traceable,
+            "spec_present": gate_spec_present,
         },
         "artifacts": {
             "prd_historia_signals": (
                 True
                 if expect_blocked or not signals
-                else all(sig in artifact_blob for sig in signals)
-            )
+                else art_ok
+            ),
+            "expected_artifacts_present": gate_artifacts_present,
+            "missing_artifacts": missing_artifacts,
+            "released_for_implementation": artifacts_released,
         },
         "provenance": {
             "unexpected_inferences": unexpected_inferences,
             "max_unreviewed_inferences": max_unreviewed,
+            "blocking_pendencies": len(blocking),
+        },
+        "block": {
+            "expect_blocked": expect_blocked,
+            "cause_ok": block_cause_ok,
+            "actual_reasons": sorted(actual_reasons),
+            "actual_codes": sorted(actual_codes),
+        },
+        "selection": {
+            "ok": selection_ok,
+            "run_id": rid,
+            "status": selection.status if selection else None,
+            "errors": selection_errors,
+            "files_used": list(selection.files_used) if selection else [],
         },
     }
 
@@ -344,15 +866,22 @@ def score_case(
         status_ok=status_ok,
         unexpected_inferences=gate_unexpected,
         claim_recall=claim_recall,
-        traceable=traceable if specs else expect_blocked,
+        traceable=traceable,
         critical=critical,
+        selection_ok=selection_ok,
+        artifacts_released=artifacts_released,
         latency_ms=float(expected.get("_latency_ms") or 0),
         layer_scores=layer_scores,
+        required_gates=required_gates,
+        fail_reasons=fail_reasons,
         details={
             "expected_services": sorted(expected_services),
             "found_services": sorted(found_services),
             "expected_statuses": sorted(expected_statuses),
             "actual_spec_statuses": sorted(actual_statuses),
+            "expected_http_operations": expected_ops,
+            "actual_http_operations": actual_contracts,
+            "http_operation_mismatches": op_mismatches[:20],
             "http_status_mode": mode,
             "http_status_mode_explicit": bool(explicit_mode),
             "signals": signals,
@@ -360,6 +889,17 @@ def score_case(
             "unexpected_items": unexpected_items[:20],
             "specs_loaded": len(specs),
             "fixture_kind": expected.get("fixture_kind"),
+            "missing_artifacts": missing_artifacts,
+            "blocking_pendencies": blocking[:10],
+            "expected_reason": expected_reason,
+            "expected_block_codes": sorted(expected_codes),
+            "actual_block_reasons": sorted(actual_reasons),
+            "actual_block_codes": sorted(actual_codes),
+            "fail_reasons": fail_reasons,
+            "run_id": rid,
+            "selection_ok": selection_ok,
+            "selection_errors": selection_errors,
+            "artifacts_released": artifacts_released,
         },
     )
 
@@ -432,7 +972,12 @@ def run_eval_suite(
             tokens = [int(result["est_tokens"])]
         expected = _load_expected(case_id)
         expected = {**expected, "_latency_ms": latency_ms}
-        score = score_case(expected, result, output_root=out)
+        score = score_case(
+            expected,
+            result,
+            output_root=out,
+            run_id=str(result.get("run_id") or ""),
+        )
         score.latency_ms = latency_ms
         results.append(
             {

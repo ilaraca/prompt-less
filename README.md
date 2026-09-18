@@ -993,10 +993,31 @@ Além da geração de artefatos, a série 1 adicionou um **harness** auditável:
 
 Cada `python -m src.run …` cria um diretório isolado e espelha artefatos em `outputs/` (compatível com scripts Devin).
 
+**Exit code:** a CLI imprime o JSON da run e sai com **0** só se
+`status=completed`. `blocked` / `failed` (e exceções) saem com código **2**,
+mantendo o JSON/diagnóstico no stdout para automação (`reason` /
+`error_type`). Scripts com `set -e` param antes de copiar artefatos ou
+chamar o executor.
+
+```bash
+.venv/bin/python -m src.run historia --dry-run --run-id demo-1
+# → exit 0 + JSON com status completed
+
+.venv/bin/python -m src.run historia --dry-run --no-split \
+  --inputs-dir tests/fixtures/adversarial_injection --output-root /tmp/pl
+# → exit 2 + JSON com status blocked / reason input_scan_failed
+```
+
+Consumidores (`assert_run_ready_for_executor`, gate em
+`python -m src.executors.devin --root … --run-id …`) recusam despacho quando o
+manifesto não está `completed`, quando o `run_id` diverge, ou quando o espelho
+`outputs/.mirror-manifest.json` marca blocked/failed — não reutilizam história
+de outra execução.
+
 | Caminho | Conteúdo |
 |---------|----------|
 | `runs/<id>/events.jsonl` | trilha append-only com cadeia HMAC (`prev_hmac` / `hmac`; `hash` é SHA-256 do payload) |
-| `runs/<id>/manifest.json` | status versionado, objective, timestamps, `status_history`, `integrity` (selo HMAC-SHA256) |
+| `runs/<id>/manifest.json` | status versionado, objective, timestamps, `status_history`, `result_summary.reason`, `integrity` (selo HMAC-SHA256) |
 | `runs/<id>/artifacts/` | artefatos da run (incl. `canonical-spec.yaml`) |
 | `runs/<id>/artifacts/contextos/<svc>/` | pacotes por serviço (`--all-contexts`) |
 | `runs/<id>/validations/` | `provenance.json`, `spec-validation.json` |
@@ -1018,7 +1039,7 @@ Cada `python -m src.run …` cria um diretório isolado e espelha artefatos em `
 | Integridade da trilha | cada evento em `events.jsonl` encadeia `prev_hmac` → `hmac` (HMAC-SHA256 de `kid:prev_hmac:hash`). Assinatura usa `PROMPTLESS_INTEGRITY_KEY` + `PROMPTLESS_INTEGRITY_KID` (default `v1`). Rotação: `PROMPTLESS_INTEGRITY_KEYS=v1=antiga`. Fail-closed se a chave atual faltar. `seal_artifacts()` roda **depois** de `finish`, sem emitir evento após o selo — `events_tip` é o HMAC de `run_finished`. `verify_run_dir` recusa ponta errada, kid desconhecido, evento forjado e artefato adulterado |
 | Colisão de id | `bootstrap()` cria o diretório com `mkdir` exclusivo; id repetido = `RunIdCollision` (retomada explícita: `bootstrap(resume=True)`) |
 | Transição de status | `set_status` valida a transição e usa `version` monotônica; escrita com versão obsoleta = `RunStateConflict`; estado terminal não reabre |
-| Espelho publicado por manifesto | `outputs/.mirror-manifest.json` (run_id + sha256 por arquivo) é o ponto de commit; obsoletos da publicação anterior são removidos depois, symlinks são ignorados e arquivos nunca publicados nunca são apagados |
+| Espelho publicado por manifesto | `outputs/.mirror-manifest.json` (run_id + status + sha256 por arquivo) é o ponto de commit; obsoletos da publicação anterior são removidos depois, symlinks são ignorados e arquivos nunca publicados nunca são apagados. Em `blocked`/`failed` o espelho é **invalidado** (`status` + `reason`, `files: []`) e o que a run completed anterior havia publicado é podado |
 
 O espelho em `outputs/` é **last-writer-wins** por design (compatibilidade com os scripts Devin); a fonte da verdade auditável continua sendo `runs/<id>/`.
 
@@ -1050,7 +1071,17 @@ Na compressão RAG, trechos viram **claims** com `SourceRef` (arquivo, linhas se
 
 Agregação multi-contexto (`--all-contexts`) deduplica por **identidade completa** (`context`, texto, origin, `service_id`, `chunk_id`, sources), não só por `claim.id`. O `provenance.json` inclui `spec.claims` (sintéticos `CLM-SYN-*` inclusive). `claim_links` no spec carrega `context` além de `claim_id`. Campos extras (`hmac`, `kid`, `integrity`) são aditivos. Descarte é reportado no mesmo arquivo. Runs bloqueadas pelo quality gate **preservam** `claims` e `discarded` no payload JSON.
 
-Vínculo claim → RF/AC/erro é um `ClaimLink` (`method`, `score`, `requires_review`). Matching lexical com score < 0.6 emite warning `LOW_CONFIDENCE_CLAIM_MATCH` e marca revisão **sem** mudar o `status` do requisito (`max_unreviewed_inferences` nos evals continua contando só `ResolvedInt`). História e PRD listam os claims utilizados na seção **Proveniência**.
+Vínculo claim → RF/AC/erro é um `ClaimLink` (`method`, `score`, `requires_review`).
+Matching lexical com score < 0.6 marca revisão **obrigatória**: o quality gate
+emite erro `REQUIRED_REVIEW_PENDING` e bloqueia implementação até haver
+`review_decisions` explícita (responsável, justificativa, `reviewed_spec_version`
++ fingerprint do claim). Aprovação libera; rejeição (`REQUIRED_REVIEW_REJECTED`)
+e evidência/spec incompatível (`REQUIRED_REVIEW_STALE`) continuam bloqueando.
+Confiança numérica do match **não** substitui evidência nem aprovação humana.
+O `status` do requisito não muda por causa do score (`max_unreviewed_inferences`
+nos evals continua contando só `ResolvedInt`). Avisos informativos
+(`ORPHAN_CLAIM`, `NFR_FROM_BASELINE`) permanecem não bloqueantes. História e PRD
+listam os claims utilizados na seção **Proveniência**.
 
 ### Canonical Spec + quality gate
 
@@ -1268,12 +1299,11 @@ Status:
 | `accepted` | melhoria comprovada **no candidato** (não é apply em produção) |
 | `rejected` | regressão crítica, não aplicada, risco medium+, ou workspaces iguais |
 
-Uma proposta **não aplicada** nunca entra em `accepted` nem `approved_for_experiment`. Regressão em qualquer caso `critical: true` rejeita o candidato mesmo se o pass rate agregado subir. HTTP crítico exige igualdade de status, salvo `http_status_mode` explícito na fixture. O histórico (`state/knowledge/proposals-history.json`) guarda diff e métricas comparadas. Apply em produção continua no ticket `14`.
+Uma proposta **não aplicada** nunca entra em `accepted` nem `approved_for_experiment`. Regressão em qualquer caso `critical: true` rejeita o candidato mesmo se o pass rate agregado subir. O gate HTTP das evals compara **contratos tipados por operação** (`http_operations` na fixture: serviço, método, rota, `success_status` resolvido e erros vinculados) — números em RF/AC/perguntas **não** provam o contrato; sucesso ausente/pendente (`requires_review`) não recebe valor presumido. Sem `http_operations`, o fallback `http_statuses` também só lê o tipado. Modo `exact` (default em `critical`) vs `subset` (`http_status_mode`) aplica-se aos erros da operação. O histórico (`state/knowledge/proposals-history.json`) guarda diff e métricas comparadas. Apply em produção continua no ticket `14`.
 
 Limites deste slice (não reabrir; o `14` consome o overlay):
 
 - O apply grava `config/proposal-overlay.yaml` só no candidato. `src.run` continua lendo `config/pipeline.yaml` do ROOT — a eval prova isolamento e gates, não o efeito da chave do playbook no IR.
-- `two_services` ainda espera HTTP 401 que o spec não materializa (residual do recorte de regras). O gate multi-contexto que passa é `eval_multi_context` (200/400/422 exact).
 - A suíte default inclui `eval_adversarial` e `eval_multi_context`. `--cases` restringe.
 
 ### Evals e testes
@@ -1283,7 +1313,9 @@ Limites deste slice (não reabrir; o `14` consome o overlay):
 PYTHONPATH=. .venv/bin/python scripts/quality_gates.py
 ```
 
-Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services, **eval_adversarial**, **eval_multi_context**), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`, com métricas de claim recall, traceability, inferências inesperadas, custo e latência. Casos `critical` têm gate individual na comparação baseline × candidate. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
+Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services, **eval_adversarial**, **eval_multi_context**), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada (`ingestion` / `canonical_spec` / `artifacts` / `provenance` / `selection`) é **diagnóstico**; a aprovação usa `required_gates` em AND — seleção da run, spec, artefatos esperados, rastreabilidade, serviço e pendências bloqueantes **não se compensam**. O gate HTTP usa `http_operations` (serviço + método + rota + sucesso tipado + erros da op). Casos `expect_blocked` podem declarar `expected_reason` e `expected_block_codes` (ex.: `ambiguous_status` exige `AMBIGUOUS_HTTP_STATUS`). Métricas: claim recall, traceability, inferências inesperadas, custo e latência. Casos `critical` têm gate individual na comparação baseline × candidate. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
+
+**Seleção por execução (`31`):** `_load_specs` / `_load_final_artifacts` não fazem mais `rglob` no `output_root`. A eval exige `run_id` (via `result["run_id"]` ou parâmetro) e lê apenas arquivos registrados em `runs/<run_id>/manifest.json` → `integrity.files`, verificando status terminal e sha256 (e a cadeia HMAC quando a chave está presente). O espelho de compatibilidade `outputs/` **não** entra na seleção automática — uma run antiga correta no mesmo root (ou no espelho) não faz a run atual passar. Run `blocked` pode ser scoreada como bloqueio esperado (`expect_blocked`), mas `artifacts_released` / `layer_scores.artifacts.released_for_implementation` ficam `false` (história/PRD não liberados para implementação). API: `select_run_evidence(root=…, run_id=…)`. Presence de artefatos obrigatórios (`30`) também consulta só o manifesto da run.
 
 
 ---

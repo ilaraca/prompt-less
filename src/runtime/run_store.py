@@ -94,17 +94,26 @@ class RunStore:
     def finish(self, status: str, result: dict[str, Any] | None = None) -> None:
         if status not in TERMINAL_STATUSES:
             raise InvalidStatusTransition(f"status final inválido: {status!r}")
+        summary: dict[str, Any] | None = None
+        if result is not None:
+            summary = {
+                "split": result.get("split"),
+                "contexts": result.get("contexts"),
+                "output": result.get("output"),
+            }
+            reason = result.get("reason")
+            if reason:
+                summary["reason"] = reason
+            elif result.get("by_context"):
+                for ctx_result in result["by_context"]:
+                    if isinstance(ctx_result, dict) and ctx_result.get("reason"):
+                        summary["reason"] = ctx_result["reason"]
+                        break
         self.set_status(
             status,
             finished_at=_now(),
             current_stage="done" if status == "completed" else status,
-            result_summary={
-                "split": (result or {}).get("split"),
-                "contexts": (result or {}).get("contexts"),
-                "output": (result or {}).get("output"),
-            }
-            if result
-            else None,
+            result_summary=summary,
         )
         self.events.emit("run_finished", status=status, run_id=self.ctx.run_id)
         self._write_latest_pointer(status)
@@ -235,6 +244,36 @@ class RunStore:
         self.write_manifest({"integrity": integrity})
         return integrity
 
+    def sealed_file_entries(self) -> list[dict[str, Any]]:
+        """Entradas `integrity.files` do manifesto (registro canônico da run)."""
+        integrity = self.read_manifest().get("integrity")
+        if not isinstance(integrity, dict):
+            return []
+        files = integrity.get("files") or []
+        return [e for e in files if isinstance(e, dict)]
+
+    def resolve_sealed_path(self, rel: str) -> Path:
+        """
+        Resolve um caminho relativo listado no selo, contido em `run_dir`.
+
+        Espelhos (`outputs/`) ficam fora deste contrato — só a árvore da run.
+        """
+        rel = str(rel or "")
+        if not rel or rel.startswith("/") or ".." in Path(rel).parts:
+            raise UnsafePath(f"caminho de selo inválido: {rel!r}")
+        return resolve_within(self.ctx.run_dir, self.ctx.run_dir / rel)
+
+    def verify_sealed_entry(self, entry: dict[str, Any]) -> Path:
+        """Confirma existência + sha256 de uma entrada do manifesto."""
+        rel = str(entry.get("path") or "")
+        path = self.resolve_sealed_path(rel)
+        if not path.is_file() or path.is_symlink():
+            raise FileNotFoundError(f"artefato ausente: {rel}")
+        expected = str(entry.get("sha256") or "")
+        if expected and sha256_of(path) != expected:
+            raise ValueError(f"artefato adulterado: {rel}")
+        return path
+
     def write_debugger(self, report: dict[str, Any]) -> Path:
         """Persiste o Agent Debugger em validations/debugger.json."""
         path = self.ctx.validations_dir / "debugger.json"
@@ -290,6 +329,7 @@ class RunStore:
             "run_id": self.ctx.run_id,
             "published_at": _now(),
             "source": str(src),
+            "status": "completed",
             "files": files,
         }
         atomic_write_json(dest_root / MIRROR_MANIFEST_NAME, manifest)
@@ -301,6 +341,42 @@ class RunStore:
             "mirror_published",
             run_id=self.ctx.run_id,
             files=len(files),
+            removed=len(removed),
+        )
+        return manifest
+
+    def invalidate_mirror(
+        self,
+        compat_root: Path,
+        *,
+        status: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Marca o espelho `outputs/` como não despachável (blocked/failed).
+
+        Remove só o que o manifesto anterior publicou — impede scripts de
+        reutilizar história/artefatos de uma run completed anterior.
+        """
+        dest = Path(compat_root) / "outputs"
+        dest.mkdir(parents=True, exist_ok=True)
+        dest_root = dest.resolve()
+        previous = read_json(dest_root / MIRROR_MANIFEST_NAME) or {}
+        removed = self._prune_stale_mirror(dest_root, previous, set())
+        manifest: dict[str, Any] = {
+            "run_id": self.ctx.run_id,
+            "published_at": _now(),
+            "source": str(self.ctx.artifacts_dir),
+            "status": status,
+            "files": [],
+        }
+        if reason:
+            manifest["reason"] = reason
+        atomic_write_json(dest_root / MIRROR_MANIFEST_NAME, manifest)
+        self.events.emit(
+            "mirror_invalidated",
+            run_id=self.ctx.run_id,
+            status=status,
             removed=len(removed),
         )
         return manifest

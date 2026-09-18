@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.domain.claim import Claim, ClaimOrigin  # noqa: E402
+from src.domain.review import ReviewDecision  # noqa: E402
 from src.domain.source_ref import SourceRef  # noqa: E402
 from src.domain.spec import (  # noqa: E402
     AcceptanceCriterion,
@@ -65,6 +66,9 @@ def _load_spec(path: Path) -> CanonicalSpec:
             )
         )
     operations = [Operation.from_raw(o) for o in (raw.get("operations") or [])]
+    review_decisions = [
+        ReviewDecision.from_raw(item) for item in (raw.get("review_decisions") or [])
+    ]
     return CanonicalSpec(
         version=str(raw.get("spec_version") or "1.0"),
         service_id=str((svc.get("id") or "default")),
@@ -79,6 +83,7 @@ def _load_spec(path: Path) -> CanonicalSpec:
         errors=[SpecError(**e) for e in (raw.get("errors") or [])],
         nfrs=[Requirement(**n) for n in (raw.get("nfrs") or [])],
         open_questions=[OpenQuestion(**q) for q in (raw.get("open_questions") or [])],
+        review_decisions=review_decisions,
     )
 
 

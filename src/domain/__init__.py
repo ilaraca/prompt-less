@@ -12,6 +12,12 @@ from src.domain.provenance import (
     merge_claims,
     resolve_claim,
 )
+from src.domain.review import (
+    ReviewDecision,
+    decide_claim_link_review,
+    decision_matches_evidence,
+    find_review_decision,
+)
 from src.domain.source_ref import SourceRef
 from src.domain.spec import (
     AcceptanceCriterion,
@@ -33,9 +39,13 @@ __all__ = [
     "MATCH_REVIEW_THRESHOLD",
     "Requirement",
     "ResolvedInt",
+    "ReviewDecision",
     "SourceRef",
     "claim_fingerprint",
     "claim_namespace",
+    "decide_claim_link_review",
+    "decision_matches_evidence",
+    "find_review_decision",
     "make_claim_id",
     "merge_claims",
     "resolve_claim",

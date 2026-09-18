@@ -425,12 +425,14 @@ def main(argv: list[str] | None = None) -> None:
     import sys
 
     from src.close_loop import close_loop
+    from src.runtime.consume import RunNotReady, assert_run_ready_for_executor, resolve_run_dir
     from src.runtime.run_context import new_run_id, validate_run_id
 
     p = argparse.ArgumentParser(description="Prompt-less — DevinAdapter + close_loop")
     p.add_argument("--repo", type=Path, required=True, help="checkout isolado do app")
     p.add_argument("--repository", default=None, help="nome lógico do repo (default: basename)")
     p.add_argument("--run-id", default=None)
+    p.add_argument("--root", type=Path, default=None, help="raiz com runs/<id> (gate de consumo)")
     p.add_argument("--artifacts", type=Path, default=None, help="dir com canonical-spec etc.")
     p.add_argument("--out", type=Path, default=None, help="dir para execution.json + adapter-log")
     p.add_argument("--spec", type=Path, default=None, help="canonical-spec.yaml p/ close_loop")
@@ -454,6 +456,32 @@ def main(argv: list[str] | None = None) -> None:
     repository = args.repository or repo.name
     out = (args.out or (Path("runs") / run_id / "executor")).resolve()
     adapter = DevinAdapter(cli_bin=args.cli)
+
+    # Gate: run blocked/failed ou identidade divergente não despacha ao executor.
+    root = (args.root or Path(".")).resolve()
+    run_dir = resolve_run_dir(root, run_id)
+    if (run_dir / "manifest.json").is_file():
+        try:
+            assert_run_ready_for_executor(
+                run_dir,
+                run_id=run_id,
+                artifacts_dir=args.artifacts,
+            )
+        except RunNotReady as exc:
+            print(
+                json.dumps(
+                    {
+                        "status": exc.status or "blocked",
+                        "run_id": exc.run_id or run_id,
+                        "reason": exc.reason,
+                        "error": str(exc),
+                        "error_type": "RunNotReady",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            sys.exit(2)
 
     if args.artifacts:
         adapter.prepare(
