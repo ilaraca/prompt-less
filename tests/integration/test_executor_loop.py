@@ -232,7 +232,8 @@ def test_verify_fails_out_of_scope_and_unmapped(tmp_path: Path):
     codes = {i.code for i in verify.issues}
     assert "FILE_OUT_OF_SCOPE" in codes
     assert "COMMAND_DENIED" in codes
-    assert "TEST_FAILED" in codes
+    # terraform apply não é runner de teste (35): evidência comportamental ausente.
+    assert "TEST_NOT_EVIDENCED" in codes
     assert "RF_NOT_MAPPED" in codes
 
 

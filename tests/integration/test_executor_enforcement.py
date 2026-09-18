@@ -282,3 +282,148 @@ def test_enforcement_contract_roundtrip():
     c = EnforcementContract.from_dict(raw)
     assert c.capabilities() == ENFORCEMENT_CAPABILITIES
     assert c.to_dict()["notes"] == "attested"
+
+
+def test_child_process_cannot_write_outside_repo(tmp_path: Path):
+    """Regressão: processo autorizado não vaza marcador fora do repo (exit≠sucesso silencioso)."""
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "marker.txt"
+    probe = repo / "tests" / "write_outside.py"
+    probe.write_text(
+        "from pathlib import Path\n"
+        f"target = Path({str(marker)!r})\n"
+        "try:\n"
+        "    target.write_text('leaked')\n"
+        "    print('LEAKED')\n"
+        "except PermissionError as e:\n"
+        "    print('DENIED:' + type(e).__name__)\n",
+        encoding="utf-8",
+    )
+    profile = _bff_profile()
+    profile["commands_allow"] = [{"executable": sys.executable}]
+    with EnforcedRunner(profile, repo_root=repo) as runner:
+        proc = runner.run([sys.executable, "tests/write_outside.py"])
+    assert not marker.exists(), "filho escreveu fora do repositório"
+    assert "DENIED" in (proc.stdout or "")
+    assert "LEAKED" not in (proc.stdout or "")
+
+
+def test_child_open_write_outside_repo_denied(tmp_path: Path):
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "via_open.txt"
+    (repo / "tests" / "open_outside.py").write_text(
+        f"p = {str(marker)!r}\n"
+        "try:\n"
+        "    open(p, 'w').write('x')\n"
+        "    print('LEAKED')\n"
+        "except PermissionError:\n"
+        "    print('DENIED')\n",
+        encoding="utf-8",
+    )
+    profile = _bff_profile()
+    profile["commands_allow"] = [{"executable": sys.executable}]
+    with EnforcedRunner(profile, repo_root=repo) as runner:
+        proc = runner.run([sys.executable, "tests/open_outside.py"])
+    assert not marker.exists()
+    assert "DENIED" in (proc.stdout or "")
+
+
+def test_enforced_runner_is_callable_like_run_argv(tmp_path: Path):
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    (repo / "tests" / "ok.py").write_text("print('callable-ok')\n", encoding="utf-8")
+    profile = _bff_profile()
+    profile["commands_allow"] = [{"executable": sys.executable}]
+    with EnforcedRunner(profile, repo_root=repo, command_log=tmp_path / "log.jsonl") as runner:
+        proc = runner(
+            [sys.executable, "tests/ok.py"],
+            profile=profile,
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            repo_root=str(repo),
+        )
+    assert proc.returncode == 0
+    assert "callable-ok" in (proc.stdout or "")
+
+
+def test_devin_keeps_enforced_runner_on_invoke(tmp_path: Path, monkeypatch):
+    """Devin + EnforcedRunner não pode trocar para run_argv (remove limites)."""
+    import src.executors.devin as devin_mod
+    import src.executors.safe_exec as safe_mod
+
+    repo, base, _ = make_git_repo(tmp_path, base_files=DEFAULT_BASE)
+    fake_bin = tmp_path / "fake-devin"
+    fake_bin.write_text(
+        "#!/bin/sh\necho fake-devin-ok\nexit 0\n",
+        encoding="utf-8",
+    )
+    fake_bin.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    profile = _bff_profile()
+    # allowlist não precisa incluir fake-devin: invoke usa profile=None (meta-CLI).
+    calls: list[tuple] = []
+    real_run_argv = safe_mod.run_argv
+
+    def spy_run_argv(*args, **kwargs):
+        calls.append(("run_argv", args, kwargs))
+        return real_run_argv(*args, **kwargs)
+
+    monkeypatch.setattr(safe_mod, "run_argv", spy_run_argv)
+    monkeypatch.setattr(devin_mod, "run_argv", spy_run_argv)
+
+    with EnforcedRunner(profile, repo_root=repo, command_log=tmp_path / "cmd.jsonl") as runner:
+        # Garante que o adapter não desvia para o spy direto como proc_runner.
+        adapter = DevinAdapter(
+            cli_bin="fake-devin",
+            runner=runner,
+            enforcement_contract=local_enforcement_contract(),
+        )
+        # Espiona se alguém atribuiria run_argv como runner de processo.
+        original_invoke = adapter._invoke_cli
+        seen: dict[str, object] = {}
+
+        def wrapped_invoke(*a, **k):
+            seen["runner_is_enforced"] = isinstance(adapter.runner, EnforcedRunner)
+            seen["runner_id"] = id(adapter.runner)
+            return original_invoke(*a, **k)
+
+        monkeypatch.setattr(adapter, "_invoke_cli", wrapped_invoke)
+        result = adapter.execute(
+            run_id="run-enforced-path",
+            repository="bff-cliente",
+            repo_path=repo,
+            out_dir=tmp_path / "out",
+            layer="bff",
+            profile=profile,
+            prompt="impl",
+            require_enforcement=True,
+            timeout=30.0,
+        )
+
+    assert result.base_commit == base
+    assert seen.get("runner_is_enforced") is True
+    session = json.loads(
+        (tmp_path / "out" / "devin-session.json").read_text(encoding="utf-8")
+    )
+    invoke_events = [e for e in session["events"] if e.get("kind") == "invoke"]
+    assert invoke_events
+    assert invoke_events[0].get("enforced_runner") is True
+    # run_argv só pode ser chamado *por dentro* do EnforcedRunner (com sandbox),
+    # nunca como substituto direto do adapter — o argv logado deve estar enforced.
+    log_path = tmp_path / "cmd.jsonl"
+    assert log_path.is_file()
+    lines = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert lines and lines[0]["enforced"] is True
+    assert lines[0]["argv"][0] == "fake-devin"

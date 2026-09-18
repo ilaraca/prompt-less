@@ -7,6 +7,23 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **EnforcedRunner sitecustomize único**: FS-deny e network-deny passam a
+  viver no mesmo módulo injetado (Python só carrega um `sitecustomize` no
+  `PYTHONPATH`). Com `network=deny` o guard de writes dos filhos voltava a
+  falhar silenciosamente. Guard libera fd (`open(int)`) e `/dev/*` para
+  runtime (pytest/capture). Teste de loop alinhado a `TEST_NOT_EVIDENCED`
+  para `terraform apply` (não é runner comportamental — ticket 35).
+
+- **Perda crítica reprova na eval** (`38-critical-context-budget`):
+  `silent_critical_loss` ou `critical_coverage.complete=False` sem
+  `blocked`/`split_required` explícito passa a falhar o gate obrigatório
+  `critical_coverage_ok` (`passed=False` / `fail_reasons`). Diagnóstico em
+  `layer_scores.critical_context` sozinho não aprova mais a run. Block/split
+  explícito permanece permitido. Regressão em
+  `tests/integration/test_critical_context_budget.py`.
+
 ### Added
 
 - **Contexto crítico e custo completo** (`38-critical-context-budget`):
@@ -26,7 +43,10 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   latência. `improve` registra experimento (referência, candidato, diff,
   condições, `reserved_cases`; hold-out default `eval_adversarial`) e o
   candidato não pode mutar `failure-patterns` / `playbook` /
-  `permission_profiles`.
+  `permission_profiles`. Hold-out permanece separado da orientação da mudança,
+  mas `apply_reserved_gate` veta promoção se houver regressão/falha crítica
+  (ou não crítica sem tolerância) nos casos reservados — mesmo com melhora no
+  conjunto de desenvolvimento.
 - **Limites efetivos do executor** (`37-executor-enforcement`):
   `EnforcedRunner` aplica writes/comandos, scrub de credenciais, timeout,
   processos/memória e negação de rede *durante* a execução; profiles ganham
@@ -34,9 +54,22 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   `EnforcementContract` (evidência em `enforcement-contract.json`) ou bloqueia
   (`DispatchBlocked`). Worktree/`shell=False` documentados como ≠ sandbox.
   Testes: `tests/integration/test_executor_enforcement.py`.
+- **Contenção de writes nos processos filhos** (`37` ajuste pós-reabertura):
+  `apply_write` sozinho não basta — `EnforcedRunner` injeta sitecustomize que
+  nega `open`/`Path.write_*` fora de `repo_root`, define `TMPDIR` dentro do
+  repo e, quando a sonda OS passa, envolve o filho com `sandbox-exec` (macOS)
+  ou `bwrap` (Linux). Capacidade `writes` só é declarada se a contenção for
+  verificada; senão `DispatchBlocked`. `EnforcedRunner` é callable
+  (`runner(argv, profile=…)`) e o adapter Devin **não** o substitui por
+  `run_argv` na invocação do CLI.
 
 ### Changed
 
+- **Fingerprint do conteúdo em revisão obrigatória** (`33-required-review-gate`):
+  `ReviewDecision` passa a gravar `reviewed_subject_fingerprint` (hash do texto
+  do RF / given-when-then do AC / trigger do erro + evidências). Alterar o
+  conteúdo com os mesmos IDs, claim e `spec.version` invalida a aprovação
+  (`REQUIRED_REVIEW_STALE`); o fingerprint do claim sozinho não basta.
 - **Política completa no reparo** (`36-repair-policy`): `build_repair_request`
   deixa de filtrar só padrões protegidos — reaplica profile da camada +
   `repo_root` (`resolve_repo_path` / realpath / symlink) a cada tentativa.
@@ -52,7 +85,9 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   pendências bloqueantes — entram em AND e **não se compensam** (spec OK não
   salva artefato ausente). Casos `expect_blocked` validam também
   `expected_reason` / `expected_block_codes`. Rastreabilidade deixa de ser
-  gate só em `critical`.
+  gate só em `critical`. O gate `traceable` exige SourceRef válido em cada
+  claim (document não vazio; linhas coerentes): existência só do ID do claim
+  **não** basta, e manifesto íntegro **não** compensa fonte ausente/inválida.
 
 ### Added
 
@@ -61,7 +96,10 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   `exit_code=0` — o runner do harness executa o comando sugerido, captura
   argv/stdout/stderr/exit reais e grava binding (`run_id`, repositório,
   commits, `spec_hash`) no JSONL. Sidecar é só sugestão (`command`/`kind`/
-  `covers`). Verify exige `executed_by=harness`, rejeita log ausente/
+  `covers`). Comando sem runner de teste (ex.: `git diff`), ainda que
+  autorizado e com exit 0, **não** prova aceite — `kind`/`covers` do agente
+  não bastam. `EnforcedRunner` é invocável como `run_argv` (`__call__` /
+  `invoke_runner`). Verify exige `executed_by=harness`, rejeita log ausente/
   incompleto/adulterado/de outra run, e bloqueia AC obrigatório sem prova
   comportamental (`AC_WITHOUT_BEHAVIORAL_EVIDENCE` — arquivo existente não
   basta). Stubs/skips ficam em `evidence_hashes.test_kinds.stub_or_skip`,
@@ -395,6 +433,7 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   `completed`/`blocked` continuam finais)
 
 ### Fixed
+- Integração 35/37: `EnforcedRunner(profile=None)` pula allowlist do binário meta-CLI Devin; `.promptless-tmp` entra em `.git/info/exclude` para não falhar verify por worktree sujo.
 
 - Quality-gates deixam de divergir entre a máquina e o GitHub: o workflow chama
   `python scripts/quality_gates.py` (compile, ruff, mypy, YAML, secrets, audit,

@@ -32,6 +32,58 @@ NON_BEHAVIORAL_KINDS = frozenset(
 E2E_KINDS = frozenset({"e2e", "end_to_end", "integration", "acceptance"})
 UNIT_KINDS = frozenset({"unit", "test", "tests", "check"})
 
+# Inspeção/SCM e utilitários — autorizados no profile ≠ prova comportamental.
+_NON_TEST_EXECUTABLES = frozenset(
+    {
+        "git",
+        "diff",
+        "ls",
+        "cat",
+        "echo",
+        "true",
+        "false",
+        "printf",
+        "find",
+        "grep",
+        "rg",
+        "sed",
+        "awk",
+        "head",
+        "tail",
+        "wc",
+        "cp",
+        "mv",
+        "rm",
+        "mkdir",
+        "touch",
+        "chmod",
+        "stat",
+        "file",
+        "which",
+        "env",
+        "pwd",
+        "basename",
+        "dirname",
+    }
+)
+_TEST_RUNNER_EXECUTABLES = frozenset(
+    {
+        "pytest",
+        "py.test",
+        "nosetests",
+        "unittest",
+        "rspec",
+        "bats",
+        "phpunit",
+        "jest",
+        "vitest",
+    }
+)
+_MAVEN_EXECUTABLES = frozenset({"mvn", "mvnw"})
+_GRADLE_EXECUTABLES = frozenset({"gradle", "gradlew"})
+_NODE_EXECUTABLES = frozenset({"npm", "npx", "yarn", "pnpm", "bun"})
+_PYTHON_EXECUTABLES = frozenset({"python", "python3", "python3.11", "python3.12", "python3.13"})
+
 
 class GitEvidenceError(RuntimeError):
     """Falha ao inspecionar o repositório Git."""
@@ -618,6 +670,69 @@ def is_e2e_kind(kind: Any) -> bool:
     return normalize_test_kind(kind) == "e2e"
 
 
+def _executable_basename(raw: str) -> str:
+    name = Path(str(raw or "").strip()).name.lower()
+    if name.startswith("./"):
+        name = name[2:]
+    return name
+
+
+def is_behavioral_test_command(command: Any) -> bool:
+    """True só para runners de teste reconhecidos.
+
+    ``kind``/``covers`` do sidecar e allowlist do profile **não** bastam:
+    ``git diff`` (ou inspeção similar) com exit 0 nunca prova aceite.
+    """
+    if isinstance(command, (list, tuple)):
+        argv = tuple(str(a) for a in command) if command else None
+    else:
+        argv = command_argv(command) if command is not None else None
+    if not argv:
+        return False
+    exe = _executable_basename(argv[0])
+    args_l = [str(a).lower() for a in argv[1:]]
+
+    if exe in _NON_TEST_EXECUTABLES:
+        return False
+
+    if exe in _TEST_RUNNER_EXECUTABLES:
+        return True
+
+    if exe in _MAVEN_EXECUTABLES:
+        return any(
+            a in {"test", "verify"} or a.startswith("test") or a.startswith("verify")
+            for a in args_l
+        )
+
+    if exe in _GRADLE_EXECUTABLES:
+        return any("test" in a for a in args_l)
+
+    if exe in _NODE_EXECUTABLES:
+        return any(a in {"test", "ci"} or a.endswith(":test") for a in args_l)
+
+    if exe == "go" and args_l[:1] == ["test"]:
+        return True
+
+    if exe == "cargo" and args_l[:1] == ["test"]:
+        return True
+
+    if exe == "make" and any(a == "test" or a.startswith("test") for a in args_l):
+        return True
+
+    if exe in _PYTHON_EXECUTABLES or exe.startswith("python"):
+        for i, arg in enumerate(args_l):
+            if arg == "-m" and i + 1 < len(args_l):
+                mod = args_l[i + 1]
+                if mod in {"pytest", "unittest", "nose", "nose2"}:
+                    return True
+        return False
+
+    if "test" in exe and exe.endswith((".sh", ".bash", ".py")):
+        return True
+
+    return False
+
+
 def spec_content_hash(spec: Any) -> str:
     """Hash estável do Canonical Spec (dict ou objeto com ``to_dict``)."""
     if hasattr(spec, "to_dict") and callable(spec.to_dict):
@@ -713,12 +828,18 @@ def test_covers_acceptance(
 
 
 def is_harness_behavioral_evidence(test: dict[str, Any]) -> bool:
-    """Evidência comportamental: harness executou, não é stub/skip, exit 0."""
+    """Evidência comportamental: harness executou runner de teste, não stub, exit 0."""
     if is_non_behavioral_kind(test.get("kind")):
         return False
     if str(test.get("executed_by") or "") != HARNESS_EXECUTED_BY:
         return False
     if test.get("suggestion_only"):
+        return False
+    command = test.get("command") or test.get("cmd")
+    if command is None and isinstance(test.get("argv"), list):
+        raw = [str(a) for a in test["argv"]]
+        command = {"executable": raw[0], "args": raw[1:]} if raw else None
+    if not is_behavioral_test_command(command if command is not None else test.get("argv")):
         return False
     exit_code = test.get("exit_code")
     return isinstance(exit_code, int) and exit_code == 0
@@ -787,6 +908,14 @@ def test_evidence_errors(
             (
                 "TEST_NOT_EVIDENCED",
                 f"teste `{name}` sem comando verificável",
+            )
+        )
+    elif not is_behavioral_test_command(argv):
+        issues.append(
+            (
+                "TEST_NOT_EVIDENCED",
+                f"teste `{name}` comando não é runner comportamental "
+                f"(kind/covers do agente não bastam; ex.: git diff): {' '.join(argv)}",
             )
         )
     exit_code = test.get("exit_code")

@@ -267,7 +267,10 @@ aceites e evidências. Conteúdo crítico **não** desaparece em silêncio ao re
 o teto: omissões têm `reason` + `ref` recuperável; se o mínimo crítico não cabe,
 a run bloqueia (`CRITICAL_BUDGET_EXCEEDED`) ou exige divisão
 (`CRITICAL_BUDGET_SPLIT_REQUIRED`) com `diagnosis` / `split_plan` em
-`budget_report`. `task_metrics` registra `attempts` e marca custo como
+`budget_report`. Na eval, `silent_critical_loss` ou `critical_coverage.complete=False`
+sem block/split explícito falha o gate obrigatório `critical_coverage_ok`
+(`passed=False` / `fail_reasons`) — diagnóstico em `layer_scores.critical_context`
+não basta para aprovar. `task_metrics` registra `attempts` e marca custo como
 `estimate` (nunca `is_invoice`); no live, `cost_kind=observed_billing` distingue
 uso observado de fatura.
 
@@ -1085,8 +1088,10 @@ Vínculo claim → RF/AC/erro é um `ClaimLink` (`method`, `score`, `requires_re
 Matching lexical com score < 0.6 marca revisão **obrigatória**: o quality gate
 emite erro `REQUIRED_REVIEW_PENDING` e bloqueia implementação até haver
 `review_decisions` explícita (responsável, justificativa, `reviewed_spec_version`
-+ fingerprint do claim). Aprovação libera; rejeição (`REQUIRED_REVIEW_REJECTED`)
-e evidência/spec incompatível (`REQUIRED_REVIEW_STALE`) continuam bloqueando.
++ fingerprint do claim **e** do conteúdo do RF/AC/erro). Aprovação libera;
+rejeição (`REQUIRED_REVIEW_REJECTED`) e evidência/spec/conteúdo incompatível
+(`REQUIRED_REVIEW_STALE`) continuam bloqueando — inclusive quando só o texto do
+requisito muda com os mesmos IDs, claim e versão de schema.
 Confiança numérica do match **não** substitui evidência nem aprovação humana.
 O `status` do requisito não muda por causa do score (`max_unreviewed_inferences`
 nos evals continua contando só `ResolvedInt`). Avisos informativos
@@ -1167,11 +1172,14 @@ executor é relato: `changed_files` sai de `git diff` entre `base_commit` e
 precisa ter sido **executado pelo harness** (`executed_by=harness`) com
 comando, `exit_code`, timestamp, artefato/log e binding
 (`run_id`/repositório/commits/`spec_hash`). `passed=True` do sidecar do
-agente **não** basta. Divergência entre relato e evidência é erro
-(`EVIDENCE_DIVERGENCE`). Log ausente, incompleto, adulterado ou de outra run
-reprova (`TEST_NOT_EVIDENCED` / `TEST_EVIDENCE_TAMPERED` /
-`TEST_EVIDENCE_BINDING`). AC obrigatório exige prova comportamental — locator
-de arquivo sozinho gera `AC_WITHOUT_BEHAVIORAL_EVIDENCE`. O
+agente **não** basta — e `kind`/`covers` também não: o comando precisa ser
+um runner de teste reconhecido (pytest, `./mvnw test`, etc.); `git diff` ou
+outra inspeção autorizada com exit 0 **não** prova aceite. Divergência entre
+relato e evidência é erro (`EVIDENCE_DIVERGENCE`). Log ausente, incompleto,
+adulterado ou de outra run reprova (`TEST_NOT_EVIDENCED` /
+`TEST_EVIDENCE_TAMPERED` / `TEST_EVIDENCE_BINDING`). AC obrigatório exige
+prova comportamental — locator de arquivo sozinho gera
+`AC_WITHOUT_BEHAVIORAL_EVIDENCE`. O
 `verify-report.json` inclui `evidence_hashes` (SHA-256 do diff, do log e dos
 artefatos de teste, com HMAC reusando `PROMPTLESS_INTEGRITY_KEY`) e
 `test_kinds` separando `e2e` / `unit` / `stub_or_skip`.
@@ -1208,8 +1216,9 @@ Pedido de reparo (`build_repair_request` / `--attempt`):
 
 O adapter Devin materializa evidência de teste **reexecutando** as sugestões
 do sidecar (`docs/prompt-less/execution-result.json`) via o mesmo runner
-controlado pelo harness; stub/skip são registrados mas não contam como
-passe.
+controlado pelo harness (`run_argv` ou `EnforcedRunner`, ambos invocáveis
+com a mesma forma); stub/skip e comandos sem runner de teste são
+registrados mas não contam como passe.
 
 ### Aprovação auditável (`src.approval`)
 
@@ -1245,9 +1254,17 @@ Policy (`config/permission_profiles.yaml` + `src/executors/policy.py`):
   (`deny`|`allow`), `credentials` (`scrub`|`passthrough`), `required_capabilities`
 - execução nova vai por `src.executors.safe_exec.run_argv` — `shell=True` é erro;
   **`run_argv(profile=None)` não é sandbox** (só impede shell)
-- enforcement durante a execução: `src.executors.runner.EnforcedRunner` (writes,
-  comandos, scrub de credenciais, timeout, processos/memória best-effort, rede
-  via sitecustomize + deny de CLIs); log JSONL confiável com `"enforced": true`
+- enforcement durante a execução: `src.executors.runner.EnforcedRunner` (writes
+  do harness **e** dos processos filhos via sitecustomize FS-deny +
+  `sandbox-exec`/`bwrap` quando a sonda OS passa; comandos; scrub de
+  credenciais; timeout; processos/memória best-effort; rede via sitecustomize +
+  deny de CLIs); capacidade `writes` só entra em `probe_local_capabilities` se a
+  contenção for verificada — senão despacho `DispatchBlocked`; log JSONL com
+  `"enforced": true`
+- contrato callable compartilhado com adapters (ticket 35):
+  `EnforcedRunner(argv, profile=…)` equivale a `run_argv` na forma da chamada;
+  `profile=None` = meta-CLI (pula allowlist do binário, **mantém** demais
+  limites). O Devin **não** troca `EnforcedRunner` por `run_argv`
 - despacho Devin exige `EnforcementContract` cujas `guarantees` cubram
   `limits.required_capabilities` (default externo = sem garantias →
   `DispatchBlocked`); evidência em `enforcement-contract.json` /
@@ -1357,7 +1374,11 @@ Tolerância não crítica só vale com `justification` explícita registrada em
 demonstrável (`claim_recall` / `traceability_rate` / `pass_rate` /
 `unexpected_inferences` / `avg_est_tokens`); **jitter de latência não conta**.
 Experimento (`improve`) grava referência, candidato, diff, condições e
-`reserved_cases` (hold-out default: `eval_adversarial`). O candidato **não**
+`reserved_cases` (hold-out default: `eval_adversarial`). O hold-out **não**
+orienta a mudança (métricas/`case_gates` de promoção vêm do conjunto de
+desenvolvimento), mas regressão ou falha crítica nele **veta** promoção via
+`apply_reserved_gate` (`reserved_case_gates` / `reserved_comparison`); tolerância
+não crítica no hold-out também exige justificativa explícita. O candidato **não**
 pode alterar `failure-patterns`, `playbook` nem `permission_profiles` (superfície
 do avaliador). O gate HTTP das evals compara **contratos tipados por operação**
 (`http_operations` na fixture: serviço, método, rota, `success_status` resolvido
@@ -1380,7 +1401,7 @@ Limites deste slice (não reabrir; o `14` consome o overlay):
 PYTHONPATH=. .venv/bin/python scripts/quality_gates.py
 ```
 
-Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services, **eval_adversarial**, **eval_multi_context**), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada (`ingestion` / `canonical_spec` / `artifacts` / `provenance` / `selection`) é **diagnóstico**; a aprovação usa `required_gates` em AND — seleção da run, spec, artefatos esperados, rastreabilidade, serviço e pendências bloqueantes **não se compensam**. O gate HTTP usa `http_operations` (serviço + método + rota + sucesso tipado + erros da op). Casos `expect_blocked` podem declarar `expected_reason` e `expected_block_codes` (ex.: `ambiguous_status` exige `AMBIGUOUS_HTTP_STATUS`). Métricas: claim recall, traceability, inferências inesperadas, custo e latência. Comparação baseline × candidate (`compare_evals`) marca regressão **por caso e por dimensão**; casos ausentes não são ignorados. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
+Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services, **eval_adversarial**, **eval_multi_context**), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada (`ingestion` / `canonical_spec` / `artifacts` / `provenance` / `selection` / `critical_context`) é **diagnóstico**; a aprovação usa `required_gates` em AND — seleção da run, spec, artefatos esperados, rastreabilidade, serviço, pendências bloqueantes e cobertura crítica **não se compensam**. Perda silenciosa de conteúdo crítico (`silent_critical_loss`) ou cobertura incompleta sem `blocked`/`split_required` explícito falha `critical_coverage_ok`. O gate `traceable` valida a spec de ponta a ponta: RF → claim existente **e** claim com `SourceRef` válido (`document` não vazio; `start_line` ≤ `end_line`); só o ID do claim não aprova, e manifesto íntegro não compensa fonte ausente/inválida. O gate HTTP usa `http_operations` (serviço + método + rota + sucesso tipado + erros da op). Casos `expect_blocked` podem declarar `expected_reason` e `expected_block_codes` (ex.: `ambiguous_status` exige `AMBIGUOUS_HTTP_STATUS`). Métricas: claim recall, traceability, inferências inesperadas, custo e latência. Comparação baseline × candidate (`compare_evals`) marca regressão **por caso e por dimensão**; casos ausentes não são ignorados. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
 
 **Seleção por execução (`31`):** `_load_specs` / `_load_final_artifacts` não fazem mais `rglob` no `output_root`. A eval exige `run_id` (via `result["run_id"]` ou parâmetro) e lê apenas arquivos registrados em `runs/<run_id>/manifest.json` → `integrity.files`, verificando status terminal e sha256 (e a cadeia HMAC quando a chave está presente). O espelho de compatibilidade `outputs/` **não** entra na seleção automática — uma run antiga correta no mesmo root (ou no espelho) não faz a run atual passar. Run `blocked` pode ser scoreada como bloqueio esperado (`expect_blocked`), mas `artifacts_released` / `layer_scores.artifacts.released_for_implementation` ficam `false` (história/PRD não liberados para implementação). API: `select_run_evidence(root=…, run_id=…)`. Presence de artefatos obrigatórios (`30`) também consulta só o manifesto da run.
 
@@ -1675,13 +1696,17 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   re-RAG. Estimativa pré-chamada nunca é apresentada como fatura
 - Devin E2E (`10`/`35`/`37`): checkout isolado e `shell=False` **não** são
   sandbox. Sem `EnforcementContract` que ateste os `limits.required_capabilities`
-  do profile (ou `EnforcedRunner` local), o despacho é bloqueado. O sidecar só
-  **sugere** comandos de teste; o harness reexecuta e grava evidência
-  independente (`executed_by=harness`). Sem sugestão executável → verify
-  fail-closed (`NO_TESTS_REPORTED` / `TEST_NOT_EVIDENCED`). AC sem prova
-  comportamental bloqueia (`AC_WITHOUT_BEHAVIORAL_EVIDENCE`). Comandos internos
-  do Devin CLI externo só entram no JSONL se o sandbox/sidecar os reportar; o
-  runner local grava argv com `"enforced": true`
+  do profile (ou `EnforcedRunner` local), o despacho é bloqueado. O runner local
+  contém writes de filhos Python (e OS sandbox quando disponível); sem essa
+  capacidade verificada o despacho falha fechado. Invocar Devin com
+  `EnforcedRunner` mantém os limites na chamada do CLI (`profile=None` só
+  isenta a allowlist do binário meta). O sidecar só **sugere** comandos de
+  teste; o harness reexecuta e grava evidência independente
+  (`executed_by=harness`). Sem sugestão executável → verify fail-closed
+  (`NO_TESTS_REPORTED` / `TEST_NOT_EVIDENCED`). AC sem prova comportamental
+  bloqueia (`AC_WITHOUT_BEHAVIORAL_EVIDENCE`). Comandos internos do Devin CLI
+  externo só entram no JSONL se o sandbox/sidecar os reportar; o runner local
+  grava argv com `"enforced": true`
 - `DEVIN_E2E=1` exige CLI Devin autenticado e rede; no CI sem credencial o
   teste live é skip (`10`); live sem contrato usa `--allow-unenforced` só em lab
 - Auto-commit do adapter fica só no checkout isolado — sem push nem abertura

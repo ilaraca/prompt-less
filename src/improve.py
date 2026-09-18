@@ -28,6 +28,7 @@ from src.learning import (  # noqa: E402
 from src.learning.evals import (  # noqa: E402
     DEFAULT_CASES,
     RESERVED_CASES,
+    apply_reserved_gate,
     build_experiment_record,
     partition_cases,
 )
@@ -69,8 +70,7 @@ def improve_from_verify(
         cases=eval_cases,
         run_id_prefix="eval-c",
     )
-    # Hold-out: roda casos reservados sob as mesmas condições, sem misturar
-    # no gate de promoção (registrados no experimento).
+    # Hold-out: mesma condição; separado da orientação, mas veta promoção.
     reserved_evals: dict[str, dict] = {}
     if reserved:
         reserved_evals["baseline"] = run_eval_suite(
@@ -92,6 +92,13 @@ def improve_from_verify(
         tolerances=tolerances,
         reserved_cases=reserved,
     )
+    if reserved_evals:
+        comparison = apply_reserved_gate(
+            comparison,
+            reserved_evals["baseline"],
+            reserved_evals["candidate"],
+            tolerances=tolerances,
+        )
     comparison["diff"] = applied.diff
     conditions = {
         "eval_cases": list(eval_cases),
@@ -113,6 +120,7 @@ def improve_from_verify(
             "baseline": (reserved_evals["baseline"].get("summary") or {}),
             "candidate": (reserved_evals["candidate"].get("summary") or {}),
         }
+        experiment["reserved_comparison"] = comparison.get("reserved_comparison")
     comparison["experiment"] = experiment
     decision = decide_proposals(
         proposals,

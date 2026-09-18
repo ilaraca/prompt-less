@@ -99,7 +99,13 @@ def _seed_run(
 
 def _typed_op(success: int, *, error_status: int = 400) -> dict:
     return {
-        "claims": [{"id": "CLM-0001", "text": "cadastro POST /clientes cpf"}],
+        "claims": [
+            {
+                "id": "CLM-0001",
+                "text": "cadastro POST /clientes cpf",
+                "sources": [{"document": "historia.md", "start_line": 1, "end_line": 1}],
+            }
+        ],
         "requirements": [
             {
                 "id": "RF-0001",
@@ -135,7 +141,13 @@ def _spec_ok() -> dict:
 
 def _spec_wrong() -> dict:
     data = _typed_op(500, error_status=500)
-    data["claims"] = [{"id": "CLM-0001", "text": "sem sinal esperado"}]
+    data["claims"] = [
+        {
+            "id": "CLM-0001",
+            "text": "sem sinal esperado",
+            "sources": [{"document": "historia.md", "start_line": 1, "end_line": 1}],
+        }
+    ]
     return data
 
 
@@ -195,7 +207,15 @@ def test_concurrent_runs_do_not_mix_evidence(tmp_path: Path):
         "run-alpha",
         spec={
             **_typed_op(201, error_status=400),
-            "claims": [{"id": "CLM-0001", "text": "sinal-alpha"}],
+            "claims": [
+                {
+                    "id": "CLM-0001",
+                    "text": "sinal-alpha",
+                    "sources": [
+                        {"document": "historia.md", "start_line": 1, "end_line": 1}
+                    ],
+                }
+            ],
         },
         historia="sinal-alpha",
         prd="sinal-alpha",
@@ -205,7 +225,15 @@ def test_concurrent_runs_do_not_mix_evidence(tmp_path: Path):
         "run-beta",
         spec={
             **_typed_op(202, error_status=400),
-            "claims": [{"id": "CLM-0001", "text": "sinal-beta"}],
+            "claims": [
+                {
+                    "id": "CLM-0001",
+                    "text": "sinal-beta",
+                    "sources": [
+                        {"document": "historia.md", "start_line": 1, "end_line": 1}
+                    ],
+                }
+            ],
         },
         historia="sinal-beta",
         prd="sinal-beta",

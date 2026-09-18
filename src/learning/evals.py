@@ -25,7 +25,7 @@ DEFAULT_CASES = (
     "eval_adversarial",
     "eval_multi_context",
 )
-# Hold-out P3: não entram na promoção automática; registrados no experimento.
+# Hold-out P3: fora da orientação da mudança; regressão/falha crítica veta promoção.
 RESERVED_CASES = ("eval_adversarial",)
 _ARTIFACT_NAMES = {"historia.md", "prd.md"}
 _SPEC_NAME = "canonical-spec.yaml"
@@ -346,6 +346,55 @@ def _spec_text_blob(spec: dict[str, Any]) -> str:
     return "\n".join(parts).lower()
 
 
+def _source_ref_valid(src: Any) -> bool:
+    """SourceRef mínimo: document não vazio; start_line ≤ end_line se ambos existem."""
+    if not isinstance(src, dict):
+        return False
+    if not str(src.get("document") or "").strip():
+        return False
+    start, end = src.get("start_line"), src.get("end_line")
+    if start is not None and end is not None:
+        try:
+            if int(start) > int(end):
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def _claim_has_valid_sources(claim: dict[str, Any]) -> bool:
+    """Existência do id do claim não basta — exige SourceRef válido."""
+    sources = claim.get("sources") or []
+    if not sources:
+        return False
+    return all(_source_ref_valid(s) for s in sources)
+
+
+def _spec_requirements_traceable(spec: dict[str, Any]) -> bool:
+    """
+    Rastreabilidade integral: RFs apontam para claims existentes **e** cada
+    claim referenciado (e todo claim com id) carrega SourceRef válido.
+    """
+    claims = [c for c in (spec.get("claims") or []) if isinstance(c, dict)]
+    claim_by_id = {str(c["id"]): c for c in claims if c.get("id")}
+    for claim in claims:
+        if claim.get("id") and not _claim_has_valid_sources(claim):
+            return False
+    for rf in spec.get("requirements") or []:
+        if not isinstance(rf, dict):
+            continue
+        if rf.get("status") == "baseline":
+            continue
+        src = list(rf.get("source_claims") or [])
+        if not src:
+            return False
+        for cid in src:
+            key = str(cid)
+            if key not in claim_by_id or not _claim_has_valid_sources(claim_by_id[key]):
+                return False
+    return True
+
+
 def _resolved_success_value(raw: Any) -> int | None:
     """Sucesso tipado só conta quando resolvido — ausente/pendente sem presumir."""
     status = ResolvedInt.from_raw(raw)
@@ -574,6 +623,9 @@ def _budget_reports_from_result(result: dict[str, Any]) -> list[dict[str, Any]]:
     return reports
 
 
+_EXPLICIT_BUDGET_STATUSES = frozenset({"blocked", "split_required"})
+
+
 def _critical_context_score(
     result: dict[str, Any], *, critical: bool
 ) -> dict[str, Any]:
@@ -582,6 +634,7 @@ def _critical_context_score(
 
     Sem budget_report (runs antigas) → n/a (não falha o gate).
     """
+    _ = critical  # fixtures critical continuam no conjunto DEFAULT_CASES
     reports = _budget_reports_from_result(result)
     if not reports:
         return {
@@ -589,6 +642,7 @@ def _critical_context_score(
             "complete": True,  # n/a — cobertura crítica permanece via fixtures critical
             "silent_critical_loss": False,
             "statuses": [],
+            "explicit_block_or_split": False,
         }
     statuses = [str(r.get("status") or "") for r in reports]
     silent = False
@@ -599,21 +653,38 @@ def _critical_context_score(
             complete = False
         # omissão crítica sem diagnosis/status de split/block = perda silenciosa
         crit_om = r.get("critical_omissions") or []
-        if crit_om and str(r.get("status") or "") not in {
-            "blocked",
-            "split_required",
-        }:
+        status = str(r.get("status") or "")
+        if crit_om and status not in _EXPLICIT_BUDGET_STATUSES:
             silent = True
             complete = False
-        if str(r.get("status") or "") in {"blocked", "split_required"}:
+        if status in _EXPLICIT_BUDGET_STATUSES:
             # explícito — não é silencioso; complete=False é esperado
             complete = False
+    explicit = bool(statuses) and all(s in _EXPLICIT_BUDGET_STATUSES for s in statuses)
     return {
         "present": True,
         "complete": complete,
         "silent_critical_loss": silent,
         "statuses": statuses,
+        "explicit_block_or_split": explicit,
     }
+
+
+def _critical_coverage_gate(crit: dict[str, Any]) -> bool:
+    """
+    Perda crítica / cobertura incompleta reprova run concluída.
+
+    Bloqueio ou split explícito (`blocked` / `split_required`) permanece permitido.
+    Ausência de budget_report (runs antigas) → n/a (passa).
+    """
+    if not crit.get("present"):
+        return True
+    if crit.get("silent_critical_loss"):
+        return False
+    if crit.get("complete"):
+        return True
+    # incomplete esperado só com tratamento explícito de block/split
+    return bool(crit.get("explicit_block_or_split"))
 
 
 def score_case(
@@ -791,18 +862,11 @@ def score_case(
     else:
         gate_unexpected = unexpected_inferences
 
-    # requirements traceability no spec (fonte inválida / vínculo quebrado)
+    # requirements + SourceRef (id sozinho não basta; manifesto íntegro não compensa)
     traceable = True
     for spec in specs:
-        claim_ids = {c.get("id") for c in (spec.get("claims") or []) if c.get("id")}
-        for rf in spec.get("requirements") or []:
-            if rf.get("status") == "baseline":
-                continue
-            src = list(rf.get("source_claims") or [])
-            if not src or any(s not in claim_ids for s in src):
-                traceable = False
-                break
-        if not traceable:
+        if not _spec_requirements_traceable(spec):
+            traceable = False
             break
 
     if not specs:
@@ -844,6 +908,8 @@ def score_case(
     gate_spec_present = True if expect_blocked else bool(specs)
     gate_recall = (not critical) or claim_recall >= 1.0
     gate_unexpected_ok = gate_unexpected == 0
+    critical_context = _critical_context_score(result, critical=critical)
+    gate_critical_coverage = _critical_coverage_gate(critical_context)
 
     required_gates: dict[str, bool] = {
         "selection_ok": selection_ok,
@@ -860,6 +926,7 @@ def score_case(
         "no_blocking_pendencies": no_blocking_pendencies,
         "claim_recall_ok": gate_recall,
         "block_cause_ok": block_cause_ok,
+        "critical_coverage_ok": gate_critical_coverage,
     }
 
     fail_reasons = [name for name, ok in required_gates.items() if not ok]
@@ -912,7 +979,7 @@ def score_case(
             "errors": selection_errors,
             "files_used": list(selection.files_used) if selection else [],
         },
-        "critical_context": _critical_context_score(result, critical=critical),
+        "critical_context": critical_context,
     }
 
     return CaseScore(
@@ -1391,3 +1458,73 @@ def compare_evals(
         "reported_only_metrics": list(_REPORTED_ONLY),
         "decision": decision,
     }
+
+
+def apply_reserved_gate(
+    comparison: dict[str, Any],
+    reserved_baseline: dict[str, Any],
+    reserved_candidate: dict[str, Any],
+    *,
+    tolerances: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """
+    Veta promoção se o hold-out regredir — sem misturar hold-out na orientação.
+
+    A comparação de desenvolvimento (`comparison`) permanece a fonte de
+    `metrics` / `improved` / `case_gates`. Casos reservados entram só como
+    gate de promoção: regressão crítica (ou não crítica sem tolerância
+    explícita) e conjuntos incomparáveis forçam `decision=reject`.
+    """
+    holdout = compare_evals(
+        reserved_baseline,
+        reserved_candidate,
+        tolerances=tolerances,
+        reserved_cases=(),
+    )
+    # Paths reserved/* são distintos dos evals de desenvolvimento; o distinct
+    # relevante já foi medido no conjunto de orientação.
+    raw_reasons = [
+        r
+        for r in (holdout.get("reasons") or [])
+        if r != "workspaces_not_distinct"
+    ]
+    critical = bool(holdout.get("critical_regression"))
+    comparable = bool(holdout.get("comparable", True))
+    untolerated = [
+        g
+        for g in (holdout.get("case_gates") or [])
+        if g.get("regressed") and not g.get("tolerated")
+    ]
+    blocks = critical or (not comparable) or bool(untolerated) or bool(raw_reasons)
+    prefixed = [f"reserved:{r}" for r in raw_reasons]
+
+    out = dict(comparison)
+    out["reserved_case_gates"] = list(holdout.get("case_gates") or [])
+    reserved_tols = [
+        {**t, "scope": "reserved"} for t in (holdout.get("tolerances_applied") or [])
+    ]
+    out["reserved_comparison"] = {
+        "regression": blocks,
+        "critical_regression": critical,
+        "comparable": comparable,
+        "reasons": prefixed,
+        "tolerances_applied": reserved_tols,
+        "decision": "reject" if blocks else "accept",
+    }
+    if reserved_tols:
+        out["tolerances_applied"] = list(comparison.get("tolerances_applied") or []) + (
+            reserved_tols
+        )
+
+    if blocks:
+        out["regression"] = True
+        if critical:
+            out["critical_regression"] = True
+        merged = list(comparison.get("reasons") or [])
+        for r in prefixed:
+            if r not in merged:
+                merged.append(r)
+        out["reasons"] = merged
+        out["improved"] = False
+        out["decision"] = "reject"
+    return out

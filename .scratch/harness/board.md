@@ -207,12 +207,12 @@ Os HEADs registrados preservam o histórico da entrega inicial.
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 30-eval-required-gates | **Todo** | filha, HEAD `5ee18c3` | `.worktrees/30-eval-required-gates` · `feature/eval-required-gates` |
+| 30-eval-required-gates | **Done** | filha, HEAD `3cf8149` | `.worktrees/30-eval-required-gates` · `feature/eval-required-gates` |
 | 31-eval-run-selection | **Done** | filha, HEAD `78c763a` | `.worktrees/31-eval-run-selection` · `feature/eval-run-selection` |
 | 32-eval-typed-http | **Done** | filha, HEAD `59b7e87` | `.worktrees/32-eval-typed-http` · `feature/eval-typed-http` |
-| 33-required-review-gate | **Todo** | filha, HEAD `fd89588` | `.worktrees/33-required-review-gate` · `feature/required-review-gate` |
+| 33-required-review-gate | **Done** | filha, HEAD `4db3fa1` | `.worktrees/33-required-review-gate` · `feature/required-review-gate` |
 | 34-cli-failure-exit | **Done** | filha, HEAD `addea9a` | `.worktrees/34-cli-failure-exit` · `feature/cli-failure-exit` |
-| (pai) onda-frontier | — | P0 integrado @ `87487fd` | `.worktrees/onda-merge` · `feature/onda-frontier` |
+| (pai) onda-frontier | — | ajustes 30/33 @ `edd976b` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
 ### Onda F — Série 4 P1 / regressão (**integrada** no pai)
 
@@ -220,11 +220,11 @@ Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 35-independent-test-evidence | **Todo** | filha, HEAD `36bcbc3` | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
+| 35-independent-test-evidence | **Done** | filha, HEAD `5b0a663` | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
 | 36-repair-policy | **Done** | filha, HEAD `fb4f0bc` | `.worktrees/36-repair-policy` · `feature/repair-policy` |
-| 37-executor-enforcement | **Todo** | filha, HEAD `e4d458b` | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
-| 39-case-regression-gates | **Todo** | filha, HEAD `e453a3d` | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
-| (pai) onda-frontier | — | P1 integrado @ `b8f9b7d` | `.worktrees/onda-merge` · `feature/onda-frontier` |
+| 37-executor-enforcement | **Done** | filha, HEAD `a6c8f76` | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
+| 39-case-regression-gates | **Done** | filha, HEAD `85b4f14` | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
+| (pai) onda-frontier | — | 35/37 integrados @ `3b3557f` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
 
 ### Onda F — 38 context budget (**integrada** no pai)
@@ -233,8 +233,8 @@ Base: pai `f755cec`.
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 38-critical-context-budget | **Todo** | filha, HEAD `c1c9b11` | `.worktrees/38-critical-context-budget` · `feature/critical-context-budget` |
-| (pai) onda-frontier | — | integra (após Done) | `.worktrees/onda-merge` · `feature/onda-frontier` |
+| 38-critical-context-budget | **Done** | filha, HEAD `e96bc94` | `.worktrees/38-critical-context-budget` · `feature/critical-context-budget` |
+| (pai) onda-frontier | — | 38/39 integrados | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
 ## Série 4 — Conformidade com o roadmap (frontier ativa)
 
@@ -253,16 +253,16 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 
 | ID | Prioridade | Título | Kanban | Blocked by |
 |----|------------|--------|--------|------------|
-| 30-eval-required-gates | P0.1 | Gates obrigatórios de spec, artefatos e rastreabilidade | **Todo** | — |
+| 30-eval-required-gates | P0.1 | Gates obrigatórios de spec, artefatos e rastreabilidade | **Done** | — |
 | 31-eval-run-selection | P0.1 | Seleção de resultados por run e manifesto | **Done** | — |
 | 32-eval-typed-http | P0.1 | HTTP tipado por serviço e operação | **Done** | — |
-| 33-required-review-gate | P0.2 | Revisão obrigatória bloqueante e auditável | **Todo** | — |
+| 33-required-review-gate | P0.2 | Revisão obrigatória bloqueante e auditável | **Done** | — |
 | 34-cli-failure-exit | P0.3 | Exit code de falha e bloqueio de consumo | **Done** | — |
-| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **Todo** | 30, 31, 32, 33, 34 |
+| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **Done** | 30, 31, 32, 33, 34 |
 | 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Done** | 30, 31, 32, 33, 34 |
-| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Todo** | 30, 31, 32, 33, 34 |
-| 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | **Todo** | 35, 36, 37 |
-| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **Todo** | 30, 31, 32 |
+| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Done** | 30, 31, 32, 33, 34 |
+| 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | **Done** | 35, 36, 37 |
+| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **Done** | 30, 31, 32 |
 
 ### Reabertura após revisão de 2026-09-18
 
@@ -299,11 +299,11 @@ com reparação quando necessária, falha inequívoca e métricas registradas.
 
 ### 30 — Gates obrigatórios de avaliação
 
-**Status atual: Todo — reaberto para ajustes a pedido de Ilara.**
+**Status atual: Done — ajuste pós-reabertura integrado no pai (`3cf8149` → `edd976b`).**
 
 **Revisão de 2026-09-18 — ajuste pendente:** o gate de artefatos foi corrigido, mas uma execução selada com claim sem `SourceRef` ainda recebeu `passed=True`. Validar integralmente a spec e as fontes; existência do ID do claim não basta.
 
-- [ ] Adicionar regressão em que claim sem fonte ou fonte inválida reprova no avaliador, mesmo com manifesto íntegro.
+- [x] Adicionar regressão em que claim sem fonte ou fonte inválida reprova no avaliador, mesmo com manifesto íntegro.
 
 **Achado:** `score_case()` permite `spec_ok` compensar `art_ok=False`.
 Um caso crítico com sinal na spec passou sem PRD/história; a dimensão de
@@ -317,13 +317,13 @@ Casos de bloqueio esperado devem validar também a causa esperada.
 **Aceite:**
 
 - [x] Spec válida com qualquer artefato obrigatório ausente reprova.
-- [ ] Fonte inválida, rastreabilidade quebrada ou serviço incorreto reprova.
+- [x] Fonte inválida, rastreabilidade quebrada ou serviço incorreto reprova.
 - [x] Uma dimensão obrigatória falsa nunca é compensada por outra.
 - [x] Casos negativos entram na suíte e falham pelo motivo esperado.
 
 **Código:** `src/learning/evals.py` e testes de avaliação.
 
-**Kanban:** Todo · HEAD filha `5ee18c3` · ver
+**Kanban:** Done · HEAD filha `3cf8149` · integrado no pai · ver
 `issues/30-eval-required-gates.md` § Implementation note.
 
 ### 31 — Seleção por execução
@@ -366,12 +366,12 @@ vinculados à operação. Texto livre não serve como prova do contrato.
 
 ### 33 — Revisão obrigatória bloqueante
 
-**Status atual: Todo — reaberto para ajustes a pedido de Ilara.**
+**Status atual: Done — ajuste pós-reabertura integrado no pai (`4db3fa1` → `edd976b`).**
 
 **Revisão de 2026-09-18 — ajuste pendente:** após aprovar os vínculos, alterar o texto do requisito manteve a validação sem erros. `spec.version` permanece `1.0` e o fingerprint do claim não cobre o conteúdo do requisito.
 
-- [ ] Vincular a decisão ao hash do requisito/aceite revisado e suas evidências; mudança incompatível invalida a aprovação.
-- [ ] Cobrir alteração do conteúdo com mesmos IDs, claim e versão de schema.
+- [x] Vincular a decisão ao hash do requisito/aceite revisado e suas evidências; mudança incompatível invalida a aprovação.
+- [x] Cobrir alteração do conteúdo com mesmos IDs, claim e versão de schema.
 
 **Achado:** `requires_review=True` em vínculo lexical gera apenas warning.
 O teste `test_match_baixa_confianca_exige_revisao_sem_mudar_status` espera
@@ -385,13 +385,13 @@ Confiança numérica não substitui evidência nem aprovação humana.
 
 - [x] Pendência obrigatória não resolvida bloqueia implementação.
 - [x] Decisão registra responsável, justificativa e versão revisada.
-- [ ] Alteração da evidência/spec invalida decisão incompatível.
+- [x] Alteração da evidência/spec invalida decisão incompatível.
 - [x] Avisos genuinamente informativos permanecem não bloqueantes.
 - [x] Teste existente é ajustado ao contrato e cobre aprovação/rejeição.
 
 **Código:** `src/validators/__init__.py`, modelo de revisão e testes de provenance.
 
-**Kanban:** Todo · HEAD filha `fd89588` · ver
+**Kanban:** Done · HEAD filha `4db3fa1` · integrado no pai · ver
 `issues/33-required-review-gate.md` § Implementation note.
 
 ### 34 — Falha inequívoca na CLI
@@ -416,13 +416,13 @@ manter JSON/diagnóstico legível; consumidores validam identidade e estado.
 
 ### 35 — Testes e critérios de aceite independentes
 
-**Status atual: Todo — reaberto para ajustes a pedido de Ilara.**
+**Status atual: Done — ajuste pós-reabertura integrado no pai (`5b0a663` → `3b3557f`).**
 
 **Revisão de 2026-09-18 — ajustes pendentes:** `git diff`, classificado pelo sidecar como unitário e associado aos ACs por `covers`, terminou com verificação `passed` sem executar teste comportamental. Na integração com `EnforcedRunner`, a coleta falhou com `'EnforcedRunner' object is not callable`.
 
-- [ ] Definir verificações de aceite controladas pelo harness e validar resultados reais; `kind`/`covers` do agente não bastam.
-- [ ] Rejeitar comando sem teste, ainda que autorizado e com exit code zero, como prova comportamental.
-- [ ] Unificar a interface do runner e testar `DevinAdapter` + `EnforcedRunner` reais juntos, sem stub na chamada.
+- [x] Definir verificações de aceite controladas pelo harness e validar resultados reais; `kind`/`covers` do agente não bastam.
+- [x] Rejeitar comando sem teste, ainda que autorizado e com exit code zero, como prova comportamental.
+- [x] Unificar a interface do runner e testar `DevinAdapter` + `EnforcedRunner` reais juntos, sem stub na chamada.
 
 **Achado:** `_materialize_test_evidence()` monta JSONL a partir do sidecar do
 agente; `passed=True` pode virar `exit_code=0` sem execução do comando.
@@ -438,13 +438,13 @@ aceite obrigatório com evidência de comportamento adequada.
 
 - [x] Relato `passed=True` sozinho nunca cria evidência suficiente.
 - [x] Log ausente, incompleto, adulterado ou de outra run reprova.
-- [ ] AC obrigatório sem comprovação bloqueia; arquivo existente não basta.
+- [x] AC obrigatório sem comprovação bloqueia; arquivo existente não basta.
 - [x] Uma falha conhecida é detectada e uma correção real passa na reexecução.
 - [x] E2E real fica registrado separadamente de stubs e testes ignorados.
 
 **Código:** `src/executors/devin.py`, `evidence.py`, `verify.py`.
 
-**Kanban:** Todo · HEAD filha `36bcbc3` · ver
+**Kanban:** Done · HEAD filha `5b0a663` · integrado no pai · ver
 `issues/35-independent-test-evidence.md` § Implementation note.
 
 ### 36 — Política completa no reparo
@@ -472,13 +472,13 @@ autorizada, incluindo resolução real/symlinks. Reaplicar antes de cada tentati
 
 ### 37 — Limites efetivos do executor
 
-**Status atual: Todo — reaberto para ajustes a pedido de Ilara.**
+**Status atual: Done — ajuste pós-reabertura integrado no pai (`a6c8f76` → `3b3557f`).**
 
 **Revisão de 2026-09-18 — ajustes pendentes:** processo autorizado pelo runner escreveu um marcador fora do repositório temporário e terminou com exit zero. `apply_write()` não contém escritas dos processos filhos. Ao invocar Devin com `EnforcedRunner`, o adapter troca para `run_argv`, removendo os limites dessa via.
 
-- [ ] Impor contenção efetiva aos processos filhos e só declarar capacidades verificadas; bloquear quando não disponíveis.
-- [ ] Não substituir o runner com limites por execução irrestrita na invocação do agente.
-- [ ] Corrigir o contrato de chamada com o adapter (em conjunto com 35) e verificar arquivos, comandos, rede e recursos durante a execução.
+- [x] Impor contenção efetiva aos processos filhos e só declarar capacidades verificadas; bloquear quando não disponíveis.
+- [x] Não substituir o runner com limites por execução irrestrita na invocação do agente.
+- [x] Corrigir o contrato de chamada com o adapter (em conjunto com 35) e verificar arquivos, comandos, rede e recursos durante a execução.
 
 **Achado:** a invocação Devin usa `profile=None`; o caminho inspecionado não
 demonstra controle dos comandos internos nem isolamento de rede, credenciais
@@ -490,24 +490,27 @@ Sem capacidade de aplicar limites exigidos, bloquear o despacho.
 
 **Aceite:**
 
-- [ ] Tarefa autorizada altera arquivo permitido, executa teste e entrega diff.
-- [ ] Tentativas equivalentes fora de arquivos/comandos/argumentos permitidos
+- [x] Tarefa autorizada altera arquivo permitido, executa teste e entrega diff.
+- [x] Tentativas equivalentes fora de arquivos/comandos/argumentos permitidos
       são impedidas durante a execução.
-- [ ] Rede, credenciais, processos, tempo e recursos seguem os limites
+- [x] Rede, credenciais, processos, tempo e recursos seguem os limites
       declarados, com testes de enforcement.
-- [ ] Comandos internos relevantes são coletados pelo mecanismo confiável.
-- [ ] Integração externa explicita quais garantias aplica e apresenta evidências.
+- [x] Comandos internos relevantes são coletados pelo mecanismo confiável.
+- [x] Integração externa explicita quais garantias aplica e apresenta evidências.
 
 **Código:** `src/executors/devin.py`, `safe_exec.py`, `policy.py` e runner.
 
+**Kanban:** Done · HEAD filha `a6c8f76` · integrado no pai · ver
+`issues/37-executor-enforcement.md` § Implementation note.
+
 ### 38 — Contexto crítico e custo completo
 
-**Status atual: Todo — reaberto para ajustes a pedido de Ilara.**
+**Status atual: Done — ajuste pós-reabertura integrado no pai (`e96bc94`).**
 
 **Revisão de 2026-09-18 — ajuste pendente:** com `critical_coverage.complete=False` e `silent_critical_loss=True`, o avaliador ainda retornou `passed=True`. O diagnóstico existe em `layer_scores`, mas não integra os gates obrigatórios.
 
-- [ ] Tornar perda crítica incompatível com aprovação de run concluída; manter tratamento explícito de bloqueio/split esperado.
-- [ ] Adicionar caso negativo com relatório de cobertura incompleta/perda silenciosa e exigir reprovação pelo motivo correto.
+- [x] Tornar perda crítica incompatível com aprovação de run concluída; manter tratamento explícito de bloqueio/split esperado.
+- [x] Adicionar caso negativo com relatório de cobertura incompleta/perda silenciosa e exigir reprovação pelo motivo correto.
 
 **Achado:** `_fit_to_budget()` corta template e consolidado por comprimento,
 sem proteger explicitamente requisitos críticos. Tokenizer e recuperação
@@ -523,22 +526,22 @@ diferenciando estimativa de uso/cobrança observados.
 - [x] Conteúdo crítico não desaparece silenciosamente ao reduzir orçamento.
 - [x] Excesso do mínimo crítico gera divisão ou bloqueio com diagnóstico.
 - [x] Omissões têm motivo e referência recuperável.
-- [ ] Cobertura crítica permanece no conjunto de avaliação.
+- [x] Cobertura crítica permanece no conjunto de avaliação.
 - [x] Métricas da tarefa incluem tentativas e não apresentam estimativa como fatura.
 
 **Código:** `src/context_builder.py`, compressão/recuperação e telemetria.
 
-**Kanban:** Todo · HEAD filha `c1c9b11` · ver
+**Kanban:** Done · HEAD filha `e96bc94` · integrado no pai · ver
 `issues/38-critical-context-budget.md` § Implementation note.
 
 ### 39 — Regressões por caso e aprendizado controlado
 
-**Status atual: Todo — reaberto para ajustes a pedido de Ilara.**
+**Status atual: Done — ajuste pós-reabertura integrado no pai (`85b4f14`).**
 
 **Revisão de 2026-09-18 — ajuste pendente (inspeção de código):** comparação por caso foi corrigida, mas `improve_from_verify()` só registra resultados reservados; a decisão de promoção usa a comparação dos demais casos.
 
-- [ ] Fazer regressões/falhas críticas nos casos reservados bloquearem a promoção, preservando sua separação da orientação da mudança.
-- [ ] Adicionar cenário em que o candidato melhora no conjunto de desenvolvimento e regride no holdout; promoção deve ser rejeitada.
+- [x] Fazer regressões/falhas críticas nos casos reservados bloquearem a promoção, preservando sua separação da orientação da mudança.
+- [x] Adicionar cenário em que o candidato melhora no conjunto de desenvolvimento e regride no holdout; promoção deve ser rejeitada.
 
 **Achado:** a troca de um caso não crítico aprovado por reprovado, compensada
 por melhora em outro, manteve `decision=accept` e `regression=False`.
@@ -552,7 +555,7 @@ sob condições equivalentes e proteger política, verificador e avaliações.
 **Aceite:**
 
 - [x] Caso aprovado → reprovado é explicitamente marcado mesmo com taxa igual.
-- [ ] Regressão crítica bloqueia; qualquer tolerância não crítica é explícita,
+- [x] Regressão crítica bloqueia; qualquer tolerância não crítica é explícita,
       justificada e registrada, nunca compensação silenciosa.
 - [x] Caso removido ou conjunto incompatível impede comparação conclusiva.
 - [x] Experimento registra referência, candidato, diff, condições e casos reservados.
@@ -561,7 +564,7 @@ sob condições equivalentes e proteger política, verificador e avaliações.
 
 **Código:** `src/learning/evals.py`, `accept.py`, workspaces e apply/rollback.
 
-**Kanban:** Todo · HEAD filha `e453a3d` · ver
+**Kanban:** Done · HEAD filha `85b4f14` · integrado no pai · ver
 `issues/39-case-regression-gates.md` § Implementation note.
 
 ## Dependências (visão histórica — séries 1–3)

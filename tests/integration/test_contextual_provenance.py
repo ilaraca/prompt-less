@@ -215,6 +215,7 @@ def test_required_review_approve_libera_validacao():
             spec_version=spec.version,
             claim=claim,
             link=link,
+            subject=rf,
             subject_id=rf.id,
             decision="approved",
             actor="alice",
@@ -233,6 +234,7 @@ def test_required_review_approve_libera_validacao():
                     spec_version=spec.version,
                     claim=clm,
                     link=lnk,
+                    subject=subject,
                     subject_id=subject.id,
                     decision="approved",
                     actor="alice",
@@ -249,6 +251,7 @@ def test_required_review_approve_libera_validacao():
     assert decision.justification
     assert decision.reviewed_spec_version == spec.version
     assert decision.reviewed_claim_fingerprint
+    assert decision.reviewed_subject_fingerprint
 
 
 def test_required_review_reject_bloqueia():
@@ -278,6 +281,7 @@ def test_required_review_reject_bloqueia():
                     spec_version=spec.version,
                     claim=clm,
                     link=lnk,
+                    subject=subject,
                     subject_id=subject.id,
                     decision="rejected",
                     actor="bob",
@@ -317,6 +321,7 @@ def test_required_review_stale_quando_evidencia_muda():
                     spec_version=spec.version,
                     claim=clm,
                     link=lnk,
+                    subject=subject,
                     subject_id=subject.id,
                     decision="approved",
                     actor="carol",
@@ -330,6 +335,61 @@ def test_required_review_stale_quando_evidencia_muda():
     validation = validate_spec(spec)
     assert validation.has_errors is True
     assert any(i.code == "REQUIRED_REVIEW_STALE" for i in validation.errors)
+
+
+def test_required_review_stale_quando_texto_requisito_muda():
+    """Mesmos IDs/claim/spec.version com texto do RF alterado → STALE."""
+    from src.domain.review import decide_claim_link_review
+
+    spec = build_canonical_spec(
+        ui={},
+        regras={"bloqueios": [{"trigger": "alpha bravo charlie", "status": 400}]},
+        claims=[
+            {
+                "id": "CLM-low-0001",
+                "text": "alpha bravo charlie delta echo foxtrot",
+                "origin": "declared",
+                "confidence": 1.0,
+                "sources": [{"document": "t.yaml"}],
+            }
+        ],
+    )
+    decisions = []
+    for subject in (*spec.requirements, *spec.acceptance_criteria, *spec.errors):
+        for lnk in getattr(subject, "claim_links", []) or []:
+            if not lnk.requires_review:
+                continue
+            clm = next(c for c in spec.claims if c.id == lnk.claim_id)
+            decisions.append(
+                decide_claim_link_review(
+                    spec_version=spec.version,
+                    claim=clm,
+                    link=lnk,
+                    subject=subject,
+                    subject_id=subject.id,
+                    decision="approved",
+                    actor="dana",
+                    justification="aprovado antes da edição do RF",
+                )
+            )
+    spec.review_decisions = decisions
+    assert spec.version == "1.0"
+    rf = next(r for r in spec.requirements if r.claim_links)
+    rf_id = rf.id
+    claim_id = rf.claim_links[0].claim_id
+    original_text = rf.text
+    rf.text = f"{original_text} — texto revisado sem bump de versão"
+    validation = validate_spec(spec)
+    assert validation.has_errors is True
+    stale = [i for i in validation.errors if i.code == "REQUIRED_REVIEW_STALE"]
+    assert stale, validation.to_dict()
+    assert any(i.subject_id == rf_id for i in stale)
+    assert any(claim_id in i.source_claims for i in stale)
+    # Claim e versão de schema intactos — só o conteúdo do RF mudou.
+    assert next(c for c in spec.claims if c.id == claim_id).text == (
+        "alpha bravo charlie delta echo foxtrot"
+    )
+    assert spec.version == "1.0"
 
 
 def test_avisos_informativos_nao_bloqueiam():

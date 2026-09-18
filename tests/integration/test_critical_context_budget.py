@@ -1,7 +1,10 @@
 """Budget com reserva de conteúdo crítico e métricas sem fatura falsa."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 from src.context_builder import (
     CriticalItem,
@@ -16,9 +19,87 @@ from src.domain.spec import (
     Requirement,
     ResolvedInt,
 )
-from src.learning.evals import DEFAULT_CASES, _critical_context_score
+from src.learning.evals import DEFAULT_CASES, _critical_context_score, score_case
+from src.runtime.atomic_io import sha256_of
+from src.runtime.integrity import seal_hmac
+from src.runtime.run_context import RunContext
+from src.runtime.run_store import RunStore
 from src.task_metrics import build_cost_section, build_task_metrics
 from src.tokenizer import TokenEstimate, using_tokenizer
+
+
+def _seed_minimal_completed(root: Path, run_id: str) -> Path:
+    ctx = RunContext.create(root=root, objective="historia", run_id=run_id)
+    store = RunStore(ctx)
+    store.bootstrap()
+    art = ctx.artifacts_dir
+    art.mkdir(parents=True, exist_ok=True)
+    spec = {
+        "service_id": "svc",
+        "claims": [
+            {
+                "id": "CLM-1",
+                "text": "RF crítico",
+                "sources": [{"document": "h.md", "start_line": 1, "end_line": 1}],
+            }
+        ],
+        "requirements": [
+            {
+                "id": "RF-1",
+                "text": "req",
+                "source_claims": ["CLM-1"],
+                "status": "ok",
+            }
+        ],
+        "acceptance_criteria": [],
+        "operations": [],
+        "errors": [],
+        "open_questions": [],
+    }
+    spec_path = art / "canonical-spec.yaml"
+    spec_path.write_text(yaml.safe_dump(spec), encoding="utf-8")
+    files = [
+        {
+            "path": "artifacts/canonical-spec.yaml",
+            "bytes": spec_path.stat().st_size,
+            "sha256": sha256_of(spec_path),
+        }
+    ]
+    store.finish("completed")
+    integrity = {
+        "algo": "hmac-sha256",
+        "kid": "v1",
+        "events_tip": store.events.tip,
+        "files": files,
+        "sealed_at": "2026-09-18T00:00:00Z",
+    }
+    integrity["hmac"] = seal_hmac(integrity)
+    store.write_manifest({"run_id": run_id, "status": "completed", "integrity": integrity})
+    return ctx.run_dir
+
+
+def _eval_expected() -> dict[str, Any]:
+    return {
+        "services": ["svc"],
+        "signals": [],
+        "artifacts": [],
+        "critical": True,
+        "http_statuses": [],
+        "max_unreviewed_inferences": 0,
+    }
+
+
+def _base_eval_result(run_id: str, run_dir: Path, **extra: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "status": "completed",
+        "run_id": run_id,
+        "run_dir": str(run_dir),
+        "contexts": ["svc"],
+        "by_context": [{"servico": {"id": "svc", "repos": []}}],
+        "claims": [{"text": "RF crítico"}],
+    }
+    result.update(extra)
+    return result
 
 
 def _rag(text: str = "consolidado curto", *, claims: list[dict] | None = None) -> dict[str, Any]:
@@ -273,10 +354,6 @@ def test_plan_critical_split_packs_batches():
 
 def test_critical_cases_remain_in_eval_set():
     """Cobertura crítica permanece no conjunto de avaliação."""
-    from pathlib import Path
-
-    import yaml
-
     fixtures = Path(__file__).resolve().parents[1] / "fixtures"
     critical_ids = []
     for case_id in DEFAULT_CASES:
@@ -305,6 +382,7 @@ def test_critical_context_score_flags_silent_loss():
     )
     assert score["silent_critical_loss"] is True
     assert score["complete"] is False
+    assert score["explicit_block_or_split"] is False
 
     ok = _critical_context_score(
         {
@@ -318,3 +396,88 @@ def test_critical_context_score_flags_silent_loss():
     )
     assert ok["silent_critical_loss"] is False
     assert ok["complete"] is True
+
+    blocked = _critical_context_score(
+        {
+            "budget_report": {
+                "status": "split_required",
+                "critical_omissions": [
+                    {"id": "RF-2", "reason": "does_not_fit", "recoverable": True}
+                ],
+                "critical_coverage": {"complete": False},
+                "diagnosis": "mínimo crítico excede budget",
+            }
+        },
+        critical=True,
+    )
+    assert blocked["silent_critical_loss"] is False
+    assert blocked["complete"] is False
+    assert blocked["explicit_block_or_split"] is True
+
+
+def test_silent_critical_loss_fails_required_gate(tmp_path: Path):
+    """Cobertura incompleta + perda silenciosa reprova — não só diagnóstico."""
+    run_id = "run-silent-crit"
+    run_dir = _seed_minimal_completed(tmp_path, run_id)
+    result = _base_eval_result(
+        run_id,
+        run_dir,
+        budget_report={
+            "status": "ok",
+            "critical_omissions": [
+                {"id": "RF-1", "reason": "truncated", "recoverable": True}
+            ],
+            "critical_coverage": {"complete": False},
+        },
+    )
+    scored = score_case(_eval_expected(), result, output_root=tmp_path)
+    assert scored.layer_scores["critical_context"]["silent_critical_loss"] is True
+    assert scored.layer_scores["critical_context"]["complete"] is False
+    assert scored.required_gates["critical_coverage_ok"] is False
+    assert "critical_coverage_ok" in scored.fail_reasons
+    assert scored.passed is False
+
+
+def test_explicit_split_keeps_critical_coverage_gate(tmp_path: Path):
+    """Bloqueio/split explícito não é perda silenciosa — gate de cobertura passa."""
+    run_id = "run-split-crit"
+    run_dir = _seed_minimal_completed(tmp_path, run_id)
+    result = _base_eval_result(run_id, run_dir)
+    result["by_context"] = [
+        {
+            "servico": {"id": "svc", "repos": []},
+            "budget_report": {
+                "status": "split_required",
+                "critical_omissions": [
+                    {"id": "RF-2", "reason": "does_not_fit", "recoverable": True}
+                ],
+                "critical_coverage": {"complete": False},
+                "diagnosis": "split",
+            },
+        }
+    ]
+    scored = score_case(_eval_expected(), result, output_root=tmp_path)
+    assert scored.layer_scores["critical_context"]["silent_critical_loss"] is False
+    assert scored.layer_scores["critical_context"]["explicit_block_or_split"] is True
+    assert scored.required_gates["critical_coverage_ok"] is True
+    assert "critical_coverage_ok" not in scored.fail_reasons
+    assert scored.passed is True
+
+
+def test_incomplete_coverage_without_omissions_fails(tmp_path: Path):
+    """critical_coverage.complete=False em run ok (sem omissões listadas) também reprova."""
+    run_id = "run-incomplete-cov"
+    run_dir = _seed_minimal_completed(tmp_path, run_id)
+    result = _base_eval_result(
+        run_id,
+        run_dir,
+        budget_report={
+            "status": "ok",
+            "critical_omissions": [],
+            "critical_coverage": {"complete": False},
+        },
+    )
+    scored = score_case(_eval_expected(), result, output_root=tmp_path)
+    assert scored.required_gates["critical_coverage_ok"] is False
+    assert "critical_coverage_ok" in scored.fail_reasons
+    assert scored.passed is False

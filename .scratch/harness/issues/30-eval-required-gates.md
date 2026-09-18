@@ -2,7 +2,8 @@
 
 **Kanban:** Done  
 
-> Aprovado por humano em 2026-09-18 (`pode seguir`). Não reabre worktree filha.
+> Aprovado por humano em 2026-09-18 (`pode seguir`). Ajuste pós-reabertura
+> integrado no pai. Não reabre worktree filha.
 **Blocked by:** —  
 **Prioridade:** P0.1
 
@@ -13,7 +14,8 @@
 ## Comportamento
 
 Separar diagnóstico de aprovação em `score_case()`: dimensões obrigatórias
-(spec, artefatos, rastreabilidade, pendências) não se compensam.
+(spec, artefatos, rastreabilidade, pendências) não se compensam. Gate
+`traceable` exige SourceRef válido; ID do claim sozinho não aprova.
 
 ## Aceite
 
@@ -28,28 +30,20 @@ Separar diagnóstico de aprovação em `score_case()`: dimensões obrigatórias
 
 ## Implementation note
 
-**HEAD:** `5ee18c366c3235a1c403e9afacc15ead4b0f1385` · `feature/eval-required-gates`
-(worktree `.worktrees/30-eval-required-gates`). Sem push / sem PR da filha.
+**HEAD:** `3cf8149` · `feature/eval-required-gates`
+(worktree `.worktrees/30-eval-required-gates`). Integrado no pai
+(`ae897b6` / `edd976b`). Sem push / sem PR da filha.
 
-**O que shipou**
-- `score_case()` agora expõe `required_gates` (AND) e `fail_reasons`;
-  `layer_scores` permanece diagnóstico.
-- Spec OK **não** compensa artefato ausente nem sinais faltando em
-  história/PRD; rastreabilidade e pendências `blocking` entram no gate
-  (não só em `critical`).
-- Bloqueio esperado valida `expected_reason` /
-  `expected_block_codes` (`ambiguous_status` atualizado).
-- README + CHANGELOG `[Unreleased]` atualizados na worktree.
+**O que shipou (ajuste)**
+- Gate `traceable`: SourceRef com `document` não vazio e linhas válidas.
+- Regressões: claim sem fonte / fonte inválida + manifesto íntegro →
+  `passed=False`.
+- README + CHANGELOG atualizados.
 
 **Como verificar**
 
 ```bash
-cd .worktrees/30-eval-required-gates
+cd .worktrees/onda-merge
 PYTHONPATH=. ../../pipeline/.venv/bin/python -m pytest \
-  tests/integration/test_eval_required_gates.py \
-  tests/integration/test_candidate_evals.py \
-  tests/integration/test_learning.py -q
+  tests/integration/test_eval_required_gates.py -q
 ```
-
-**Residual:** `scripts/quality_gates.py` — `audit` falhou neste ambiente
-(Python 3.9 vs `build==1.6.1` no lock); compile/lint/types/yaml OK.

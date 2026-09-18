@@ -225,6 +225,110 @@ def test_compare_evals_marks_dimension_regression():
     assert any("dimension_regressed:happy_path:traceable" in r for r in cmp["reasons"])
 
 
+def test_holdout_critical_regression_blocks_despite_dev_improvement():
+    """Candidato melhora no conjunto de desenvolvimento e regride no hold-out."""
+    from src.learning.evals import apply_reserved_gate
+
+    dev_baseline = {
+        "summary": {
+            "pass_rate": 0.5,
+            "avg_est_tokens": 100,
+            "claim_recall": 0.5,
+            "traceability_rate": 1.0,
+            "unexpected_inferences": 0,
+        },
+        "cases": [
+            {"case_id": "a", "ok": False, "critical": False},
+            {"case_id": "b", "ok": True, "critical": False},
+        ],
+    }
+    dev_candidate = {
+        "summary": {
+            "pass_rate": 1.0,
+            "avg_est_tokens": 90,
+            "claim_recall": 0.9,
+            "traceability_rate": 1.0,
+            "unexpected_inferences": 0,
+        },
+        "cases": [
+            {"case_id": "a", "ok": True, "critical": False},
+            {"case_id": "b", "ok": True, "critical": False},
+        ],
+    }
+    comparison = compare_evals(dev_baseline, dev_candidate)
+    assert comparison["decision"] == "accept"
+    assert comparison["improved"] is True
+    assert comparison["regression"] is False
+
+    reserved_baseline = {
+        "summary": {"pass_rate": 1.0, "avg_est_tokens": 100, "claim_recall": 1.0},
+        "cases": [{"case_id": "eval_adversarial", "ok": True, "critical": True}],
+    }
+    reserved_candidate = {
+        "summary": {"pass_rate": 0.0, "avg_est_tokens": 100, "claim_recall": 1.0},
+        "cases": [{"case_id": "eval_adversarial", "ok": False, "critical": True}],
+    }
+    gated = apply_reserved_gate(
+        comparison, reserved_baseline, reserved_candidate
+    )
+    assert gated["critical_regression"] is True
+    assert gated["regression"] is True
+    assert gated["decision"] == "reject"
+    assert gated["improved"] is False
+    # Orientação (métricas / case_gates de desenvolvimento) preservada
+    assert gated["metrics"]["claim_recall"]["delta"] > 0
+    assert all(g["case_id"] != "eval_adversarial" for g in gated["case_gates"])
+    hold_gate = next(
+        g for g in gated["reserved_case_gates"] if g["case_id"] == "eval_adversarial"
+    )
+    assert hold_gate["regressed"] is True
+    assert hold_gate["critical"] is True
+    assert any("reserved:" in r for r in gated["reasons"])
+    assert gated["reserved_comparison"]["decision"] == "reject"
+
+
+def test_holdout_noncritical_tolerance_must_be_explicit():
+    from src.learning.evals import apply_reserved_gate
+
+    comparison = compare_evals(
+        {
+            "summary": {"pass_rate": 1.0, "avg_est_tokens": 100, "claim_recall": 0.8},
+            "cases": [{"case_id": "dev", "ok": True, "critical": False}],
+        },
+        {
+            "summary": {"pass_rate": 1.0, "avg_est_tokens": 90, "claim_recall": 0.9},
+            "cases": [{"case_id": "dev", "ok": True, "critical": False}],
+        },
+    )
+    reserved_b = {
+        "summary": {"pass_rate": 1.0, "avg_est_tokens": 50},
+        "cases": [{"case_id": "hold_flake", "ok": True, "critical": False}],
+    }
+    reserved_c = {
+        # pass_rate agregado igual: isola o gate por caso (como no teste de tolerância)
+        "summary": {"pass_rate": 1.0, "avg_est_tokens": 50},
+        "cases": [{"case_id": "hold_flake", "ok": False, "critical": False}],
+    }
+    blocked = apply_reserved_gate(comparison, reserved_b, reserved_c)
+    assert blocked["decision"] == "reject"
+    assert blocked["regression"] is True
+
+    allowed = apply_reserved_gate(
+        comparison,
+        reserved_b,
+        reserved_c,
+        tolerances=[
+            {
+                "case_id": "hold_flake",
+                "justification": "hold-out flake known until ticket X",
+            }
+        ],
+    )
+    assert allowed["decision"] == "accept"
+    assert allowed["reserved_comparison"]["decision"] == "accept"
+    assert any(t.get("scope") == "reserved" for t in allowed["tolerances_applied"])
+
+
 def test_decide_rejects_on_regression(tmp_path: Path):
     proposals = [
         {
