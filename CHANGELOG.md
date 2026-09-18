@@ -32,6 +32,17 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Testes (`tests/integration/test_evidence_verify.py`): payload forjado não
   esconde arquivo fora de escopo; teste só declarado é recusado; hashes
   reproduzíveis a partir do repo e dos logs
+- **Evidência de código no Canonical Spec** (`22-code-evidence-spec`): o IR
+  passa a modelar `current_state`, `gaps` e `code_evidence`; o `repo_index`
+  aponta arquivo, símbolo, linha, rota e confiança, com origem `observed` ou
+  `heuristic` explícita
+- Método/path/status encontrados no código podem resolver campos do IR com
+  `origin: observed`; conflito entre regra declarada e código observado abre
+  pergunta (`open_questions`) em vez de silenciar a divergência
+- História e PRD renderizam estado atual e gaps **a partir do IR**; ausência
+  de índice declara *índice não aplicado* e nunca vira “sem gaps”
+- Testes (`tests/integration/test_code_evidence_spec.py`): ponteiros do índice,
+  resolução `observed`, conflito regra × código, render e regressão sem índice
 - **Storage seguro da run** (`18-safe-run-storage`): `src/runtime/atomic_io.py`
   com write-temp + `os.replace`, cópia atômica e contenção de caminho
   (`resolve_within`)
@@ -90,6 +101,8 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - `close_loop` / `verify_execution` exigem checkout Git (`--repo`) e log
   estruturado do adapter; `changed_files` e `commands_executed` do payload
   só servem para detectar divergência, não como evidência
+- História e PRD passam a preencher estado atual e gaps a partir do Canonical
+  Spec; o placeholder “sem gaps” some quando o índice não foi aplicado
 - `manifest.json`, `state.json`, `provenance.json`, `latest.json`,
   `canonical-spec.yaml`, `spec-validation.json` e `llm_package_*.json` passam a
   ser gravados atomicamente

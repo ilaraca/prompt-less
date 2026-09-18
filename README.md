@@ -257,7 +257,7 @@ Estimativa de tokens: tokenizer do provider configurado em `models.provider` / `
   - `claude`: `system` com `cache_control: ephemeral` + `messages`
 - **`src/renderers/`**: com Canonical Spec disponível, os quatro artefatos são renderizados do IR (`render_historia`, `render_prd`, `render_openapi`, `render_mermaid`).
 - **`dry_run_scaffold`**: fallback legado (sem IR) que preenche o template localmente, sem API.
-- Na história/PRD, o render usa o IR + **`engenharia`** + `consolidated` (RF/AC + stack/NFR + handoff SDD).
+- Na história/PRD, o render usa o IR + **`engenharia`** + `consolidated` (RF/AC + stack/NFR + handoff SDD). Estado atual e gaps saem de `current_state` / `gaps` do Canonical Spec — sem índice a seção declara *índice não aplicado*, nunca “sem gaps”.
 - **`--live`**: slot ainda não implementado — deve consumir o pacote já comprimido.
 
 ### 8. `emit` (`src/emit.py` + `also_emit` em `run.py`)
@@ -851,6 +851,7 @@ O nome do repositório é um sinal pobre. Um documento pode falar de "vitrine", 
 | Tabelas | `@Table(name=…)`, `CREATE TABLE` | `oferta_ativa` |
 | Campos | atributos privados Java, campos tipados TS/Python | `percentualDesconto`, `cupom` |
 | Stack | `pom.xml`, `build.gradle`, `package.json` (deps), `go.mod`… | `java/maven`, `nestjs` |
+| Ponteiro (`evidencias`) | arquivo relativo, símbolo mais próximo, linha, rota, `confidence`, `origin` | `ClienteController.java:4` `POST /clientes` `observed` 0.90 |
 
 A base da classe é concatenada com a do método, então `@RequestMapping("/v1/ofertas")` + `@GetMapping("/ativas")` sai como `GET /v1/ofertas/ativas`, e não como `/ativas` solto.
 
@@ -881,22 +882,24 @@ Na prática: um `cpf` solto numa linha de log de telemetria não classifica a se
 
 #### Como isso melhora a história
 
-`historia.md` e `PRD.md` passam a ter uma seção de **estado atual** e uma de **gaps**, ambas derivadas do índice:
+`historia.md` e `PRD.md` renderizam **estado atual** e **gaps** a partir do
+Canonical Spec (`current_state` / `gaps` / `code_evidence`), não de um placeholder.
+Cada gap leva evidência (arquivo:linha, rota) ou marcação `[heurística]`.
 
 ```markdown
-**Endpoints existentes** (2):
-- `cadastro-cliente-api: POST /v1/clientes/cadastro`
-- `cadastro-cliente-api: GET /v1/clientes/{cpf}`
+**Endpoints existentes** (1):
+- `cadastro-cliente-api/src/.../ClienteController.java:4` `ClienteController` `POST /clientes/cadastro` _(observado, confiança 0.90)_
 
-**Códigos HTTP já tratados:** `201`, `400`, `409`
+**Códigos HTTP já tratados:** `201`, `400`
 
 ### Gaps entre regra e código
-- `400` — **já tratado no código**; validar gatilho: CPF inválido
-- `401` — **não encontrado no código**; implementar: sem autenticação
-- códigos no código sem regra correspondente no doc: `409` _(regra implícita ou legado — confirmar)_
+- **GAP-001** [heurística] Regra `ERR-001` declara HTTP 401 … — _(sem ponteiro de arquivo; marcação heurística)_
 ```
 
-O efeito prático é a história deixar de descrever tudo como novo: o que já existe vira ajuste, o que falta vira implementação, e código sem regra no documento aparece como pergunta para o negócio. O índice **não** entra no prompt — ele alimenta o scaffold e fica em `state/`, fora do budget de tokens.
+Sem `state/repo_index.json` a seção declara *índice não aplicado* e **não** afirma
+“sem gaps”. Método/path/status observados no código podem resolver campos do IR
+com `origin: observed`; conflito com a regra declarada abre pergunta (`Q-nnn`).
+O índice **não** entra no prompt — alimenta o IR e fica em `state/`, fora do budget.
 
 #### Limites honestos
 
@@ -959,6 +962,9 @@ Antes de renderizar história/PRD, a pipeline monta o IR (`src/spec/builder.py`)
 - defaults/inferências explícitos (`origin`, `confidence`, `requires_review`)
 - `unexpected_inferences` conta ResolvedValues `default|inferred` sem review
 - traceability de claim IDs (órfãos = warning)
+- **evidência de código** (`current_state`, `gaps`, `code_evidence`): ponteiros do
+  `repo_index` (arquivo, símbolo, linha, rota, confiança) com origem
+  `observed` ou `heuristic` explícita; conflito regra × código vira pergunta aberta
 
 Artefato: `canonical-spec.yaml` ao lado dos demais outputs da run.
 
@@ -1282,8 +1288,11 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 - OpenAPI/Mermaid derivam do IR já fatiado por `owner`: `--all-contexts` não
   replica a action de um serviço no contrato de outro; operação sem dono e
   erro órfão ficam `unresolved`
-- Status de sucesso só é resolvido no caso inequívoco (uma operação + um 2xx
-  declarado); fora dele o contrato sai sem resposta de sucesso, por decisão
+- Status de sucesso só é resolvido com evidência: um 2xx declarado inequívoco
+  (uma operação + um 2xx nas decisões) **ou** um 2xx único observado no código
+  na rota casada (`origin: observed`); fora disso permanece `unresolved`
+- Sem `repo_index`, história/PRD declaram *índice não aplicado* e não afirmam
+  “sem gaps”; heurística nunca é apresentada como fato
 - Resumo de docs é **extrativo por regex**, não LLM small (bom custo; pode perder nuance)
 - Tokenizer oficial cobre OpenAI via `tiktoken`; Anthropic/Gemini e ausência da lib usam heurística `chars÷4` (`method=heuristic`), nunca como contagem exata
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`

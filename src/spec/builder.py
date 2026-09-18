@@ -27,6 +27,7 @@ from src.domain.spec import (
     SpecError,
 )
 from src.servicos import fold, resolve_service_id
+from src.spec.evidence import bind_code_evidence, questions_from_conflicts
 
 _SUCCESS_STATUS_RE = re.compile(r"\b(2\d{2})\b")
 _CONTEXT_SENTINELS = {"default", "_unassigned"}
@@ -574,22 +575,19 @@ def build_canonical_spec(
         if not success.resolved:
             unresolved.append("success_status")
 
-        for missing in ("owner", "method", "path"):
-            if missing in unresolved:
-                motivo = (
-                    "sem dono atribuível no mapa/UI — não emitir como contrato resolvido"
-                    if missing == "owner"
-                    else f"sem {missing} declarado na UI — definir antes de gerar contrato"
+        if "owner" in unresolved:
+            open_questions.append(
+                OpenQuestion(
+                    id=f"Q-{qn:03d}",
+                    text=(
+                        f"Operação {op_id} ({op_name}) sem dono atribuível "
+                        "no mapa/UI — não emitir como contrato resolvido"
+                    ),
+                    blocking=False,
+                    source_claims=[],
                 )
-                open_questions.append(
-                    OpenQuestion(
-                        id=f"Q-{qn:03d}",
-                        text=f"Operação {op_id} ({op_name}) {motivo}",
-                        blocking=False,
-                        source_claims=[],
-                    )
-                )
-                qn += 1
+            )
+            qn += 1
 
         operations.append(
             Operation(
@@ -598,6 +596,8 @@ def build_canonical_spec(
                 owner=owner,
                 method=method,
                 path=path,
+                method_origin="declared" if method else None,
+                path_origin="declared" if path else None,
                 success_status=success,
                 error_ids=[],
                 request_schema=_schema_from_ui(op_name, ui.get("inputs") or [], "Request"),
@@ -625,6 +625,33 @@ def build_canonical_spec(
             )
         )
         qn += 1
+
+    indice = None
+    if isinstance(svc, dict) and "indice" in svc:
+        indice = svc.get("indice") or {}
+    current_state, gaps, code_evidence, conflict_texts = bind_code_evidence(
+        operations=operations,
+        errors=errors,
+        indice=indice,
+    )
+
+    for op in operations:
+        for missing in ("method", "path"):
+            if missing in op.unresolved:
+                open_questions.append(
+                    OpenQuestion(
+                        id=f"Q-{qn:03d}",
+                        text=(
+                            f"Operação {op.id} ({op.name}) sem {missing} declarado "
+                            f"na UI — definir antes de gerar contrato"
+                        ),
+                        blocking=False,
+                        source_claims=[],
+                    )
+                )
+                qn += 1
+    extra_qs, qn = questions_from_conflicts(conflict_texts, start=qn)
+    open_questions.extend(extra_qs)
 
     nfrs: list[Requirement] = []
     if eng.get("resiliencia"):
@@ -658,4 +685,7 @@ def build_canonical_spec(
         errors=errors,
         nfrs=nfrs,
         open_questions=open_questions,
+        current_state=current_state,
+        gaps=gaps,
+        code_evidence=code_evidence,
     )
