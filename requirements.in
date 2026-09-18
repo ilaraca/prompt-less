@@ -1,4 +1,4 @@
-# Dependências de runtime. Regenerar o lock:
+# Dependências de runtime. Regenerar o lock (Python ≥3.10):
 #   pip-compile --generate-hashes --allow-unsafe --output-file=requirements.lock requirements.in
 PyYAML>=6.0.1
 python-docx>=1.1.0

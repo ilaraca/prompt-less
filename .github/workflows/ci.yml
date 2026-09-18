@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     defaults:
       run:
         working-directory: .
@@ -61,19 +61,7 @@ jobs:
         run: detect-secrets scan --baseline .secrets.baseline
 
       - name: pip-audit
-        run: |
-          # Fixes of these CVEs require packages that dropped Python 3.9
-          # (pytest 9, click 8.3, filelock 3.20, msgpack 1.2, requests 2.33,
-          # urllib3 2.7). Ignored while the matrix still includes 3.9.
-          pip-audit --strict -r requirements-dev.lock \
-            --ignore-vuln PYSEC-2026-1845 \
-            --ignore-vuln PYSEC-2026-2132 \
-            --ignore-vuln PYSEC-2026-1375 \
-            --ignore-vuln PYSEC-2026-1374 \
-            --ignore-vuln PYSEC-2026-3625 \
-            --ignore-vuln PYSEC-2026-2275 \
-            --ignore-vuln PYSEC-2026-142 \
-            --ignore-vuln PYSEC-2026-141
+        run: pip-audit --strict -r requirements-dev.lock
 
       - name: Tests + coverage
         run: |

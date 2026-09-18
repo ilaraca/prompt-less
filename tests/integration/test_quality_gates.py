@@ -12,7 +12,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 ACTION_RE = re.compile(
     r"^(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@(?P<sha>[0-9a-f]{40})$"
 )
-SUPPORTED_PYTHON = ["3.9", "3.10", "3.11", "3.12", "3.13"]
+SUPPORTED_PYTHON = ["3.10", "3.11", "3.12", "3.13"]
 ADVERSARIAL_TESTS = (
     "tests/integration/test_evidence_verify.py",
     "tests/integration/test_contextual_provenance.py",
@@ -87,6 +87,7 @@ def test_ci_runs_compile_lint_types_coverage_audit_secrets_yaml():
     ):
         assert needle in text, needle
     assert "pytest" in text
+    assert "--ignore-vuln" not in text
 
 
 def test_ci_aggregator_job_is_required_ready():

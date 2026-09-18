@@ -530,7 +530,7 @@ O workflow `.github/workflows/ci.yml` (`name: CI`) é o check required-ready:
 compile, ruff, mypy, coverage ≥ 70% (relatório por módulo), pytest (incluindo
 testes adversariais de runtime/policy/provenance), `pip-audit`, detect-secrets,
 validação YAML, artifacts de eval/coverage/verify. Actions pinadas por SHA,
-`permissions: contents: read`, matriz Python 3.9–3.13.
+`permissions: contents: read`, matriz Python 3.10–3.13.
 
 Regenerar o lock: `pip-compile --generate-hashes --allow-unsafe --output-file=requirements.lock requirements.in` e o equivalente para `requirements-dev.lock`. Detalhe em [Gates de qualidade](#gates-de-qualidade).
 
@@ -1275,7 +1275,7 @@ stages:
 
 ## Dependências
 
-- **Python 3.9–3.13** — a matriz do CI cobre exatamente essas versões
+- **Python 3.10–3.13** — a matriz do CI cobre exatamente essas versões
 - Runtime: `PyYAML`, `python-docx` (`.docx`), `tiktoken` (tokenizer OpenAI; sem ele, fallback heurístico) — lock em `requirements.lock`
 - Dev/CI: `pytest`, `ruff`, `mypy`, `coverage`, `pip-audit`, `detect-secrets`, `yamllint` — lock em `requirements-dev.lock`
 - macOS: `textutil` nativo para `.doc` legado  
@@ -1303,7 +1303,7 @@ O job agregador **`CI`** (depende de `quality-gates` na matriz) é o check está
 | `verify-report.json` | placeholder `ci_no_close_loop` quando o workflow não roda `close_loop` |
 | `pytest.xml` | junit da suíte (inclui testes adversariais) |
 
-`pip-audit --strict` faz parte do gate. Em 2026-09-18 o lock (compilado em Python 3.9) ainda carrega CVEs cujos fixes exigem pacotes que largaram o 3.9 (`pytest` 9, `click` 8.3, `filelock` 3.20, `msgpack` 1.2, `requests` 2.33, `urllib3` 2.7). Esses IDs estão em `--ignore-vuln` no workflow; o audit continua falhando em CVE **nova**.
+`pip-audit --strict` faz parte do gate. O lock é compilado em Python 3.12 (`pip>=26.2`, `setuptools>=83`) e a matriz começa em 3.10, para que os fixes de CVE que largaram o 3.9 entrem no gate sem `--ignore-vuln`.
 
 ### Branch protection (ainda não ativa)
 
@@ -1442,7 +1442,6 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 - Tokenizer oficial cobre OpenAI via `tiktoken`; Anthropic/Gemini e ausência da lib usam heurística `chars÷4` (`method=heuristic`), nunca como contagem exata
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
 - Branch protection em `main` **não** está ligada no GitHub (ver [Gates de qualidade](#gates-de-qualidade)); o workflow já é required-ready
-- `pip-audit` ignora CVEs cujo fix dropou Python 3.9 (lista no workflow)
 - Timeout de estágio é best-effort (thread); o handler pode continuar em background após o teto
 - Estágios opcionais (`repos_scan`, `repo_index`, `marcar`) existem no YAML mas ficam desligados no default
 - Scan de inputs é heurístico (regex); não substitui secret manager nem DLP

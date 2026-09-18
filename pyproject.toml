@@ -1,10 +1,10 @@
 [tool.promptless]
 # Versões que o README declara e que a matriz do CI deve cobrir.
-python_versions = ["3.9", "3.10", "3.11", "3.12", "3.13"]
+python_versions = ["3.10", "3.11", "3.12", "3.13"]
 coverage_fail_under = 70
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 100
 src = ["src", "tests", "scripts"]
 
@@ -13,7 +13,7 @@ select = ["E", "F", "W"]
 ignore = ["E501"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 files = ["src"]
 ignore_missing_imports = true
 pretty = true

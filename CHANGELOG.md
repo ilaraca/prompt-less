@@ -7,6 +7,13 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `pip-audit --strict` na matriz 3.10–3.13 deixava de passar: o lock compilado
+  em 3.9 pinava `pip` 26.0.1 e `setuptools` 82.0.1, cujos fixes exigem
+  Python ≥3.10. A matriz larga o 3.9, o lock recompila em 3.12 (`pip` 26.2.1,
+  `setuptools` 84) e o workflow não usa mais `--ignore-vuln`
+
 ### Added
 
 - **Tokenizer oficial pluggable** (`src/tokenizer.py`): budget e telemetria usam a
@@ -31,7 +38,7 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   (`requirements.lock` / `requirements-dev.lock` via pip-tools), CI com
   compile + ruff + mypy + coverage mínima **70%** (relatório por módulo),
   `pip-audit`, detect-secrets, YAML (`yaml.safe_load` + yamllint), Actions
-  pinadas por SHA e `permissions: contents: read`, matriz Python **3.9–3.13**,
+  pinadas por SHA e `permissions: contents: read`, matriz Python **3.10–3.13**,
   artifacts eval/coverage/verify (placeholder de verify quando a run não
   executa `close_loop`). Job agregador `CI` required-ready para branch
   protection; a regra no GitHub **ainda não está ativa**
@@ -146,8 +153,8 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   O atalho foi removido: use `python -m src.approval`. `approved=False`
   no payload ainda gera `needs_approval` no verify; promoção exige o
   registro auditável
-- Python suportado declarado como **3.9–3.13** (a matriz do CI cobre esse
-  intervalo; antes o README dizia 3.9+ e o CI só rodava 3.11)
+- Python suportado declarado como **3.10–3.13** (a matriz do CI cobre esse
+  intervalo; 3.9 saiu porque os fixes de CVE do lock largaram essa versão)
 - `config/tools.compact.yaml` passa a ser YAML válido (assinaturas entre aspas)
 - `close_loop` / `verify_execution` exigem checkout Git (`--repo`) e log
   estruturado do adapter; `changed_files` e `commands_executed` do payload
