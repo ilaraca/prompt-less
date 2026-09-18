@@ -220,7 +220,7 @@ Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 35-independent-test-evidence | **In progress** | filha (ajuste) | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
+| 35-independent-test-evidence | **Feedback** | filha, HEAD `5b0a663` | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
 | 36-repair-policy | **Done** | filha, HEAD `fb4f0bc` | `.worktrees/36-repair-policy` · `feature/repair-policy` |
 | 37-executor-enforcement | **Feedback** | filha, HEAD `a6c8f76` | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
 | 39-case-regression-gates | **Todo** | filha, HEAD `e453a3d` | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
@@ -258,7 +258,7 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 | 32-eval-typed-http | P0.1 | HTTP tipado por serviço e operação | **Done** | — |
 | 33-required-review-gate | P0.2 | Revisão obrigatória bloqueante e auditável | **Done** | — |
 | 34-cli-failure-exit | P0.3 | Exit code de falha e bloqueio de consumo | **Done** | — |
-| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **In progress** | 30, 31, 32, 33, 34 |
+| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **Feedback** | 30, 31, 32, 33, 34 |
 | 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Done** | 30, 31, 32, 33, 34 |
 | 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Feedback** | 30, 31, 32, 33, 34 |
 | 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | **Todo** | 35, 36, 37 |
@@ -416,13 +416,13 @@ manter JSON/diagnóstico legível; consumidores validam identidade e estado.
 
 ### 35 — Testes e critérios de aceite independentes
 
-**Status atual: Todo — reaberto para ajustes a pedido de Ilara.**
+**Status atual: Feedback — ajuste pós-reabertura (`5b0a663`).**
 
 **Revisão de 2026-09-18 — ajustes pendentes:** `git diff`, classificado pelo sidecar como unitário e associado aos ACs por `covers`, terminou com verificação `passed` sem executar teste comportamental. Na integração com `EnforcedRunner`, a coleta falhou com `'EnforcedRunner' object is not callable`.
 
-- [ ] Definir verificações de aceite controladas pelo harness e validar resultados reais; `kind`/`covers` do agente não bastam.
-- [ ] Rejeitar comando sem teste, ainda que autorizado e com exit code zero, como prova comportamental.
-- [ ] Unificar a interface do runner e testar `DevinAdapter` + `EnforcedRunner` reais juntos, sem stub na chamada.
+- [x] Definir verificações de aceite controladas pelo harness e validar resultados reais; `kind`/`covers` do agente não bastam.
+- [x] Rejeitar comando sem teste, ainda que autorizado e com exit code zero, como prova comportamental.
+- [x] Unificar a interface do runner e testar `DevinAdapter` + `EnforcedRunner` reais juntos, sem stub na chamada.
 
 **Achado:** `_materialize_test_evidence()` monta JSONL a partir do sidecar do
 agente; `passed=True` pode virar `exit_code=0` sem execução do comando.
@@ -438,13 +438,13 @@ aceite obrigatório com evidência de comportamento adequada.
 
 - [x] Relato `passed=True` sozinho nunca cria evidência suficiente.
 - [x] Log ausente, incompleto, adulterado ou de outra run reprova.
-- [ ] AC obrigatório sem comprovação bloqueia; arquivo existente não basta.
+- [x] AC obrigatório sem comprovação bloqueia; arquivo existente não basta.
 - [x] Uma falha conhecida é detectada e uma correção real passa na reexecução.
 - [x] E2E real fica registrado separadamente de stubs e testes ignorados.
 
 **Código:** `src/executors/devin.py`, `evidence.py`, `verify.py`.
 
-**Kanban:** Todo · HEAD filha `36bcbc3` · ver
+**Kanban:** Feedback · HEAD filha `5b0a663` · ver
 `issues/35-independent-test-evidence.md` § Implementation note.
 
 ### 36 — Política completa no reparo
