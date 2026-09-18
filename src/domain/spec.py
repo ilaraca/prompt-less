@@ -311,6 +311,12 @@ class Operation:
         status = ResolvedInt.from_raw(self.success_status)
         return status.value if status.resolved else None
 
+    def is_contract(self) -> bool:
+        """Publicável: dono, método e path resolvidos — sem dono não vira contrato."""
+        if not self.owner or "owner" in (self.unresolved or []):
+            return False
+        return bool(self.method) and bool(self.path)
+
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         status = self.success_status
@@ -426,16 +432,26 @@ class CanonicalSpec:
     def errors_by_id(self) -> dict[str, SpecError]:
         return {e.id: e for e in self.errors}
 
+    def contract_operations(self) -> list[Operation]:
+        """Operações que consumidores derivados (OpenAPI/Mermaid/SDD) podem publicar."""
+        return [op for op in self.operations if op.is_contract()]
+
     def errors_of(self, operation: Operation) -> list[SpecError]:
         """Erros do IR referenciados pela operação, na ordem do IR."""
         wanted = set(operation.error_ids)
         return [e for e in self.errors if e.id in wanted]
 
     def http_statuses(self) -> set[int]:
-        """Único conjunto de status que artefatos derivados podem declarar."""
-        statuses = {int(e.status) for e in self.errors}
-        for op in self.operations:
+        """Único conjunto de status que artefatos derivados podem declarar.
+
+        Só conta sucesso resolvido e erros *ancorados* em operação de contrato —
+        erro órfão permanece no IR como unresolved e não autoriza status no artefato.
+        """
+        statuses: set[int] = set()
+        for op in self.contract_operations():
             resolved = op.resolved_success_status()
             if resolved is not None:
                 statuses.add(int(resolved))
+            for err in self.errors_of(op):
+                statuses.add(int(err.status))
         return statuses

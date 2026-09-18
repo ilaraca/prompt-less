@@ -186,19 +186,40 @@ def test_sem_divergencia_entre_ir_historia_prd_openapi_mermaid(
     for rf in ir["requirements"]:
         assert rf["id"] in texto_prd
 
-    # erros do IR aparecem nos quatro artefatos derivados
+    # erros ancorados no IR aparecem nos artefatos da operação dona;
+    # órfãos ficam unresolved (PRD) e não são copiados para path/sequência
+    referenced_errors = {
+        eid
+        for op in ir["operations"]
+        for eid in (op.get("error_ids") or [])
+    }
+    contract_ops = [
+        op
+        for op in ir["operations"]
+        if op.get("owner")
+        and op.get("path")
+        and op.get("method")
+        and "owner" not in (op.get("unresolved") or [])
+    ]
     for err in ir["errors"]:
         status = str(err["status"])
         assert status in texto_prd
+        if err["id"] not in referenced_errors:
+            continue
         assert status in texto_mermaid
-        assert status in doc["paths"][ir["operations"][0]["path"]][
-            ir["operations"][0]["method"].lower()
-        ]["responses"]
+        donas = [
+            op
+            for op in contract_ops
+            if err["id"] in (op.get("error_ids") or [])
+        ]
+        assert donas, f"{err['id']} referenciado sem operação de contrato"
+        for op in donas:
+            assert status in doc["paths"][op["path"]][op["method"].lower()]["responses"]
 
-    # paths e métodos do IR são exatamente os do OpenAPI e da sequência
-    ir_paths = {op["path"] for op in ir["operations"] if op["path"]}
+    # paths e métodos do IR (contrato) são exatamente os do OpenAPI e da sequência
+    ir_paths = {op["path"] for op in contract_ops}
     assert set(doc["paths"]) == ir_paths
-    for op in ir["operations"]:
+    for op in contract_ops:
         assert op["method"].lower() in doc["paths"][op["path"]]
         assert f"{op['method']} {op['path']}" in texto_mermaid
         assert op["path"] in texto_prd
@@ -217,16 +238,19 @@ def test_sem_divergencia_entre_ir_historia_prd_openapi_mermaid(
 
 
 def _build_from_fixture(case_id: str) -> CanonicalSpec:
-    """Reconstrói o IR do fixture sem RAG (só UI + regras declaradas)."""
+    """Reconstrói o IR do fixture sem RAG (só UI + regras + mapa)."""
     from src.ingest import load_inputs
     from src.preprocess import preprocess
+    from src.servicos import load_mapa
 
     slim = preprocess(load_inputs("openapi", inputs_dir=FIXTURES / case_id))
+    mapa = load_mapa(FIXTURES / case_id / "mapa-servicos.yaml")
     return build_canonical_spec(
         ui=slim["ui"],
         regras=slim["regras"],
         engenharia=slim["engenharia"],
         claims=[],
+        mapa=mapa,
     )
 
 
@@ -348,3 +372,203 @@ def test_validate_derived_artifact_aceita_artefato_do_ir():
     assert not validate_derived_artifact("openapi", render_openapi(spec), spec).has_errors
     assert not validate_derived_artifact("mermaid", render_mermaid(spec), spec).has_errors
     assert not validate_derived_artifact("historia", "qualquer", spec).issues
+
+
+def _two_services_pack() -> tuple[dict[str, Any], dict[str, Any]]:
+    from src.ingest import load_inputs
+    from src.preprocess import preprocess
+    from src.servicos import load_mapa
+
+    slim = preprocess(load_inputs("openapi", inputs_dir=FIXTURES / "two_services"))
+    mapa = load_mapa(FIXTURES / "two_services" / "mapa-servicos.yaml")
+    assert mapa
+    return slim, mapa
+
+
+def test_operation_owner_preenchido_na_montagem_do_ir():
+    slim, mapa = _two_services_pack()
+    spec = build_canonical_spec(
+        ui=slim["ui"],
+        regras=slim["regras"],
+        engenharia=slim["engenharia"],
+        mapa=mapa,
+    )
+    by_name = {op.name: op for op in spec.operations}
+    assert by_name["cadastrar"].owner == "ms-cliente"
+    assert by_name["pagar"].owner == "ms-pagamento"
+    assert all(op.owner for op in spec.contract_operations())
+
+
+def test_context_contem_so_operacoes_do_servico():
+    slim, mapa = _two_services_pack()
+    from src.servicos import get_service
+
+    cliente = build_canonical_spec(
+        ui=slim["ui"],
+        regras=slim["regras"],
+        mapa=mapa,
+        servico=get_service(mapa, "ms-cliente"),
+    )
+    pagamento = build_canonical_spec(
+        ui=slim["ui"],
+        regras=slim["regras"],
+        mapa=mapa,
+        servico=get_service(mapa, "ms-pagamento"),
+    )
+
+    assert {op.name for op in cliente.operations} == {"cadastrar"}
+    assert {op.owner for op in cliente.operations} == {"ms-cliente"}
+    assert {op.name for op in pagamento.operations} == {"pagar"}
+    assert {op.owner for op in pagamento.operations} == {"ms-pagamento"}
+    assert {op.path for op in cliente.contract_operations()} == {"/clientes"}
+    assert {op.path for op in pagamento.contract_operations()} == {"/pagamentos"}
+
+
+def test_erros_seguem_a_operacao_dona_orfaos_nao_sao_copiados():
+    slim, mapa = _two_services_pack()
+    spec = build_canonical_spec(
+        ui=slim["ui"], regras=slim["regras"], mapa=mapa
+    )
+    by_name = {op.name: op for op in spec.operations}
+    erros = spec.errors_by_id()
+
+    cpf = next(e for e in spec.errors if "cpf" in e.trigger.lower())
+    saldo = next(e for e in spec.errors if "saldo" in e.trigger.lower())
+    auth = next(e for e in spec.errors if "autent" in e.trigger.lower())
+
+    assert cpf.id in by_name["cadastrar"].error_ids
+    assert cpf.id not in by_name["pagar"].error_ids
+    assert saldo.id in by_name["pagar"].error_ids
+    assert saldo.id not in by_name["cadastrar"].error_ids
+    assert auth.id not in by_name["cadastrar"].error_ids
+    assert auth.id not in by_name["pagar"].error_ids
+    assert erros[auth.id].status == 401
+
+    perguntas = " ".join(q.text for q in spec.open_questions)
+    assert auth.id in perguntas
+    assert "unresolved" in perguntas
+
+    doc = yaml.safe_load(render_openapi(spec))
+    cliente_resp = doc["paths"]["/clientes"]["post"]["responses"]
+    pag_resp = doc["paths"]["/pagamentos"]["post"]["responses"]
+    assert "400" in cliente_resp and "422" not in cliente_resp
+    assert "422" in pag_resp and "400" not in pag_resp
+    assert "401" not in cliente_resp and "401" not in pag_resp
+
+    sequencia = render_mermaid(spec)
+    assert "/pagamentos" in sequencia and "/clientes" in sequencia
+    assert "401" not in sequencia
+
+
+def test_operacao_sem_dono_nao_e_emitida_como_resolvida():
+    spec = build_canonical_spec(
+        ui={
+            "actions": [
+                {"id": "misterio", "method": "POST", "path": "/desconhecido"}
+            ]
+        },
+        regras={"bloqueios": [{"trigger": "x", "status": 400}]},
+        mapa={
+            "servicos": {
+                "ms-cliente": {"keywords": ["cliente", "/clientes"]},
+                "ms-pagamento": {"keywords": ["pagamento", "/pagamentos"]},
+            }
+        },
+        servico={"id": "ms-cliente", "keywords": ["cliente"]},
+    )
+    assert spec.operations
+    op = spec.operations[0]
+    assert op.owner is None
+    assert "owner" in op.unresolved
+    assert not op.is_contract()
+    assert spec.contract_operations() == []
+
+    doc = yaml.safe_load(render_openapi(spec))
+    assert doc["paths"] == {}
+    assert doc["x-unresolved-operations"][0]["id"] == op.id
+    assert "owner" in doc["x-unresolved-operations"][0]["unresolved"]
+
+    sequencia = render_mermaid(spec)
+    assert "unresolved: owner" in sequencia
+    assert "/desconhecido" not in sequencia
+
+
+def _openapi_doc(result: dict[str, Any]) -> dict[str, Any]:
+    return yaml.safe_load(Path(result["output"]).read_text(encoding="utf-8"))
+
+
+def test_all_contexts_nao_replica_action_no_openapi_mermaid_do_outro(tmp_path: Path):
+    """Golden de isolamento: cada contexto publica só o próprio contrato."""
+    openapi = run(
+        "openapi",
+        dry_run=True,
+        inputs_dir=FIXTURES / "two_services",
+        output_root=tmp_path / "oa",
+        run_id="iso-oa",
+        all_contexts=True,
+    )
+    mermaid = run(
+        "mermaid",
+        dry_run=True,
+        inputs_dir=FIXTURES / "two_services",
+        output_root=tmp_path / "mm",
+        run_id="iso-mm",
+        all_contexts=True,
+    )
+    assert openapi["status"] == "completed", openapi.get("validation")
+    assert mermaid["status"] == "completed", mermaid.get("validation")
+
+    oa_by = {c["context"]: c for c in openapi["by_context"]}
+    mm_by = {c["context"]: c for c in mermaid["by_context"]}
+
+    cliente_oa = _openapi_doc(oa_by["ms-cliente"])
+    pag_oa = _openapi_doc(oa_by["ms-pagamento"])
+    assert set(cliente_oa["paths"]) == {"/clientes"}
+    assert "/pagamentos" not in cliente_oa["paths"]
+    assert set(pag_oa["paths"]) == {"/pagamentos"}
+    assert "/clientes" not in pag_oa["paths"]
+
+    cliente_spec = yaml.safe_load(
+        Path(oa_by["ms-cliente"]["canonical_spec"]).read_text(encoding="utf-8")
+    )
+    pag_spec = yaml.safe_load(
+        Path(oa_by["ms-pagamento"]["canonical_spec"]).read_text(encoding="utf-8")
+    )
+    assert {op["name"] for op in cliente_spec["operations"]} == {"cadastrar"}
+    assert {op["owner"] for op in cliente_spec["operations"]} == {"ms-cliente"}
+    assert {op["name"] for op in pag_spec["operations"]} == {"pagar"}
+    assert {op["owner"] for op in pag_spec["operations"]} == {"ms-pagamento"}
+
+    cliente_mm = Path(mm_by["ms-cliente"]["output"]).read_text(encoding="utf-8")
+    pag_mm = Path(mm_by["ms-pagamento"]["output"]).read_text(encoding="utf-8")
+    assert "/clientes" in cliente_mm and "/pagamentos" not in cliente_mm
+    assert "/pagamentos" in pag_mm and "/clientes" not in pag_mm
+
+    # o recorte é o mesmo conjunto que OpenAPI/Mermaid leem (IR, não o renderer)
+    assert set(cliente_oa["paths"]) == {
+        op["path"] for op in cliente_spec["operations"] if op.get("path")
+    }
+    assert set(pag_oa["paths"]) == {
+        op["path"] for op in pag_spec["operations"] if op.get("path")
+    }
+
+
+def test_run_context_isola_spec_operations(tmp_path: Path):
+    result = run(
+        "openapi",
+        dry_run=True,
+        inputs_dir=FIXTURES / "two_services",
+        output_root=tmp_path / "ctx",
+        run_id="iso-ctx",
+        context="ms-cliente",
+    )
+    assert result["status"] == "completed", result.get("validation")
+    ctx = (result.get("by_context") or [result])[0]
+    spec = yaml.safe_load(Path(ctx["canonical_spec"]).read_text(encoding="utf-8"))
+    assert {op["name"] for op in spec["operations"]} == {"cadastrar"}
+    assert {op["owner"] for op in spec["operations"]} == {"ms-cliente"}
+    texto = Path(ctx["output"]).read_text(encoding="utf-8")
+    doc = yaml.safe_load(texto)
+    assert set(doc["paths"]) == {"/clientes"}
+    assert "/pagamentos" not in texto
+

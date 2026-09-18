@@ -42,8 +42,8 @@ def _call(op: Operation) -> str:
 def _happy_path_lines(spec: CanonicalSpec) -> list[str]:
     lines: list[str] = []
     for op in spec.operations:
-        if not op.method or not op.path:
-            faltando = ", ".join(op.unresolved) or "method, path"
+        if not op.is_contract():
+            faltando = ", ".join(op.unresolved) or "owner, method, path"
             lines.append(
                 f"{_INDENT}%% {op.id} {op.name} — unresolved: {faltando} "
                 "(sem evidência no IR)"
@@ -67,7 +67,7 @@ def _happy_path_lines(spec: CanonicalSpec) -> list[str]:
 def _alt_lines(spec: CanonicalSpec) -> list[str]:
     lines: list[str] = []
     for op in spec.operations:
-        if not op.method or not op.path:
+        if not op.is_contract():
             continue
         for err in spec.errors_of(op):
             rotulo = f"{op.id} {err.trigger} ({err.id})"

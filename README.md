@@ -982,6 +982,7 @@ O que o IR carrega para isso:
 
 | Campo do IR | Efeito no artefato |
 |---|---|
+| `operations[].owner` / `service_id` | recorte do IR: cada spec só publica as ops do serviço |
 | `operations[].method` / `path` | path item + método do OpenAPI e chamadas da sequência |
 | `operations[].request_schema` / `response_schema` | `components.schemas.*` com `origin` por campo |
 | `operations[].success_status` | resposta de sucesso **só** se `requires_review: false` |
@@ -1003,8 +1004,21 @@ Falha de gate **não** emite o arquivo: a run volta `status: blocked`,
 `runs/<id>/validations/<tipo>-validation.json`.
 
 Sucesso sem evidência permanece `unresolved` de propósito: só vira `200`/`201`
-quando as decisões declaram um único 2xx e existe uma única operação (aí o
-`success_status` guarda `origin: declared` e os `source_claims`).
+quando as decisões declaram um único 2xx e existe uma única operação **com dono**
+no spec (aí o `success_status` guarda `origin: declared` e os `source_claims`).
+
+Com `--context <svc>` ou `--all-contexts`, o Canonical Spec é fatiado **no IR**:
+`spec.operations` só contém as ações cujo `owner` é aquele serviço (e os `ERR-*`
+ancorados nela). OpenAPI, Mermaid e futuros consumidores (SDD) leem o mesmo
+conjunto — o renderer não adivinha fronteira de microsserviço. Operação sem dono
+e erro órfão ficam `unresolved` (pergunta aberta não bloqueante) e **não** viram
+path/status no contrato de outro serviço.
+
+```bash
+.venv/bin/python -m src.run openapi --context ms-cliente --dry-run
+.venv/bin/python -m src.run openapi --all-contexts --dry-run
+# → runs/<id>/artifacts/contextos/<svc>/canonical-spec.yaml + openapi.yaml
+```
 
 ### Ciclo executor (`close_loop`)
 
@@ -1245,8 +1259,9 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 - Modo `--live` (chamada real OpenAI/Claude) ainda não implementado
 - Adapter Devin no `close_loop` é stub (E2E real = série 2)
 - `improve` não aplica propostas nem faz rollback — só `approved_for_experiment`
-- OpenAPI/Mermaid derivam do IR, mas as `operations` **não** são fatiadas por
-  serviço: com `--all-contexts` cada contexto recebe todas as actions da UI
+- OpenAPI/Mermaid derivam do IR já fatiado por `owner`: `--all-contexts` não
+  replica a action de um serviço no contrato de outro; operação sem dono e
+  erro órfão ficam `unresolved`
 - Status de sucesso só é resolvido com evidência: um 2xx declarado inequívoco
   (uma operação + um 2xx nas decisões) **ou** um 2xx único observado no código
   na rota casada (`origin: observed`); fora disso permanece `unresolved`

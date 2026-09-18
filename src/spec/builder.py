@@ -26,9 +26,11 @@ from src.domain.spec import (
     SchemaField,
     SpecError,
 )
+from src.servicos import fold, resolve_service_id
 from src.spec.evidence import bind_code_evidence, questions_from_conflicts
 
 _SUCCESS_STATUS_RE = re.compile(r"\b(2\d{2})\b")
+_CONTEXT_SENTINELS = {"default", "_unassigned"}
 
 
 def _schema_id(name: str, suffix: str) -> str:
@@ -60,6 +62,152 @@ def _schema_from_ui(
         return None
     origin = "declared" if all(f.origin == "declared" for f in fields) else "inferred"
     return DataSchema(id=_schema_id(op_name, suffix), fields=fields, origin=origin)
+
+
+def _keyword_score(text: str, keywords: list[str] | None) -> int:
+    """Contagem de keywords (fold) — mesma heurística do mapa de serviços."""
+    low = fold(text)
+    score = 0
+    for kw in keywords or []:
+        key = fold(kw)
+        if key:
+            score += low.count(key)
+    return score
+
+
+def _action_blob(action: dict[str, Any]) -> str:
+    return " ".join(
+        str(action.get(k) or "")
+        for k in ("id", "name", "method", "path", "owner", "service_id", "service")
+    )
+
+
+def _explicit_owner(action: dict[str, Any], mapa: dict[str, Any] | None) -> str | None:
+    raw = action.get("owner") or action.get("service_id") or action.get("service")
+    if not raw:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    if mapa:
+        return resolve_service_id(mapa, text) or text
+    return text
+
+
+def _resolve_operation_owner(
+    action: dict[str, Any],
+    *,
+    mapa: dict[str, Any] | None,
+    fallback_service_id: str,
+) -> str | None:
+    """Dono da ação por evidência — nunca herda o contexto só porque a spec é dele."""
+    explicit = _explicit_owner(action, mapa)
+    if explicit:
+        return explicit
+
+    servicos = (mapa or {}).get("servicos") or {}
+    if servicos:
+        blob = _action_blob(action)
+        scored = {
+            sid: _keyword_score(blob, list((meta or {}).get("keywords") or []))
+            for sid, meta in servicos.items()
+        }
+        best = max(scored.values()) if scored else 0
+        winners = [sid for sid, score in scored.items() if score == best and score > 0]
+        if len(winners) == 1:
+            return winners[0]
+        if best <= 0 and len(servicos) == 1:
+            return next(iter(servicos))
+        return None
+
+    if fallback_service_id and fallback_service_id not in _CONTEXT_SENTINELS:
+        return fallback_service_id
+    if fallback_service_id == "default":
+        return "default"
+    return None
+
+
+def _slice_context_id(service_id: str) -> str | None:
+    return None if service_id in _CONTEXT_SENTINELS else service_id
+
+
+def _error_blob(err: SpecError) -> str:
+    return f"{err.trigger} {err.code or ''}"
+
+
+def _score_error_for_op(
+    err: SpecError, op: Operation, mapa: dict[str, Any] | None
+) -> int:
+    blob = _error_blob(err)
+    score = _keyword_score(blob, [op.name or "", op.path or "", op.id])
+    servicos = (mapa or {}).get("servicos") or {}
+    if op.owner and op.owner in servicos:
+        score += _keyword_score(
+            blob, list((servicos[op.owner] or {}).get("keywords") or [])
+        )
+    return score
+
+
+def _assign_error_ids(
+    operations: list[Operation],
+    errors: list[SpecError],
+    mapa: dict[str, Any] | None,
+) -> None:
+    """Ancora ERR-* na operação dona; empate ou zero vira órfão (não copia)."""
+    contract_ops = [op for op in operations if op.owner]
+    for op in operations:
+        op.error_ids = []
+    if not errors or not operations:
+        return
+    for err in errors:
+        scored = [(_score_error_for_op(err, op, mapa), op) for op in operations]
+        best = max((s for s, _ in scored), default=0)
+        winners = [op for s, op in scored if s == best and s > 0]
+        if len(winners) == 1:
+            winners[0].error_ids.append(err.id)
+        elif len(contract_ops) == 1:
+            # um único serviço/op no spec: não é cópia entre contextos
+            contract_ops[0].error_ids.append(err.id)
+
+
+def _error_service_candidates(
+    err: SpecError, mapa: dict[str, Any] | None
+) -> list[str]:
+    servicos = (mapa or {}).get("servicos") or {}
+    if not servicos:
+        return []
+    blob = _error_blob(err)
+    scored = {
+        sid: _keyword_score(blob, list((meta or {}).get("keywords") or []))
+        for sid, meta in servicos.items()
+    }
+    best = max(scored.values()) if scored else 0
+    if best <= 0:
+        return []
+    return [sid for sid, score in scored.items() if score == best]
+
+
+def _keep_errors_for_spec(
+    errors: list[SpecError],
+    operations: list[Operation],
+    *,
+    context_id: str | None,
+    mapa: dict[str, Any] | None,
+) -> tuple[list[SpecError], list[SpecError]]:
+    """Mantém erros ancorados + órfãos verdadeiros; não copia erro de outro serviço."""
+    referenced = {eid for op in operations for eid in op.error_ids}
+    kept: list[SpecError] = []
+    orphans: list[SpecError] = []
+    for err in errors:
+        if err.id in referenced:
+            kept.append(err)
+            continue
+        owners = _error_service_candidates(err, mapa)
+        if context_id and len(owners) == 1 and owners[0] != context_id:
+            continue
+        kept.append(err)
+        orphans.append(err)
+    return kept, orphans
 
 
 def _parse_confidence(raw: Any, *, default: float) -> float:
@@ -154,6 +302,7 @@ def build_canonical_spec(
     engenharia: dict[str, Any] | None = None,
     claims: list[dict[str, Any]] | None = None,
     servico: dict[str, Any] | None = None,
+    mapa: dict[str, Any] | None = None,
 ) -> CanonicalSpec:
     eng = engenharia or {}
     svc = servico or {}
@@ -375,21 +524,33 @@ def build_canonical_spec(
         )
 
     actions = [a for a in (ui.get("actions") or []) if isinstance(a, dict)]
-    # Sucesso só é resolvido quando a atribuição é inequívoca: uma operação e um
-    # único 2xx declarado nas decisões. Fora disso permanece `unresolved`.
+    context_id = _slice_context_id(service_id)
+
+    owned_actions: list[tuple[int, dict[str, Any], str | None]] = []
+    for i, a in enumerate(actions, start=1):
+        owner = _resolve_operation_owner(
+            a, mapa=mapa, fallback_service_id=service_id
+        )
+        if context_id and owner and owner != context_id:
+            continue
+        owned_actions.append((i, a, owner))
+
+    # Sucesso só é resolvido quando a atribuição é inequívoca: uma operação
+    # *com dono* e um único 2xx declarado nas decisões. Fora disso `unresolved`.
+    owned_count = sum(1 for _, _, owner in owned_actions if owner)
     unique_success = (
         next(iter(success_evidence.items()))
-        if len(actions) == 1 and len(success_evidence) == 1
+        if owned_count == 1 and len(success_evidence) == 1
         else None
     )
 
     operations: list[Operation] = []
-    for i, a in enumerate(actions, start=1):
+    for i, a, owner in owned_actions:
         op_id = f"OP-{i:03d}"
         op_name = str(a.get("id") or f"action-{i}")
         method = a.get("method")
         path = a.get("path")
-        if unique_success is not None:
+        if unique_success is not None and owner:
             status_value, status_claims = unique_success
             success = ResolvedInt(
                 value=status_value,
@@ -405,6 +566,8 @@ def build_canonical_spec(
             )
 
         unresolved: list[str] = []
+        if not owner:
+            unresolved.append("owner")
         if not method:
             unresolved.append("method")
         if not path:
@@ -412,17 +575,31 @@ def build_canonical_spec(
         if not success.resolved:
             unresolved.append("success_status")
 
+        if "owner" in unresolved:
+            open_questions.append(
+                OpenQuestion(
+                    id=f"Q-{qn:03d}",
+                    text=(
+                        f"Operação {op_id} ({op_name}) sem dono atribuível "
+                        "no mapa/UI — não emitir como contrato resolvido"
+                    ),
+                    blocking=False,
+                    source_claims=[],
+                )
+            )
+            qn += 1
+
         operations.append(
             Operation(
                 id=op_id,
                 name=op_name,
-                owner=service_id,
+                owner=owner,
                 method=method,
                 path=path,
                 method_origin="declared" if method else None,
                 path_origin="declared" if path else None,
                 success_status=success,
-                error_ids=[e.id for e in errors],
+                error_ids=[],
                 request_schema=_schema_from_ui(op_name, ui.get("inputs") or [], "Request"),
                 response_schema=_schema_from_ui(
                     op_name, ui.get("columns") or [], "Response"
@@ -430,6 +607,24 @@ def build_canonical_spec(
                 unresolved=unresolved,
             )
         )
+
+    _assign_error_ids(operations, errors, mapa)
+    errors, orphan_errors = _keep_errors_for_spec(
+        errors, operations, context_id=context_id, mapa=mapa
+    )
+    for err in orphan_errors:
+        open_questions.append(
+            OpenQuestion(
+                id=f"Q-{qn:03d}",
+                text=(
+                    f"Erro {err.id} ({err.trigger}) sem operação dona — "
+                    "permanece unresolved, não copiado para outro serviço"
+                ),
+                blocking=False,
+                source_claims=list(err.source_claims),
+            )
+        )
+        qn += 1
 
     indice = None
     if isinstance(svc, dict) and "indice" in svc:

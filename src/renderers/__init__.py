@@ -177,6 +177,11 @@ def _gaps_from_spec(spec: CanonicalSpec) -> str:
 
 def _operacao_md(op) -> str:
     """Ação do PRD alinhada ao IR — sem method/path/status inventado."""
+    if not op.owner or "owner" in (op.unresolved or []):
+        return (
+            f"- **{op.id}** {op.name} — "
+            "_(owner não resolvido no IR — requer revisão)_"
+        )
     if op.method and op.path:
         linha = f"- **{op.id}** {op.method} {op.path}"
     else:
@@ -243,9 +248,21 @@ def render_prd(
     repos = []
     for v in (spec.repositories or {}).values():
         repos.extend(v or [])
-    regras = "\n".join(
-        f"- **{e.id}** {e.trigger} → HTTP {e.status}" for e in spec.errors
-    ) or "- _(sem erros explícitos)_"
+    regras = (
+        "\n".join(
+            f"- **{e.id}** {e.trigger} → HTTP {e.status}"
+            for e in spec.errors
+            if any(e.id in op.error_ids for op in spec.contract_operations())
+        )
+        or "- _(sem erros explícitos)_"
+    )
+    orfaos = [e for e in spec.errors if not any(e.id in op.error_ids for op in spec.operations)]
+    if orfaos:
+        regras += "\n" + "\n".join(
+            f"- **{e.id}** {e.trigger} → HTTP {e.status} "
+            "_(unresolved — sem operação dona)_"
+            for e in orfaos
+        )
     return _fill(
         template,
         {
