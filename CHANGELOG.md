@@ -230,6 +230,9 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- README: limitações do `10-devin-e2e` documentam riscos residuais aceitos
+  (sidecar para testes/build no JSONL; `DEVIN_E2E` só com CLI autenticado;
+  auto-commit local sem push/PR)
 - README: limitações da Onda C (`09`/`14`/`26`/`28`) documentam riscos residuais
   aceitos (Gemini ausente, overlay sem consumidor de negócio no IR, retrieval
   sem embeddings, sinais NFR por substring, etc.) e removem próximos passos já

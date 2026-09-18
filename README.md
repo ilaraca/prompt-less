@@ -1539,7 +1539,7 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 
 ## Limitações atuais e próximos passos
 
-**Limitações** (riscos residuais da Onda C aceitos em 2026-09-18 — ver board)
+**Limitações** (riscos residuais Onda C + Onda D/`10` aceitos em 2026-09-18 — ver board)
 
 - `--live` cobre OpenAI Responses e Claude Messages (HTTP stdlib); Google Gemini
   ainda não tem client; loop de tools de recovery é limitado a poucas rodadas;
@@ -1551,6 +1551,10 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   `docs/prompt-less/execution-result.json` (ou JSONL) com artefato/log; sem
   isso o verify falha fechado em code change (`NO_TESTS_REPORTED` /
   `TEST_NOT_EVIDENCED`)
+- `DEVIN_E2E=1` exige CLI Devin autenticado e rede; no CI sem credencial o
+  teste live é skip (`10`)
+- Auto-commit do adapter fica só no checkout isolado — sem push nem abertura
+  de PR pelo harness (`10`)
 - Sem `PROMPTLESS_INTEGRITY_KEY`, `evidence_hashes.hmac` fica nulo (SHA-256
   permanece) — **aceito**; selo tamper-evident da aprovação é o `21`
 - `improve` aplica propostas só no workspace candidato; `python -m src.apply`
