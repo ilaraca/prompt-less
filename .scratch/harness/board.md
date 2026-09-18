@@ -23,14 +23,14 @@ Blockers **rebloqueados pela §5** do documento de propostas (decisão humana de
 | ID | Título | Kanban | Blocked by |
 |----|--------|--------|------------|
 | 08-ir-openapi-mermaid | IR → OpenAPI / Mermaid | **Done** | 04 |
-| 09-live-llm | Modo `--live` (OpenAI/Claude) | Todo | 08, 15, 18, 19 |
+| 09-live-llm | Modo `--live` (OpenAI/Claude) | **Done** | 08, 15, 18, 19 |
 | 10-devin-e2e | Devin CLI real no close_loop | Todo | 09, 20, 21 |
 | 11-stages-yaml | Orquestração via pipeline.yaml | **Done** | 18 |
 | 12-ci-tokenizer-redis | CI no GitHub Actions (parte entregue) | **Done** | 01, 02 |
 | 12a-official-tokenizer | Tokenizer oficial por provider | **Done** | 01, 02 |
 | 12b-state-backend-redis | Backend de state em Redis | Todo ⏸ despriorizado | 02 |
 | 13-parallel-exec | Execução concorrente por ondas | Todo | 10, 12b, 18, 24 |
-| 14-apply-rollback | Apply de propostas + rollback | Todo | 21, 23 |
+| 14-apply-rollback | Apply de propostas + rollback | **Done** | 21, 23 |
 | 15-hardening-deep | Debugger, injection, recovery, golden recall | **Done** | 03, 08, 11 |
 | 16-hardening-review | Hotfix review (policy, evals, provenance) | Done | — |
 | 17-path-evals-claims | Path traversal + evals por camada + claims | Done | 16 |
@@ -86,19 +86,18 @@ Derivada de `docs/propostas-melhoria-limites-atuais.md` (§6 e §7). Issues deta
 | 23-candidate-evals | Evals com candidato real | **Done** | 18, 22 |
 | 24-evidence-based-planning | Plano por dependência observada | **Done** | 22 |
 | 25-production-quality-gates | Gates mínimos de produção | **Done** | 18, 20 |
-| 26-hybrid-document-retrieval | Recuperação híbrida de documentos | Todo | 19, 23 |
+| 26-hybrid-document-retrieval | Recuperação híbrida de documentos | **Done** | 19, 23 |
 | 27-sdd-consumer | Pacote SDD a partir do IR | **Done** | 08, 22 |
-| 28-engineering-baseline-v2 | NFR por tipo e criticidade | Todo | 22, 27 |
+| 28-engineering-baseline-v2 | NFR por tipo e criticidade | **Done** | 22, 27 |
 | 29-operations-por-contexto | Recorte de operations por serviço | **Done** | 08 |
 
 ### Frontier atual
 
-`origin/main` em 2026-09-18: `d574634` (PR
-[#16](https://github.com/ilaraca/prompt-less/pull/16)). Aberto:
-[#17](https://github.com/ilaraca/prompt-less/pull/17) (24 + 27 no pai
-`f29dde8`). Já na `main`: 08, 11, 12a, 15, 18, 19, 20, 21, 22, 23, 25 e
-29. O [#15](https://github.com/ilaraca/prompt-less/pull/15) entrou antes
-(`e9bdd91`).
+`origin/main` em 2026-09-18: `aaeb004` (PR
+[#17](https://github.com/ilaraca/prompt-less/pull/17) merged — 24 + 27).
+Já na `main`: 08, 11, 12a, 15, 18, 19, 20, 21, 22, 23, 24, 25, 27 e 29.
+O [#16](https://github.com/ilaraca/prompt-less/pull/16) (`d574634`) e o
+[#15](https://github.com/ilaraca/prompt-less/pull/15) entraram antes.
 
 `08`, `18` e `19` aprovados e `Done` em 2026-09-17 (19 entrou na `main` pela
 onda, não pelo PR [#9](https://github.com/ilaraca/prompt-less/pull/9),
@@ -145,33 +144,40 @@ Onda da frontier:
   `two_services` segue com 401 omitido — o gate multi-contexto que passa
   é `eval_multi_context`; suíte default maior). Detalhe na issue. `14` e
   `26` ficaram **sem blocker aberto**.
-- `24` e `27` aprovados e **Done** em 2026-09-18. Entraram no pai
-  (`f29dde8`); PR [#17](https://github.com/ilaraca/prompt-less/pull/17).
-  Não reabrem as filhas. Sem remote próprio. Riscos residuais aceitos
-  (24: matcher conservador, regex de import/evento, `coordenacao` é rótulo;
-  27: não classifica NFR por tipo — o `28`; sem despacho a executor).
-  Detalhe nas issues. `13` espera `10` e `12b`. `28` ficou **sem blocker
-  aberto** (basear no pai depois do merge do #17).
+- `24` e `27` aprovados e **Done** em 2026-09-18. Entraram na `main`
+  pelo PR [#17](https://github.com/ilaraca/prompt-less/pull/17)
+  (`aaeb004`). Não reabrem as filhas. Sem remote próprio. Riscos residuais
+  aceitos (24: matcher conservador, regex de import/evento, `coordenacao`
+  é rótulo; 27: não classifica NFR por tipo — o `28`; sem despacho a
+  executor). Detalhe nas issues. `13` espera `10` e `12b`. `28` ficou
+  **sem blocker aberto**.
 
-Nada em **In progress**. Nada em **Feedback**. `12b` permanece parqueado.
+Onda C aprovada e **Done** em 2026-09-18 (integração no pai
+`feature/onda-frontier`). Nada em **In progress** / **Feedback**.
+`12b` permanece parqueado. `10` desbloqueado pelo Done do `09` (ainda
+espera decisão humana para iniciar). `13` espera `10` e `12b`.
+
+Riscos residuais aceitos (não reabrir worktree filha):
+
+| Ticket | HEAD | Residuais aceitos |
+|---|---|---|
+| `09-live-llm` | `af3e67b` | Gemini sem client; loop de tools limitado; IDs Anthropic pinned a snapshot; gate `derived_artifact` ainda bloqueia saída fora do IR; `cost_usd` = tabela local, não fatura do vendor |
+| `14-apply-rollback` | `f9f2950` | Overlay/keys sem consumidor completo de negócio no IR (persistência + anti-regressão); jitter de `avg_latency_ms` não prova melhoria; `promote` continua só selo; suíte default de apply é a completa se `--cases` omitido |
+| `26-hybrid-document-retrieval` | `5f5c447` | 2ª camada = sinônimos locais + TF (não embeddings); `doc_preface` CLI não é estágio da pipeline |
+| `28-engineering-baseline-v2` | `5a2ddb2` | Sinais NFR no índice por substring (gaps `heuristic`); alertas/ADRs/bulkhead fora do catálogo v2; sem despacho a executor |
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 09-live-llm | **Todo** (frontier) | filha a criar | base: `origin/main` (`d574634`) |
-| 14-apply-rollback | **Todo** (frontier) | filha a criar | overlay no `run`; `main` já tem o 23 |
-| 26-hybrid-document-retrieval | **Todo** (frontier) | filha a criar | eval diferencial do 23; overlay no IR continua no `14` |
-| 28-engineering-baseline-v2 | **Todo** (frontier) | filha a criar | espera o merge do PR #17; não basear na worktree isolada do 27 |
-| 24-evidence-based-planning | **Done** (no pai) | filha, HEAD `2a26f44` | pai `f29dde8` · PR [#17](https://github.com/ilaraca/prompt-less/pull/17) |
-| 27-sdd-consumer | **Done** (no pai) | filha, HEAD `8317275` | pai `f29dde8` · PR [#17](https://github.com/ilaraca/prompt-less/pull/17) |
-| (pai) onda-frontier | — | integra filhas; único PR contra `main` | `.worktrees/onda-merge` · `feature/onda-frontier` `f29dde8` · PR [#17](https://github.com/ilaraca/prompt-less/pull/17) |
+| 09-live-llm | **Done** | filha, HEAD `af3e67b` | `.worktrees/09-live-llm` · `feature/live-llm` |
+| 14-apply-rollback | **Done** | filha, HEAD `f9f2950` | `.worktrees/14-apply-rollback` · `feature/apply-rollback` |
+| 26-hybrid-document-retrieval | **Done** | filha, HEAD `5f5c447` | `.worktrees/26-hybrid-document-retrieval` · `feature/hybrid-document-retrieval` |
+| 28-engineering-baseline-v2 | **Done** | filha, HEAD `5a2ddb2` | `.worktrees/28-engineering-baseline-v2` · `feature/engineering-baseline-v2` |
+| 24-evidence-based-planning | **Done** (`main`) | filha, HEAD `2a26f44` | PR [#17](https://github.com/ilaraca/prompt-less/pull/17) |
+| 27-sdd-consumer | **Done** (`main`) | filha, HEAD `8317275` | PR [#17](https://github.com/ilaraca/prompt-less/pull/17) |
+| (pai) onda-frontier | — | integra filhas; único PR contra `main` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
-Um agente/branch por ticket, em paralelo (§8 Onda C + restante da Onda B).
-
-`11` voltou à frontier depois do Done do `18` e foi aprovado em 2026-09-18.
-`15` e `25` aprovados em 2026-09-18. `09` é a frontier da série 2 restante.
-`14` e `26` voltaram à frontier com o Done do `23` (promote do `21` é selo;
-o `14` é quem aplica config e lê o overlay). `28` entrou na frontier com
-o Done do `27`.
+Onda C (`09`, `14`, `26`, `28`) Done — riscos acima aceitos. Frontier
+seguinte: `10-devin-e2e` (desbloqueado). `13` e `12b` permanecem.
 
 ## Dependências (visão)
 

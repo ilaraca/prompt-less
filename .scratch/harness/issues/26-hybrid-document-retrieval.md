@@ -1,10 +1,11 @@
 # 26-hybrid-document-retrieval
 
-**Kanban:** Feedback  
+**Kanban:** Done  
 **Blocked by:** 19-contextual-provenance (Done), 23-candidate-evals (Done)
 
-> Worktree filha `.worktrees/26-hybrid-document-retrieval`, branch
-> `feature/hybrid-document-retrieval`, base `origin/main` (`aaeb004`).
+> Aprovado em 2026-09-18. Riscos residuais aceitos (não reabrir): 2ª
+> camada semântica = sinônimos locais + TF (não embeddings);
+> `doc_preface` CLI permanece navegação do agente, não estágio.
 
 > O `19` e o `23` já saíram. O 23 tem workspaces distintos e gate por caso
 > crítico; o overlay ainda **não** entra no `src.run` (residual aceito,
