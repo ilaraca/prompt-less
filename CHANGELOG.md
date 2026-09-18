@@ -52,7 +52,9 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   pendências bloqueantes — entram em AND e **não se compensam** (spec OK não
   salva artefato ausente). Casos `expect_blocked` validam também
   `expected_reason` / `expected_block_codes`. Rastreabilidade deixa de ser
-  gate só em `critical`.
+  gate só em `critical`. O gate `traceable` exige SourceRef válido em cada
+  claim (document não vazio; linhas coerentes): existência só do ID do claim
+  **não** basta, e manifesto íntegro **não** compensa fonte ausente/inválida.
 
 ### Added
 

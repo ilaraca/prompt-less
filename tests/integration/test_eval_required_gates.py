@@ -32,8 +32,28 @@ def _base_result(*, service: str = "ms-cliente", run_id: str, run_dir: Path) -> 
     }
 
 
-def _spec_body(*, source_claims: list[str] | None = None, blocking: bool = False) -> dict:
-    claims = [{"id": "CLM-1", "text": "POST /clientes CPF autenticação"}]
+def _valid_source() -> dict:
+    return {"document": "historia.md", "start_line": 1, "end_line": 1}
+
+
+def _spec_body(
+    *,
+    source_claims: list[str] | None = None,
+    blocking: bool = False,
+    claim_sources: list[dict] | None = None,
+    omit_claim_sources: bool = False,
+) -> dict:
+    if omit_claim_sources:
+        claims = [{"id": "CLM-1", "text": "POST /clientes CPF autenticação"}]
+    else:
+        sources = claim_sources if claim_sources is not None else [_valid_source()]
+        claims = [
+            {
+                "id": "CLM-1",
+                "text": "POST /clientes CPF autenticação",
+                "sources": sources,
+            }
+        ]
     src = source_claims if source_claims is not None else ["CLM-1"]
     return {
         "service_id": "ms-cliente",
@@ -80,6 +100,8 @@ def _seed(
     *,
     source_claims: list[str] | None = None,
     blocking: bool = False,
+    claim_sources: list[dict] | None = None,
+    omit_claim_sources: bool = False,
     historia: str | None = None,
     prd: str | None = None,
     status: str = "completed",
@@ -92,7 +114,14 @@ def _seed(
     files: list[dict] = []
     spec_path = art / "canonical-spec.yaml"
     spec_path.write_text(
-        yaml.safe_dump(_spec_body(source_claims=source_claims, blocking=blocking)),
+        yaml.safe_dump(
+            _spec_body(
+                source_claims=source_claims,
+                blocking=blocking,
+                claim_sources=claim_sources,
+                omit_claim_sources=omit_claim_sources,
+            )
+        ),
         encoding="utf-8",
     )
     files.append(
@@ -208,6 +237,48 @@ def test_broken_traceability_fails(tmp_path: Path):
         output_root=tmp_path,
     )
     assert score.required_gates["traceable"] is False
+    assert score.passed is False
+
+
+def test_claim_without_sourceref_fails_despite_intact_manifest(tmp_path: Path):
+    """Claim com id referenciado mas sem SourceRef → reprova; manifesto íntegro não salva."""
+    run_dir = _seed(
+        tmp_path,
+        "run-no-src",
+        omit_claim_sources=True,
+        historia="POST /clientes CPF autenticação\n",
+        prd="POST /clientes CPF autenticação\n",
+    )
+    score = score_case(
+        _expected(),
+        _base_result(run_id="run-no-src", run_dir=run_dir),
+        output_root=tmp_path,
+    )
+    assert score.required_gates["selection_ok"] is True
+    assert score.required_gates["artifacts_present"] is True
+    assert score.required_gates["spec_signals"] is True
+    assert score.required_gates["traceable"] is False
+    assert "traceable" in score.fail_reasons
+    assert score.passed is False
+
+
+def test_claim_with_invalid_sourceref_fails_despite_intact_manifest(tmp_path: Path):
+    """SourceRef sem document (ou linhas invertidas) reprova mesmo com selo íntegro."""
+    run_dir = _seed(
+        tmp_path,
+        "run-bad-src",
+        claim_sources=[{"document": "", "start_line": 5, "end_line": 1}],
+        historia="POST /clientes CPF autenticação\n",
+        prd="POST /clientes CPF autenticação\n",
+    )
+    score = score_case(
+        _expected(),
+        _base_result(run_id="run-bad-src", run_dir=run_dir),
+        output_root=tmp_path,
+    )
+    assert score.required_gates["selection_ok"] is True
+    assert score.required_gates["traceable"] is False
+    assert "traceable" in score.fail_reasons
     assert score.passed is False
 
 
