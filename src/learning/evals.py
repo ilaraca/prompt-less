@@ -346,6 +346,55 @@ def _spec_text_blob(spec: dict[str, Any]) -> str:
     return "\n".join(parts).lower()
 
 
+def _source_ref_valid(src: Any) -> bool:
+    """SourceRef mínimo: document não vazio; start_line ≤ end_line se ambos existem."""
+    if not isinstance(src, dict):
+        return False
+    if not str(src.get("document") or "").strip():
+        return False
+    start, end = src.get("start_line"), src.get("end_line")
+    if start is not None and end is not None:
+        try:
+            if int(start) > int(end):
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def _claim_has_valid_sources(claim: dict[str, Any]) -> bool:
+    """Existência do id do claim não basta — exige SourceRef válido."""
+    sources = claim.get("sources") or []
+    if not sources:
+        return False
+    return all(_source_ref_valid(s) for s in sources)
+
+
+def _spec_requirements_traceable(spec: dict[str, Any]) -> bool:
+    """
+    Rastreabilidade integral: RFs apontam para claims existentes **e** cada
+    claim referenciado (e todo claim com id) carrega SourceRef válido.
+    """
+    claims = [c for c in (spec.get("claims") or []) if isinstance(c, dict)]
+    claim_by_id = {str(c["id"]): c for c in claims if c.get("id")}
+    for claim in claims:
+        if claim.get("id") and not _claim_has_valid_sources(claim):
+            return False
+    for rf in spec.get("requirements") or []:
+        if not isinstance(rf, dict):
+            continue
+        if rf.get("status") == "baseline":
+            continue
+        src = list(rf.get("source_claims") or [])
+        if not src:
+            return False
+        for cid in src:
+            key = str(cid)
+            if key not in claim_by_id or not _claim_has_valid_sources(claim_by_id[key]):
+                return False
+    return True
+
+
 def _resolved_success_value(raw: Any) -> int | None:
     """Sucesso tipado só conta quando resolvido — ausente/pendente sem presumir."""
     status = ResolvedInt.from_raw(raw)
@@ -791,18 +840,11 @@ def score_case(
     else:
         gate_unexpected = unexpected_inferences
 
-    # requirements traceability no spec (fonte inválida / vínculo quebrado)
+    # requirements + SourceRef (id sozinho não basta; manifesto íntegro não compensa)
     traceable = True
     for spec in specs:
-        claim_ids = {c.get("id") for c in (spec.get("claims") or []) if c.get("id")}
-        for rf in spec.get("requirements") or []:
-            if rf.get("status") == "baseline":
-                continue
-            src = list(rf.get("source_claims") or [])
-            if not src or any(s not in claim_ids for s in src):
-                traceable = False
-                break
-        if not traceable:
+        if not _spec_requirements_traceable(spec):
+            traceable = False
             break
 
     if not specs:
