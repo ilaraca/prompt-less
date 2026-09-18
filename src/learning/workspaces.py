@@ -105,7 +105,7 @@ def _unified_diff(baseline: Path, candidate: Path) -> str:
     chunks: list[str] = []
     b_root = baseline / "config"
     c_root = candidate / "config"
-    names = set()
+    names: set[str] = set()
     if b_root.exists():
         names.update(p.relative_to(b_root).as_posix() for p in b_root.rglob("*") if p.is_file())
     if c_root.exists():
@@ -246,7 +246,7 @@ def apply_journal(workspace: Path) -> dict[str, Any] | None:
 
 def is_fully_applied(workspace: Path) -> bool:
     journal = apply_journal(workspace)
-    return bool(journal) and journal.get("status") == "applied"
+    return journal is not None and journal.get("status") == "applied"
 
 
 def apply_proposals_to_candidate(

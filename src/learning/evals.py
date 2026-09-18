@@ -372,7 +372,8 @@ def run_eval_suite(
     run_id_prefix: str | None = None,
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
-    ws_payload = workspace.to_dict() if hasattr(workspace, "to_dict") else workspace
+    to_dict = getattr(workspace, "to_dict", None)
+    ws_payload = to_dict() if callable(to_dict) else workspace
     prefix = run_id_prefix or "eval"
     for case_id in cases:
         inputs = FIXTURES / case_id
