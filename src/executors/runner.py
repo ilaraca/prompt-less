@@ -694,8 +694,12 @@ class EnforcedRunner:
         repo_root: Path | str | None = None,
         **kwargs: Any,
     ) -> subprocess.CompletedProcess[Any]:
-        """Mesma forma de ``run_argv`` / callables do adapter — profile já está no runner."""
-        del profile, repo_root, kwargs  # binding local; ignore extras do contrato run_argv
+        """Mesma forma de ``run_argv`` / callables do adapter.
+
+        ``profile=None`` (meta-CLI Devin) pula a allowlist de camada, mas
+        mantém limites FS/rede/credenciais/tempo/recursos do runner.
+        """
+        del repo_root, kwargs  # binding local; ignore extras do contrato run_argv
         return self.run(
             argv,
             timeout=timeout,
@@ -704,6 +708,7 @@ class EnforcedRunner:
             check=check,
             capture_output=capture_output,
             text=text,
+            skip_command_policy=profile is None,
         )
 
     def run_authorized_task(
@@ -741,6 +746,19 @@ class EnforcedRunner:
     def _ensure_child_tmpdir(self) -> Path:
         tmp = self.repo_root / ".promptless-tmp"
         tmp.mkdir(parents=True, exist_ok=True)
+        # Evita DIRTY_WORKTREE no verify: não altera arquivos rastreados.
+        exclude = self.repo_root / ".git" / "info" / "exclude"
+        if exclude.parent.is_dir():
+            marker = ".promptless-tmp/"
+            existing = (
+                exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
+            )
+            lines = {ln.strip() for ln in existing.splitlines()}
+            if marker not in lines and ".promptless-tmp" not in lines:
+                with exclude.open("a", encoding="utf-8") as fh:
+                    if existing and not existing.endswith("\n"):
+                        fh.write("\n")
+                    fh.write(f"{marker}\n")
         return tmp
 
     def _build_env(self, overrides: dict[str, str] | None) -> dict[str, str]:
