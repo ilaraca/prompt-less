@@ -9,6 +9,7 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+<<<<<<< HEAD
 - **Tokenizer oficial pluggable** (`src/tokenizer.py`): budget e telemetria usam a
   estratégia do `models.provider` / `models.name`; OpenAI via `tiktoken`
   (`method=official`); demais providers ou lib ausente falham aberto para
@@ -27,6 +28,14 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Testes (`tests/integration/test_auditable_approval.py`): promoção sem
   aprovação falha; alterar spec/diff/commit invalida; rejeição persiste;
   reuse cross-run recusado; HMAC adulterado é detectado
+- **Gates de produção** (`25-production-quality-gates`): lock hashed
+  (`requirements.lock` / `requirements-dev.lock` via pip-tools), CI com
+  compile + ruff + mypy + coverage mínima **70%** (relatório por módulo),
+  `pip-audit`, detect-secrets, YAML (`yaml.safe_load` + yamllint), Actions
+  pinadas por SHA e `permissions: contents: read`, matriz Python **3.9–3.13**,
+  artifacts eval/coverage/verify (placeholder de verify quando a run não
+  executa `close_loop`). Job agregador `CI` required-ready para branch
+  protection; a regra no GitHub **ainda não está ativa**
 - **Verificação por evidência** (`20-evidence-backed-verification`): o
   `close_loop` deixa de confiar em `changed_files` / comandos / testes
   declarados no payload. `base_commit` e `result_commit` são obrigatórios;
@@ -113,6 +122,9 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   O atalho foi removido: use `python -m src.approval`. `approved=False`
   no payload ainda gera `needs_approval` no verify; promoção exige o
   registro auditável
+- Python suportado declarado como **3.9–3.13** (a matriz do CI cobre esse
+  intervalo; antes o README dizia 3.9+ e o CI só rodava 3.11)
+- `config/tools.compact.yaml` passa a ser YAML válido (assinaturas entre aspas)
 - `close_loop` / `verify_execution` exigem checkout Git (`--repo`) e log
   estruturado do adapter; `changed_files` e `commands_executed` do payload
   só servem para detectar divergência, não como evidência
