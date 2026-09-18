@@ -10,6 +10,10 @@ from typing import Any
 import yaml
 
 from src.run import run
+from src.runtime.atomic_io import UnsafePath
+from src.runtime.integrity import verify_run_dir
+from src.runtime.run_context import InvalidRunId, RunContext, validate_run_id
+from src.runtime.run_store import TERMINAL_STATUSES, RunStore
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -23,6 +27,7 @@ DEFAULT_CASES = (
 )
 _HTTP_RE = re.compile(r"(?:HTTP\s+)?\b([1-5]\d{2})\b", re.IGNORECASE)
 _ARTIFACT_NAMES = {"historia.md", "prd.md"}
+_SPEC_NAME = "canonical-spec.yaml"
 _QUALITY_UP = ("claim_recall", "traceability_rate", "pass_rate")
 _QUALITY_DOWN = ("unexpected_inferences", "avg_est_tokens", "avg_latency_ms")
 
@@ -38,6 +43,8 @@ class CaseScore:
     claim_recall: float = 0.0
     traceable: bool = True
     critical: bool = False
+    selection_ok: bool = True
+    artifacts_released: bool = False
     latency_ms: float = 0.0
     layer_scores: dict[str, Any] = field(default_factory=dict)
     details: dict[str, Any] = field(default_factory=dict)
@@ -47,7 +54,8 @@ class CaseScore:
         recall_ok = (not self.critical) or self.claim_recall >= 1.0
         trace_ok = (not self.critical) or self.traceable
         return (
-            self.status_ok
+            self.selection_ok
+            and self.status_ok
             and self.service_match
             and self.expected_status_match
             and self.signals_present
@@ -61,6 +69,23 @@ class CaseScore:
         return {**asdict(self), "passed": self.passed}
 
 
+@dataclass
+class EvalRunSelection:
+    """Evidência de uma única run, selecionada só pelo manifesto."""
+
+    run_id: str
+    status: str
+    specs: list[dict[str, Any]] = field(default_factory=list)
+    final_artifacts: list[str] = field(default_factory=list)
+    files_used: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    artifacts_released: bool = False
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
+
 def _load_expected(case_id: str) -> dict[str, Any]:
     path = FIXTURES / case_id / "expected.yaml"
     if not path.exists():
@@ -68,35 +93,158 @@ def _load_expected(case_id: str) -> dict[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
-def _load_specs(output_root: Path | None) -> list[dict[str, Any]]:
-    if output_root is None or not output_root.exists():
-        return []
+def _resolve_eval_root(
+    *,
+    output_root: Path | None,
+    run_dir: Path | str | None,
+) -> Path | None:
+    if run_dir is not None:
+        return Path(run_dir).resolve().parent.parent
+    if output_root is not None:
+        return Path(output_root)
+    return None
+
+
+def select_run_evidence(
+    *,
+    root: Path,
+    run_id: str,
+    verify_integrity_chain: bool = True,
+) -> EvalRunSelection:
+    """
+    Carrega specs/artefatos finais apenas do manifesto de `runs/<run_id>/`.
+
+    Espelhos de compatibilidade (`outputs/`) não entram na seleção. Manifesto
+    ausente, `run_id` divergente ou sha256 adulterado reprovam a seleção.
+    Run `blocked` pode ser avaliada, mas `artifacts_released` fica falso.
+    """
+    errors: list[str] = []
+    try:
+        rid = validate_run_id(run_id)
+    except InvalidRunId as exc:
+        return EvalRunSelection(run_id=str(run_id), status="", errors=[str(exc)])
+
+    root = Path(root)
+    run_path = root / "runs" / rid
+    if not run_path.is_dir():
+        return EvalRunSelection(
+            run_id=rid,
+            status="",
+            errors=[f"run '{rid}' ausente em {run_path}"],
+        )
+
+    store = RunStore(RunContext.create(root=root, objective="eval", run_id=rid))
+    manifest = store.read_manifest()
+    if not manifest:
+        return EvalRunSelection(
+            run_id=rid,
+            status="",
+            errors=[f"manifesto ausente para run '{rid}'"],
+        )
+
+    declared = str(manifest.get("run_id") or "")
+    if declared and declared != rid:
+        errors.append(
+            f"run divergente: manifesto declara '{declared}', seleção pediu '{rid}'"
+        )
+
+    status = str(manifest.get("status") or "")
+    if status not in TERMINAL_STATUSES:
+        errors.append(
+            f"status da run '{rid}' não é terminal para eval: {status or '<vazio>'!r}"
+        )
+
+    entries = store.sealed_file_entries()
+    if not entries:
+        errors.append(f"manifesto da run '{rid}' sem integrity.files")
+
+    if verify_integrity_chain:
+        report = verify_run_dir(run_path)
+        if not report.get("ok"):
+            for err in report.get("errors") or []:
+                msg = str(err)
+                if msg not in errors:
+                    errors.append(msg)
+
     specs: list[dict[str, Any]] = []
-    for path in output_root.rglob("canonical-spec.yaml"):
-        try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except OSError:
+    finals: list[str] = []
+    used: list[str] = []
+    for entry in entries:
+        rel = str(entry.get("path") or "")
+        name = Path(rel).name.lower()
+        if name != _SPEC_NAME and name not in _ARTIFACT_NAMES:
             continue
-        if isinstance(data, dict):
-            specs.append(data)
-    return specs
+        try:
+            path = store.verify_sealed_entry(entry)
+        except (UnsafePath, FileNotFoundError, ValueError, OSError) as exc:
+            errors.append(str(exc))
+            continue
+        used.append(rel)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"falha ao ler {rel}: {exc}")
+            continue
+        if name == _SPEC_NAME:
+            try:
+                data = yaml.safe_load(text) or {}
+            except yaml.YAMLError as exc:
+                errors.append(f"canonical-spec inválido ({rel}): {exc}")
+                continue
+            if isinstance(data, dict):
+                specs.append(data)
+            else:
+                errors.append(f"canonical-spec não-objeto em {rel}")
+        else:
+            finals.append(text)
+
+    # bloqueada pode ser scoreada; artefatos não liberados p/ implementação
+    released = status == "completed" and not errors
+    return EvalRunSelection(
+        run_id=rid,
+        status=status,
+        specs=specs,
+        final_artifacts=finals,
+        files_used=used,
+        errors=errors,
+        artifacts_released=released,
+    )
 
 
-def _load_final_artifacts(output_root: Path | None) -> list[str]:
-    """Só artefatos finais (história/PRD), não provenance/validation/packages."""
-    if output_root is None or not output_root.exists():
+def _load_specs(
+    output_root: Path | None,
+    *,
+    run_id: str | None = None,
+    run_dir: Path | str | None = None,
+    selection: EvalRunSelection | None = None,
+) -> list[dict[str, Any]]:
+    """Só specs da run selecionada — sem rglob em outputs/ nem runs antigas."""
+    if selection is not None:
+        return list(selection.specs)
+    if not run_id:
         return []
-    texts: list[str] = []
-    for path in output_root.rglob("*"):
-        if not path.is_file():
-            continue
-        if path.name.lower() not in _ARTIFACT_NAMES:
-            continue
-        try:
-            texts.append(path.read_text(encoding="utf-8"))
-        except OSError:
-            continue
-    return texts
+    root = _resolve_eval_root(output_root=output_root, run_dir=run_dir)
+    if root is None:
+        return []
+    return list(select_run_evidence(root=root, run_id=run_id).specs)
+
+
+def _load_final_artifacts(
+    output_root: Path | None,
+    *,
+    run_id: str | None = None,
+    run_dir: Path | str | None = None,
+    selection: EvalRunSelection | None = None,
+) -> list[str]:
+    """Só história/PRD selados no manifesto da run — espelho fora da seleção."""
+    if selection is not None:
+        return list(selection.final_artifacts)
+    if not run_id:
+        return []
+    root = _resolve_eval_root(output_root=output_root, run_dir=run_dir)
+    if root is None:
+        return []
+    return list(select_run_evidence(root=root, run_id=run_id).final_artifacts)
 
 
 def _spec_text_blob(spec: dict[str, Any]) -> str:
@@ -206,6 +354,7 @@ def score_case(
     result: dict[str, Any],
     *,
     output_root: Path | None = None,
+    run_id: str | None = None,
 ) -> CaseScore:
     expect_blocked = bool(expected.get("expect_blocked"))
     status = result.get("status")
@@ -222,7 +371,57 @@ def score_case(
         found_services = set(result.get("contexts") or [])
     service_match = expected_services.issubset(found_services) if expected_services else True
 
-    specs = _load_specs(output_root)
+    rid = run_id or (str(result["run_id"]) if result.get("run_id") else None)
+    run_dir = result.get("run_dir")
+    selection: EvalRunSelection | None = None
+    selection_ok = True
+    artifacts_released = False
+    selection_errors: list[str] = []
+
+    needs_disk = output_root is not None or run_dir is not None or rid is not None
+    if needs_disk:
+        if not rid:
+            selection_ok = False
+            selection_errors.append(
+                "run_id obrigatório para carregar evidência de eval "
+                "(seleção por execução; rglob desativado)"
+            )
+            specs: list[dict[str, Any]] = []
+            artifact_texts: list[str] = []
+        else:
+            root = _resolve_eval_root(output_root=output_root, run_dir=run_dir)
+            if root is None:
+                selection_ok = False
+                selection_errors.append(
+                    "root da run ausente: informe output_root ou result['run_dir']"
+                )
+                specs = []
+                artifact_texts = []
+            else:
+                selection = select_run_evidence(root=root, run_id=rid)
+                selection_ok = selection.ok
+                selection_errors = list(selection.errors)
+                specs = list(selection.specs)
+                # blocked: scoreável, mas artefatos não liberados p/ implementação
+                if selection.artifacts_released:
+                    artifact_texts = list(selection.final_artifacts)
+                    artifacts_released = True
+                else:
+                    artifact_texts = []
+                    artifacts_released = False
+                    if selection.status == "blocked" and expect_blocked:
+                        # specs da run bloqueada ainda alimentam o score
+                        pass
+                    elif selection.status == "blocked" and not expect_blocked:
+                        selection_ok = False
+                        if "run bloqueada sem expect_blocked" not in selection_errors:
+                            selection_errors.append(
+                                "run bloqueada: artefatos não liberados para implementação"
+                            )
+    else:
+        specs = []
+        artifact_texts = []
+
     # blocked runs ainda persistem canonical-spec antes do raise
     actual_statuses: set[int] = set()
     for spec in specs:
@@ -249,7 +448,7 @@ def score_case(
     signals = [str(s).lower() for s in (expected.get("signals") or [])]
     claims_blob = _claims_blob_from_result(result)
     spec_blob = "\n".join(_spec_text_blob(s) for s in specs)
-    artifact_blob = "\n".join(t.lower() for t in _load_final_artifacts(output_root))
+    artifact_blob = "\n".join(t.lower() for t in artifact_texts)
     combined_blob = f"{claims_blob}\n{spec_blob}"
     if signals:
         hits = sum(1 for sig in signals if sig in combined_blob)
@@ -328,11 +527,19 @@ def score_case(
                 True
                 if expect_blocked or not signals
                 else all(sig in artifact_blob for sig in signals)
-            )
+            ),
+            "released_for_implementation": artifacts_released,
         },
         "provenance": {
             "unexpected_inferences": unexpected_inferences,
             "max_unreviewed_inferences": max_unreviewed,
+        },
+        "selection": {
+            "ok": selection_ok,
+            "run_id": rid,
+            "status": selection.status if selection else None,
+            "errors": selection_errors,
+            "files_used": list(selection.files_used) if selection else [],
         },
     }
 
@@ -346,6 +553,8 @@ def score_case(
         claim_recall=claim_recall,
         traceable=traceable if specs else expect_blocked,
         critical=critical,
+        selection_ok=selection_ok,
+        artifacts_released=artifacts_released,
         latency_ms=float(expected.get("_latency_ms") or 0),
         layer_scores=layer_scores,
         details={
@@ -360,6 +569,10 @@ def score_case(
             "unexpected_items": unexpected_items[:20],
             "specs_loaded": len(specs),
             "fixture_kind": expected.get("fixture_kind"),
+            "run_id": rid,
+            "selection_ok": selection_ok,
+            "selection_errors": selection_errors,
+            "artifacts_released": artifacts_released,
         },
     )
 
@@ -432,7 +645,12 @@ def run_eval_suite(
             tokens = [int(result["est_tokens"])]
         expected = _load_expected(case_id)
         expected = {**expected, "_latency_ms": latency_ms}
-        score = score_case(expected, result, output_root=out)
+        score = score_case(
+            expected,
+            result,
+            output_root=out,
+            run_id=str(result.get("run_id") or ""),
+        )
         score.latency_ms = latency_ms
         results.append(
             {

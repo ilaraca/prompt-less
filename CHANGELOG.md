@@ -9,6 +9,15 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Seleção de eval por execução** (`31-eval-run-selection`): `score_case` /
+  `run_eval_suite` exigem `run_id` e carregam só artefatos listados em
+  `runs/<run_id>/manifest.json` (`integrity.files`), com checagem de estado e
+  sha256. Espelho `outputs/` não participa da seleção automática. Run
+  `blocked` pode ser avaliada como bloqueio esperado, mas
+  `artifacts_released=false` (história/PRD não liberados para implementação).
+  API: `select_run_evidence`, `RunStore.sealed_file_entries` /
+  `verify_sealed_entry`. Testes em `tests/integration/test_eval_run_selection.py`.
+
 - **Execução concorrente por ondas** (`13-parallel-exec`): scheduler
   `src/executors/scheduler.py` consome `waves` do `implementation_plan`, limita
   N tasks com semáforo (`--max-concurrency`) e agrega `ExecutionResult` + verify
