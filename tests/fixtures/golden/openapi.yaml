@@ -1,0 +1,80 @@
+# Gerado por Prompt-less a partir do Canonical Spec (IR).
+# Não editar à mão: a fonte de verdade é canonical-spec.yaml.
+openapi: 3.0.3
+info:
+  title: Cadastro de Cliente
+  version: '1.0'
+  x-service-id: ms-cliente
+paths:
+  /clientes:
+    post:
+      operationId: salvar
+      x-operation-id: OP-001
+      x-owner: ms-cliente
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SalvarRequest'
+      responses:
+        '201':
+          description: Sucesso da operação OP-001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SalvarResponse'
+        '400':
+          description: CPF inválido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          x-error-ids:
+          - ERR-001
+          x-error-codes:
+          - CPF_INVALIDO
+          x-source-claims:
+          - CLM-1
+        '403':
+          description: sem permissão admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          x-error-ids:
+          - ERR-002
+          x-source-claims:
+          - CLM-SYN-002
+components:
+  schemas:
+    Error:
+      type: object
+      required:
+      - code
+      - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    SalvarRequest:
+      type: object
+      required:
+      - nome
+      - cpf
+      properties:
+        nome:
+          type: string
+        cpf:
+          type: string
+    SalvarResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          x-type-origin: inferred
+        status:
+          type: string
+          x-type-origin: inferred
+      x-origin: inferred
