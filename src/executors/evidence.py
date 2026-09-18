@@ -131,6 +131,48 @@ def full_commit_sha(repo: Path, rev: str) -> str | None:
     return sha or None
 
 
+def worktree_dirty(repo: Path) -> tuple[bool, str]:
+    """True se ``git status --porcelain`` não estiver vazio."""
+    proc = run_git(repo, "status", "--porcelain", check=False)
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
+        raise GitEvidenceError("GIT_COMMAND_FAILED", f"git status --porcelain: {detail}")
+    detail = proc.stdout.strip()
+    return bool(detail), detail
+
+
+def assert_clean_worktree(
+    repo: Path, *, expect_head: str | None = None
+) -> list[tuple[str, str]]:
+    """Fail-closed: worktree limpo e, se pedido, HEAD == result_commit."""
+    issues: list[tuple[str, str]] = []
+    try:
+        dirty, detail = worktree_dirty(repo)
+    except GitEvidenceError as exc:
+        return [(exc.code, str(exc))]
+    if dirty:
+        preview = detail.replace("\n", " | ")
+        if len(preview) > 240:
+            preview = preview[:237] + "..."
+        issues.append(
+            (
+                "DIRTY_WORKTREE",
+                f"worktree sujo vs result_commit — commit ou limpe antes do close_loop: {preview}",
+            )
+        )
+    if expect_head and str(expect_head).strip():
+        head = full_commit_sha(repo, "HEAD")
+        want = full_commit_sha(repo, str(expect_head))
+        if not head or not want or head != want:
+            issues.append(
+                (
+                    "HEAD_NOT_RESULT_COMMIT",
+                    f"HEAD ({head}) diverge de result_commit ({expect_head})",
+                )
+            )
+    return issues
+
+
 def inspect_commits(repo: Path, base_commit: str, result_commit: str) -> GitInspection:
     """Confirma ancestralidade, mesmo repositório e calcula o diff real."""
     issues: list[tuple[str, str]] = []
