@@ -47,13 +47,16 @@ def dehydrate_figma(figma: dict[str, Any]) -> dict[str, Any]:
     inputs = []
     for item in figma.get("inputs", figma.get("fields", [])):
         if isinstance(item, str):
-            inputs.append({"name": item, "type": _infer_type(item)})
+            inputs.append(
+                {"name": item, "type": _infer_type(item), "type_origin": "inferred"}
+            )
         elif isinstance(item, dict):
             name = item.get("name") or item.get("id") or item.get("label", "field")
             inputs.append(
                 {
                     "name": name,
                     "type": item.get("type") or _infer_type(name, item.get("value")),
+                    "type_origin": "declared" if item.get("type") else "inferred",
                     "required": bool(item.get("required", False)),
                 }
             )
@@ -74,10 +77,18 @@ def dehydrate_figma(figma: dict[str, Any]) -> dict[str, Any]:
     columns = []
     for col in figma.get("list", figma.get("table", figma.get("columns", []))):
         if isinstance(col, str):
-            columns.append({"name": col, "type": _infer_type(col)})
+            columns.append(
+                {"name": col, "type": _infer_type(col), "type_origin": "inferred"}
+            )
         elif isinstance(col, dict):
             name = col.get("name") or col.get("id") or col.get("field")
-            columns.append({"name": name, "type": col.get("type") or _infer_type(str(name))})
+            columns.append(
+                {
+                    "name": name,
+                    "type": col.get("type") or _infer_type(str(name)),
+                    "type_origin": "declared" if col.get("type") else "inferred",
+                }
+            )
 
     return {"inputs": inputs, "actions": actions, "columns": columns}
 
