@@ -9,6 +9,11 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Fixed
 
+- Quality-gates deixam de divergir entre a máquina e o GitHub: o workflow chama
+  `python scripts/quality_gates.py` (compile, ruff, mypy, YAML, secrets, audit,
+  pytest+coverage). Cada onda que só rodava pytest quebrava no mypy depois do
+  push (`33d1726`, `279267f`, e de novo 24/27). Tipos dos slices 24/27
+  passam no mypy; collect não falha quando o typecheck pula os testes
 - `pip-audit --strict` na matriz 3.10–3.13 deixava de passar: o lock compilado
   em 3.9 pinava `pip` 26.0.1 e `setuptools` 82.0.1, cujos fixes exigem
   Python ≥3.10. A matriz larga o 3.9, o lock recompila no 3.10 (`pip` 26.2.1,

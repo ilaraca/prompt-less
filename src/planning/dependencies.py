@@ -111,7 +111,7 @@ def _indexes_by_repo(repo_indexes: dict[str, Any]) -> dict[str, dict[str, Any]]:
         return merged
     # mapa repo → índice, possivelmente aninhado em um serviço
     if all(isinstance(v, dict) for v in repo_indexes.values()):
-        sample = next(iter(repo_indexes.values()), {})
+        sample: dict[str, Any] = next(iter(repo_indexes.values()), {})
         if "repos" in sample and "dependencias" not in sample:
             merged = {}
             for meta in repo_indexes.values():
@@ -264,11 +264,11 @@ def extract_observed_dependencies(
                 path = raw_target.split("/", 1)[-1]
                 resolved = _match_path_to_repo("/" + path.lstrip("/"), routes, repo)
             if not resolved and kind in {"url", "openapi-client"}:
-                _, path = parse_route(
+                parsed_path = parse_route(
                     "GET " + (raw_target if raw_target.startswith("/") else f"/{raw_target}")
-                )
-                if path:
-                    resolved = _match_path_to_repo(path, routes, repo)
+                )[1]
+                if parsed_path:
+                    resolved = _match_path_to_repo(parsed_path, routes, repo)
             if not resolved:
                 continue
             edge_kind = (

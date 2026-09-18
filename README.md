@@ -1201,7 +1201,8 @@ Limites deste slice (não reabrir; o `14` consome o overlay):
 ### Evals e testes
 
 ```bash
-.venv/bin/pytest -q
+# Gate completo (igual ao GitHub Actions). pytest sozinho não é o CI.
+PYTHONPATH=. .venv/bin/python scripts/quality_gates.py
 ```
 
 Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services, **eval_adversarial**, **eval_multi_context**), goldens de artefato derivado e de **recall de claims** em `tests/fixtures/golden/`, e casos adversariais (`adversarial_injection`, `adversarial_secret`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`, com métricas de claim recall, traceability, inferências inesperadas, custo e latência. Casos `critical` têm gate individual na comparação baseline × candidate. CI em `.github/workflows/ci.yml` (gates de produção: compile, lint, types, coverage, audit, secrets, YAML, artifacts).
@@ -1345,6 +1346,13 @@ python -m pip install --require-hashes -r requirements-dev.lock
 ---
 
 ## Gates de qualidade
+
+Local e GitHub rodam **o mesmo comando**: `python scripts/quality_gates.py`
+(compile, ruff, mypy, YAML, secrets, pip-audit, pytest+coverage 70%, smoke).
+`pytest -q` sozinho **não** é o gate — foi isso que fez cada onda voltar a
+falhar no mypy depois do push. Antes de merge no pai / push de
+`feature/onda-frontier`, rode o script. Não silencie módulo novo em
+`pyproject.toml` `[tool.mypy.overrides]`.
 
 O job agregador **`CI`** (depende de `quality-gates` na matriz) é o check estável para exigir no GitHub. Cada célula da matriz publica o artifact `quality-reports-py<versão>` com:
 

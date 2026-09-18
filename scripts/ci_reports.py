@@ -202,7 +202,10 @@ def collect(reports_dir: Path, *, allow_placeholder: bool = True) -> dict[str, s
         written["verify-report"] = "missing"
 
     if not coverage_xml.exists() and not coverage_json.exists():
-        written["coverage"] = "missing"
+        if junit_xml.exists():
+            written["coverage"] = "missing"
+        else:
+            written["coverage"] = "skipped"
     else:
         written["coverage"] = "present"
 

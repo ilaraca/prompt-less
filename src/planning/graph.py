@@ -134,9 +134,9 @@ def analyze_tasks(
     for wave in waves:
         repos: dict[str, list[str]] = defaultdict(list)
         for tid in wave:
-            task = by_id.get(tid)
-            if task:
-                repos[task.repo].append(tid)
+            found = by_id.get(tid)
+            if found is not None:
+                repos[found.repo].append(tid)
         for repo, tids in repos.items():
             if len(tids) > 1:
                 shared_in_wave.append(

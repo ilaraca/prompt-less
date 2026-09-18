@@ -301,6 +301,8 @@ def integrate_report(
     conflicts: list[dict[str, Any]] = []
     for item in shared:
         repo = item["repo"]
+        if not isinstance(repo, str):
+            continue
         if not coord.get(repo):
             conflicts.append(
                 {

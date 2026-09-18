@@ -836,7 +836,8 @@ def validate_sdd_package(spec: CanonicalSpec, doc: Any) -> ValidationResult:
             )
         )
 
-    review = doc.get("review") if isinstance(doc.get("review"), dict) else {}
+    review_raw = doc.get("review")
+    review: dict[str, Any] = review_raw if isinstance(review_raw, dict) else {}
     if review.get("executor_dispatch") or review.get("ready_for_executor"):
         issues.append(
             ValidationIssue(
@@ -923,7 +924,10 @@ def validate_sdd_package(spec: CanonicalSpec, doc: Any) -> ValidationResult:
             )
         )
 
-    architecture = doc.get("architecture") if isinstance(doc.get("architecture"), dict) else {}
+    architecture_raw = doc.get("architecture")
+    architecture: dict[str, Any] = (
+        architecture_raw if isinstance(architecture_raw, dict) else {}
+    )
     for dec in architecture.get("decisions") or []:
         if not isinstance(dec, dict):
             continue
@@ -1109,7 +1113,8 @@ def validate_sdd_package(spec: CanonicalSpec, doc: Any) -> ValidationResult:
                     )
                 )
 
-    graph = doc.get("graph") if isinstance(doc.get("graph"), dict) else {}
+    graph_raw = doc.get("graph")
+    graph: dict[str, Any] = graph_raw if isinstance(graph_raw, dict) else {}
     if "waves" not in graph or "source" not in graph:
         issues.append(
             ValidationIssue(

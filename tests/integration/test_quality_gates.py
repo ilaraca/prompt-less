@@ -6,8 +6,11 @@ from pathlib import Path
 
 import yaml
 
+from scripts.quality_gates import GATE_NAMES, gate_commands
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+PYPROJECT = ROOT / "pyproject.toml"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 ACTION_RE = re.compile(
     r"^(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@(?P<sha>[0-9a-f]{40})$"
@@ -72,23 +75,41 @@ def test_ci_python_matrix_matches_supported_versions():
     assert matrix == SUPPORTED_PYTHON
 
 
-def test_ci_runs_compile_lint_types_coverage_audit_secrets_yaml():
+def test_ci_invoca_o_mesmo_script_local():
+    """O YAML não lista mypy/ruff — senão o gate local volta a divergir."""
     text = WORKFLOW.read_text(encoding="utf-8")
+    assert "python scripts/quality_gates.py" in text
+    assert "scripts/ci_reports.py collect" in text
+    assert "actions/upload-artifact@" in text
+    assert "--ignore-vuln" not in text
+    assert "mypy src" not in text
+    assert "ruff check" not in text
+
+
+def test_gate_local_inclui_compile_ruff_mypy_pytest():
+    names = [name for name, _ in gate_commands(ROOT / "reports")]
+    for required in GATE_NAMES:
+        assert required in names, required
+    joined = " ".join(" ".join(argv) for _, argv in gate_commands(ROOT / "reports"))
     for needle in (
         "compileall",
-        "ruff check",
-        "mypy src",
+        "mypy",
+        "ruff",
+        "pytest",
         "--cov-fail-under=70",
-        "pip-audit",
-        "detect-secrets scan",
         "validate-yaml",
         "yamllint",
-        "actions/upload-artifact@",
-        "scripts/ci_reports.py collect",
     ):
-        assert needle in text, needle
-    assert "pytest" in text
-    assert "--ignore-vuln" not in text
+        assert needle in joined, needle
+    assert "pip-audit" in joined or "pip_audit" in joined
+    assert "detect-secrets" in joined or "detect_secrets" in joined
+
+
+def test_modulos_novos_nao_entram_no_override_mypy():
+    """Corrigir tipo no slice, não silenciar o módulo no pyproject."""
+    text = PYPROJECT.read_text(encoding="utf-8")
+    for module in ("src.planning", "src.renderers.sdd", "src.validators", "src.learning"):
+        assert f'"{module}"' not in text, module
 
 
 def test_ci_aggregator_job_is_required_ready():
