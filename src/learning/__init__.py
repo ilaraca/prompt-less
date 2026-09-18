@@ -5,6 +5,7 @@ from src.learning.accept import decide_proposals, load_history
 from src.learning.apply_rollback import apply_proposals_with_rollback
 from src.learning.evals import (
     RESERVED_CASES,
+    apply_reserved_gate,
     build_experiment_record,
     compare_evals,
     partition_cases,
@@ -24,6 +25,7 @@ __all__ = [
     "ProtectedSurfaceError",
     "apply_proposals_to_candidate",
     "apply_proposals_with_rollback",
+    "apply_reserved_gate",
     "build_experiment_record",
     "build_proposals",
     "classify_issues",

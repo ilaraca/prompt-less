@@ -732,6 +732,73 @@ def test_improve_applies_to_candidate_and_distinguishes_statuses(tmp_path: Path)
     assert "applied_to_candidate" in last
 
 
+def test_improve_rejects_when_holdout_regresses_despite_dev_gain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Melhora no desenvolvimento + regressão crítica no hold-out → reject."""
+    import src.improve as improve_mod
+
+    calls: list[tuple[str, ...]] = []
+
+    def _fake_eval(*, output_root, workspace, cases, run_id_prefix="eval"):
+        case_t = tuple(cases)
+        calls.append(case_t)
+        role = "candidate" if "candidate" in str(output_root) else "baseline"
+        if case_t == ("eval_adversarial",):
+            ok = role == "baseline"
+            return {
+                "summary": {
+                    "pass_rate": 1.0 if ok else 0.0,
+                    "avg_est_tokens": 100,
+                    "claim_recall": 1.0,
+                    "traceability_rate": 1.0,
+                    "unexpected_inferences": 0,
+                },
+                "cases": [
+                    {
+                        "case_id": "eval_adversarial",
+                        "ok": ok,
+                        "critical": True,
+                    }
+                ],
+                "workspace": workspace.to_dict() if hasattr(workspace, "to_dict") else {},
+            }
+        # conjunto de desenvolvimento: candidato melhora claim_recall
+        recall = 0.9 if role == "candidate" else 0.5
+        return {
+            "summary": {
+                "pass_rate": 1.0,
+                "avg_est_tokens": 100,
+                "claim_recall": recall,
+                "traceability_rate": 1.0,
+                "unexpected_inferences": 0,
+            },
+            "cases": [
+                {"case_id": cid, "ok": True, "critical": False} for cid in case_t
+            ],
+            "workspace": workspace.to_dict() if hasattr(workspace, "to_dict") else {},
+        }
+
+    monkeypatch.setattr(improve_mod, "run_eval_suite", _fake_eval)
+    result = improve_from_verify(
+        REPORT,
+        root=tmp_path,
+        eval_root=tmp_path / "improve-holdout",
+        source_root=PIPELINE,
+        cases=["happy_path", "eval_adversarial"],
+    )
+    assert ("happy_path",) in calls or any("happy_path" in c for c in calls)
+    assert any(c == ("eval_adversarial",) for c in calls)
+    cmp = result["decision"]["comparison"]
+    assert cmp["decision"] == "reject"
+    assert cmp["critical_regression"] is True
+    assert cmp.get("reserved_case_gates")
+    assert result["decision"]["accepted"] == []
+    assert result["decision"]["approved_for_experiment"] == []
+    assert result["decision"]["rejected"]
+    assert result["experiment"].get("reserved_comparison", {}).get("decision") == "reject"
+
+
 def test_candidate_cannot_mutate_protected_evaluator_surfaces(tmp_path: Path):
     from src.learning.workspaces import ProtectedSurfaceError
 

@@ -36,7 +36,10 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   latência. `improve` registra experimento (referência, candidato, diff,
   condições, `reserved_cases`; hold-out default `eval_adversarial`) e o
   candidato não pode mutar `failure-patterns` / `playbook` /
-  `permission_profiles`.
+  `permission_profiles`. Hold-out permanece separado da orientação da mudança,
+  mas `apply_reserved_gate` veta promoção se houver regressão/falha crítica
+  (ou não crítica sem tolerância) nos casos reservados — mesmo com melhora no
+  conjunto de desenvolvimento.
 - **Limites efetivos do executor** (`37-executor-enforcement`):
   `EnforcedRunner` aplica writes/comandos, scrub de credenciais, timeout,
   processos/memória e negação de rede *durante* a execução; profiles ganham
