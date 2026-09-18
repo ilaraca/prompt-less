@@ -223,7 +223,7 @@ Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
 | 35-independent-test-evidence | **Done** | filha, HEAD `5b0a663` | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
 | 36-repair-policy | **Done** | filha, HEAD `fb4f0bc` | `.worktrees/36-repair-policy` · `feature/repair-policy` |
 | 37-executor-enforcement | **Done** | filha, HEAD `a6c8f76` | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
-| 39-case-regression-gates | **In progress** | filha (ajuste) | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
+| 39-case-regression-gates | **Feedback** | filha, HEAD `85b4f14` | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
 | (pai) onda-frontier | — | 35/37 integrados @ `3b3557f` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
 
@@ -262,7 +262,7 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 | 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Done** | 30, 31, 32, 33, 34 |
 | 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Done** | 30, 31, 32, 33, 34 |
 | 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | **Feedback** | 35, 36, 37 |
-| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **In progress** | 30, 31, 32 |
+| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **Feedback** | 30, 31, 32 |
 
 ### Reabertura após revisão de 2026-09-18
 
@@ -536,12 +536,12 @@ diferenciando estimativa de uso/cobrança observados.
 
 ### 39 — Regressões por caso e aprendizado controlado
 
-**Status atual: In progress — ajuste pós-reabertura.**
+**Status atual: Feedback — ajuste pós-reabertura (`85b4f14`).**
 
 **Revisão de 2026-09-18 — ajuste pendente (inspeção de código):** comparação por caso foi corrigida, mas `improve_from_verify()` só registra resultados reservados; a decisão de promoção usa a comparação dos demais casos.
 
-- [ ] Fazer regressões/falhas críticas nos casos reservados bloquearem a promoção, preservando sua separação da orientação da mudança.
-- [ ] Adicionar cenário em que o candidato melhora no conjunto de desenvolvimento e regride no holdout; promoção deve ser rejeitada.
+- [x] Fazer regressões/falhas críticas nos casos reservados bloquearem a promoção, preservando sua separação da orientação da mudança.
+- [x] Adicionar cenário em que o candidato melhora no conjunto de desenvolvimento e regride no holdout; promoção deve ser rejeitada.
 
 **Achado:** a troca de um caso não crítico aprovado por reprovado, compensada
 por melhora em outro, manteve `decision=accept` e `regression=False`.
@@ -555,7 +555,7 @@ sob condições equivalentes e proteger política, verificador e avaliações.
 **Aceite:**
 
 - [x] Caso aprovado → reprovado é explicitamente marcado mesmo com taxa igual.
-- [ ] Regressão crítica bloqueia; qualquer tolerância não crítica é explícita,
+- [x] Regressão crítica bloqueia; qualquer tolerância não crítica é explícita,
       justificada e registrada, nunca compensação silenciosa.
 - [x] Caso removido ou conjunto incompatível impede comparação conclusiva.
 - [x] Experimento registra referência, candidato, diff, condições e casos reservados.
@@ -564,7 +564,7 @@ sob condições equivalentes e proteger política, verificador e avaliações.
 
 **Código:** `src/learning/evals.py`, `accept.py`, workspaces e apply/rollback.
 
-**Kanban:** Todo · HEAD filha `e453a3d` · ver
+**Kanban:** Feedback · HEAD filha `85b4f14` · ver
 `issues/39-case-regression-gates.md` § Implementation note.
 
 ## Dependências (visão histórica — séries 1–3)
