@@ -220,7 +220,7 @@ Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
 | 35-independent-test-evidence | **In progress** | filha | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
-| 36-repair-policy | **In progress** | filha | `.worktrees/36-repair-policy` · `feature/repair-policy` |
+| 36-repair-policy | **Feedback** | filha | `.worktrees/36-repair-policy` · `feature/repair-policy` |
 | 37-executor-enforcement | **In progress** | filha | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
 | 39-case-regression-gates | **In progress** | filha | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
 | (pai) onda-frontier | — | integra filhas | `.worktrees/onda-merge` · `feature/onda-frontier` |
@@ -249,7 +249,7 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 | 33-required-review-gate | P0.2 | Revisão obrigatória bloqueante e auditável | **Done** | — |
 | 34-cli-failure-exit | P0.3 | Exit code de falha e bloqueio de consumo | **Done** | — |
 | 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **In progress** | 30, 31, 32, 33, 34 |
-| 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **In progress** | 30, 31, 32, 33, 34 |
+| 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Feedback** | 30, 31, 32, 33, 34 |
 | 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **In progress** | 30, 31, 32, 33, 34 |
 | 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | Todo | 35, 36, 37 |
 | 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **In progress** | 30, 31, 32 |
@@ -406,14 +406,17 @@ autorizada, incluindo resolução real/symlinks. Reaplicar antes de cada tentati
 
 **Aceite:**
 
-- [ ] Caminhos externos, absolutos indevidos e escapes por symlink são negados.
-- [ ] Caminho de diagnóstico só entra se autorizado pela política da tarefa.
-- [ ] Arquivos a reverter ficam separados dos editáveis; IDs de RF/AC não
+- [x] Caminhos externos, absolutos indevidos e escapes por symlink são negados.
+- [x] Caminho de diagnóstico só entra se autorizado pela política da tarefa.
+- [x] Arquivos a reverter ficam separados dos editáveis; IDs de RF/AC não
       são interpretados como caminhos.
-- [ ] Tentativas permanecem limitadas e falha persistente termina não resolvida.
-- [ ] Nova verificação completa ocorre após a correção.
+- [x] Tentativas permanecem limitadas e falha persistente termina não resolvida.
+- [x] Nova verificação completa ocorre após a correção.
 
 **Código:** `src/executors/loop.py`, `policy.py`, `close_loop.py`.
+
+**Kanban:** Feedback · HEAD filha `fb4f0bc` · ver
+`issues/36-repair-policy.md` § Implementation note.
 
 ### 37 — Limites efetivos do executor
 
