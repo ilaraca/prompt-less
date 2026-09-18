@@ -213,18 +213,27 @@ permanecem no HEAD do slice; não reabrir worktrees.
 | 34-cli-failure-exit | **Done** | filha, HEAD `addea9a` | `.worktrees/34-cli-failure-exit` · `feature/cli-failure-exit` |
 | (pai) onda-frontier | — | P0 integrado @ `87487fd` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
-### Onda F — Série 4 P1 / regressão (em curso)
+### Onda F — Série 4 P1 / regressão (**integrada** no pai)
 
 Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 35-independent-test-evidence | **In progress** | filha | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
-| 36-repair-policy | **In progress** | filha | `.worktrees/36-repair-policy` · `feature/repair-policy` |
-| 37-executor-enforcement | **In progress** | filha | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
-| 39-case-regression-gates | **In progress** | filha | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
-| (pai) onda-frontier | — | integra filhas | `.worktrees/onda-merge` · `feature/onda-frontier` |
+| 35-independent-test-evidence | **Done** | filha, HEAD `36bcbc3` | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
+| 36-repair-policy | **Done** | filha, HEAD `fb4f0bc` | `.worktrees/36-repair-policy` · `feature/repair-policy` |
+| 37-executor-enforcement | **Done** | filha, HEAD `e4d458b` | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
+| 39-case-regression-gates | **Done** | filha, HEAD `e453a3d` | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
+| (pai) onda-frontier | — | P1 integrado @ `b8f9b7d` | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
+
+### Onda F — 38 context budget (**integrada** no pai)
+
+Base: pai `f755cec`.
+
+| Ticket | Kanban | Papel | Onde está o código |
+|---|---|---|---|
+| 38-critical-context-budget | **Done** | filha, HEAD `c1c9b11` | `.worktrees/38-critical-context-budget` · `feature/critical-context-budget` |
+| (pai) onda-frontier | — | integra (após Done) | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
 ## Série 4 — Conformidade com o roadmap (frontier ativa)
 
@@ -248,11 +257,11 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 | 32-eval-typed-http | P0.1 | HTTP tipado por serviço e operação | **Done** | — |
 | 33-required-review-gate | P0.2 | Revisão obrigatória bloqueante e auditável | **Done** | — |
 | 34-cli-failure-exit | P0.3 | Exit code de falha e bloqueio de consumo | **Done** | — |
-| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **In progress** | 30, 31, 32, 33, 34 |
-| 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **In progress** | 30, 31, 32, 33, 34 |
-| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **In progress** | 30, 31, 32, 33, 34 |
-| 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | Todo | 35, 36, 37 |
-| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **In progress** | 30, 31, 32 |
+| 35-independent-test-evidence | P1.2 | Testes e aceites com evidência independente | **Done** | 30, 31, 32, 33, 34 |
+| 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Done** | 30, 31, 32, 33, 34 |
+| 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Done** | 30, 31, 32, 33, 34 |
+| 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | **Done** | 35, 36, 37 |
+| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **Done** | 30, 31, 32 |
 
 ### Ordem de implementação e fechamento
 
@@ -387,13 +396,16 @@ aceite obrigatório com evidência de comportamento adequada.
 
 **Aceite:**
 
-- [ ] Relato `passed=True` sozinho nunca cria evidência suficiente.
-- [ ] Log ausente, incompleto, adulterado ou de outra run reprova.
-- [ ] AC obrigatório sem comprovação bloqueia; arquivo existente não basta.
-- [ ] Uma falha conhecida é detectada e uma correção real passa na reexecução.
-- [ ] E2E real fica registrado separadamente de stubs e testes ignorados.
+- [x] Relato `passed=True` sozinho nunca cria evidência suficiente.
+- [x] Log ausente, incompleto, adulterado ou de outra run reprova.
+- [x] AC obrigatório sem comprovação bloqueia; arquivo existente não basta.
+- [x] Uma falha conhecida é detectada e uma correção real passa na reexecução.
+- [x] E2E real fica registrado separadamente de stubs e testes ignorados.
 
 **Código:** `src/executors/devin.py`, `evidence.py`, `verify.py`.
+
+**Kanban:** Feedback · HEAD filha `36bcbc3` · ver
+`issues/35-independent-test-evidence.md` § Implementation note.
 
 ### 36 — Política completa no reparo
 
@@ -406,14 +418,17 @@ autorizada, incluindo resolução real/symlinks. Reaplicar antes de cada tentati
 
 **Aceite:**
 
-- [ ] Caminhos externos, absolutos indevidos e escapes por symlink são negados.
-- [ ] Caminho de diagnóstico só entra se autorizado pela política da tarefa.
-- [ ] Arquivos a reverter ficam separados dos editáveis; IDs de RF/AC não
+- [x] Caminhos externos, absolutos indevidos e escapes por symlink são negados.
+- [x] Caminho de diagnóstico só entra se autorizado pela política da tarefa.
+- [x] Arquivos a reverter ficam separados dos editáveis; IDs de RF/AC não
       são interpretados como caminhos.
-- [ ] Tentativas permanecem limitadas e falha persistente termina não resolvida.
-- [ ] Nova verificação completa ocorre após a correção.
+- [x] Tentativas permanecem limitadas e falha persistente termina não resolvida.
+- [x] Nova verificação completa ocorre após a correção.
 
 **Código:** `src/executors/loop.py`, `policy.py`, `close_loop.py`.
+
+**Kanban:** Feedback · HEAD filha `fb4f0bc` · ver
+`issues/36-repair-policy.md` § Implementation note.
 
 ### 37 — Limites efetivos do executor
 
@@ -427,13 +442,13 @@ Sem capacidade de aplicar limites exigidos, bloquear o despacho.
 
 **Aceite:**
 
-- [ ] Tarefa autorizada altera arquivo permitido, executa teste e entrega diff.
-- [ ] Tentativas equivalentes fora de arquivos/comandos/argumentos permitidos
+- [x] Tarefa autorizada altera arquivo permitido, executa teste e entrega diff.
+- [x] Tentativas equivalentes fora de arquivos/comandos/argumentos permitidos
       são impedidas durante a execução.
-- [ ] Rede, credenciais, processos, tempo e recursos seguem os limites
+- [x] Rede, credenciais, processos, tempo e recursos seguem os limites
       declarados, com testes de enforcement.
-- [ ] Comandos internos relevantes são coletados pelo mecanismo confiável.
-- [ ] Integração externa explicita quais garantias aplica e apresenta evidências.
+- [x] Comandos internos relevantes são coletados pelo mecanismo confiável.
+- [x] Integração externa explicita quais garantias aplica e apresenta evidências.
 
 **Código:** `src/executors/devin.py`, `safe_exec.py`, `policy.py` e runner.
 
@@ -450,13 +465,16 @@ diferenciando estimativa de uso/cobrança observados.
 
 **Aceite:**
 
-- [ ] Conteúdo crítico não desaparece silenciosamente ao reduzir orçamento.
-- [ ] Excesso do mínimo crítico gera divisão ou bloqueio com diagnóstico.
-- [ ] Omissões têm motivo e referência recuperável.
-- [ ] Cobertura crítica permanece no conjunto de avaliação.
-- [ ] Métricas da tarefa incluem tentativas e não apresentam estimativa como fatura.
+- [x] Conteúdo crítico não desaparece silenciosamente ao reduzir orçamento.
+- [x] Excesso do mínimo crítico gera divisão ou bloqueio com diagnóstico.
+- [x] Omissões têm motivo e referência recuperável.
+- [x] Cobertura crítica permanece no conjunto de avaliação.
+- [x] Métricas da tarefa incluem tentativas e não apresentam estimativa como fatura.
 
 **Código:** `src/context_builder.py`, compressão/recuperação e telemetria.
+
+**Kanban:** Feedback · HEAD filha `c1c9b11` · ver
+`issues/38-critical-context-budget.md` § Implementation note.
 
 ### 39 — Regressões por caso e aprendizado controlado
 
@@ -471,15 +489,18 @@ sob condições equivalentes e proteger política, verificador e avaliações.
 
 **Aceite:**
 
-- [ ] Caso aprovado → reprovado é explicitamente marcado mesmo com taxa igual.
-- [ ] Regressão crítica bloqueia; qualquer tolerância não crítica é explícita,
+- [x] Caso aprovado → reprovado é explicitamente marcado mesmo com taxa igual.
+- [x] Regressão crítica bloqueia; qualquer tolerância não crítica é explícita,
       justificada e registrada, nunca compensação silenciosa.
-- [ ] Caso removido ou conjunto incompatível impede comparação conclusiva.
-- [ ] Experimento registra referência, candidato, diff, condições e casos reservados.
-- [ ] Promoção exige benefício demonstrável, sem depender de jitter de latência.
-- [ ] Avaliador e dados de avaliação não são alterados pelo candidato avaliado.
+- [x] Caso removido ou conjunto incompatível impede comparação conclusiva.
+- [x] Experimento registra referência, candidato, diff, condições e casos reservados.
+- [x] Promoção exige benefício demonstrável, sem depender de jitter de latência.
+- [x] Avaliador e dados de avaliação não são alterados pelo candidato avaliado.
 
 **Código:** `src/learning/evals.py`, `accept.py`, workspaces e apply/rollback.
+
+**Kanban:** Feedback · HEAD filha `e453a3d` · ver
+`issues/39-case-regression-gates.md` § Implementation note.
 
 ## Dependências (visão histórica — séries 1–3)
 

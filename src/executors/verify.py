@@ -15,8 +15,13 @@ from src.executors.evidence import (
     canonical_command_set,
     command_argv,
     inspect_commits,
+    is_harness_behavioral_evidence,
+    is_non_behavioral_kind,
     load_adapter_log,
+    make_evidence_binding,
     policy_paths_for,
+    spec_content_hash,
+    test_covers_acceptance,
     test_evidence_errors,
     trace_in_result_commit,
 )
@@ -105,8 +110,24 @@ def verify_execution(
 
     git = _verify_git_evidence(result, repo, profile, issues)
     adapter = _verify_adapter_commands(result, log_path, profile, issues)
-    _verify_tests(result, adapter, repo, log_path, tests_required, issues)
+    expected_binding = make_evidence_binding(
+        run_id=result.run_id,
+        repository=result.repository,
+        base_commit=result.base_commit,
+        result_commit=result.result_commit,
+        spec_hash=spec_content_hash(spec),
+    )
+    _verify_tests(
+        result,
+        adapter,
+        repo,
+        log_path,
+        tests_required,
+        issues,
+        expected_binding=expected_binding,
+    )
     coverage = _verify_traceability(result, spec, git, repo, issues)
+    _verify_acceptance_behavioral(result, spec, coverage, issues)
 
     if len(result.unresolved_items) > max_unresolved:
         issues.append(
@@ -127,7 +148,10 @@ def verify_execution(
         )
 
     evidence_hashes = build_evidence_hashes(
-        git=git, adapter=adapter, tests=list(result.tests or [])
+        git=git,
+        adapter=adapter,
+        tests=list(result.tests or []),
+        binding=expected_binding,
     )
 
     if any(i.severity == "error" for i in issues):
@@ -316,6 +340,8 @@ def _verify_tests(
     log_path: Path | None,
     tests_required: bool | None,
     issues: list[VerifyIssue],
+    *,
+    expected_binding: dict[str, Any] | None = None,
 ) -> None:
     code_change = _is_code_change(result.changed_files)
     require_tests = tests_required if tests_required is not None else code_change
@@ -350,7 +376,10 @@ def _verify_tests(
             continue
         name = str(test.get("name") or test)
         for code, message in test_evidence_errors(
-            test, adapter=adapter, artifact_roots=roots
+            test,
+            adapter=adapter,
+            artifact_roots=roots,
+            expected_binding=expected_binding,
         ):
             issues.append(
                 VerifyIssue(
@@ -361,8 +390,10 @@ def _verify_tests(
                 )
             )
         if any(
-            i.code == "TEST_NOT_EVIDENCED" and i.subject_id == name for i in issues
+            i.code.startswith("TEST_") and i.subject_id == name for i in issues
         ):
+            continue
+        if is_non_behavioral_kind(test.get("kind") or test.get("_kind")):
             continue
         if not test.get("passed", True):
             issues.append(
@@ -391,11 +422,11 @@ def _verify_traceability(
             issues.append(
                 VerifyIssue(
                     code="RF_NOT_MAPPED" if required else "AC_NOT_MAPPED",
-                    severity="error" if required else "warning",
+                    severity="error",
                     message=(
                         f"RF sem mapeamento de arquivos: {subject_id}"
                         if required
-                        else f"AC sem teste/arquivo mapeado: {subject_id}"
+                        else f"AC obrigatório sem comprovação: {subject_id}"
                     ),
                     subject_id=subject_id,
                 )
@@ -419,8 +450,59 @@ def _verify_traceability(
     for rf in spec.requirements:
         _check_locs(rf.id, coverage.get(rf.id) or [], required=True)
     for ac in spec.acceptance_criteria:
+        # Locators sozinhos não bastam — evidência comportamental é checada à parte.
         _check_locs(ac.id, coverage.get(ac.id) or [], required=False)
     return coverage
+
+
+def _verify_acceptance_behavioral(
+    result: ExecutionResult,
+    spec: CanonicalSpec,
+    coverage: dict[str, list[str]],
+    issues: list[VerifyIssue],
+) -> None:
+    """AC obrigatório exige prova comportamental do harness; arquivo não basta."""
+    tests = [t for t in (result.tests or []) if isinstance(t, dict)]
+    for ac in spec.acceptance_criteria:
+        locators = coverage.get(ac.id) or []
+        proven = [
+            t
+            for t in tests
+            if test_covers_acceptance(t, ac.id, locators=locators)
+            and (
+                bool(t.get("_behavioral"))
+                if "_behavioral" in t
+                else is_harness_behavioral_evidence(t)
+            )
+        ]
+        if proven:
+            continue
+        # Evita duplicar AC_NOT_MAPPED quando já não há locator.
+        if not locators:
+            if not any(
+                i.code == "AC_NOT_MAPPED" and i.subject_id == ac.id for i in issues
+            ):
+                issues.append(
+                    VerifyIssue(
+                        code="AC_NOT_MAPPED",
+                        severity="error",
+                        message=f"AC obrigatório sem comprovação: {ac.id}",
+                        subject_id=ac.id,
+                    )
+                )
+            continue
+        issues.append(
+            VerifyIssue(
+                code="AC_WITHOUT_BEHAVIORAL_EVIDENCE",
+                severity="error",
+                message=(
+                    f"AC obrigatório `{ac.id}` só tem locator de arquivo — "
+                    "existência de arquivo não basta; exige teste executado "
+                    "pelo harness (não stub/skip)"
+                ),
+                subject_id=ac.id,
+            )
+        )
 
 
 def _is_code_change(changed_files: list[str]) -> bool:

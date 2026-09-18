@@ -21,6 +21,7 @@ SUPPORTED_PYTHON = ("3.10", "3.11", "3.12", "3.13")
 COVERAGE_FAIL_UNDER = 70
 ADVERSARIAL_TESTS = (
     "tests/integration/test_evidence_verify.py",
+    "tests/integration/test_independent_test_evidence.py",
     "tests/integration/test_contextual_provenance.py",
     "tests/integration/test_safe_run_storage.py",
     "tests/integration/test_runtime_isolation.py",

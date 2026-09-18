@@ -25,10 +25,14 @@ DEFAULT_CASES = (
     "eval_adversarial",
     "eval_multi_context",
 )
+# Hold-out P3: não entram na promoção automática; registrados no experimento.
+RESERVED_CASES = ("eval_adversarial",)
 _ARTIFACT_NAMES = {"historia.md", "prd.md"}
 _SPEC_NAME = "canonical-spec.yaml"
+# Benefício demonstrável para promoção — latência fica fora (jitter).
 _QUALITY_UP = ("claim_recall", "traceability_rate", "pass_rate")
-_QUALITY_DOWN = ("unexpected_inferences", "avg_est_tokens", "avg_latency_ms")
+_QUALITY_DOWN = ("unexpected_inferences", "avg_est_tokens")
+_REPORTED_ONLY = ("avg_latency_ms", "http_status_match_rate")
 
 
 @dataclass
@@ -560,6 +564,58 @@ def _claims_blob_from_result(result: dict[str, Any]) -> str:
     return "\n".join(parts).lower()
 
 
+def _budget_reports_from_result(result: dict[str, Any]) -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
+    if isinstance(result.get("budget_report"), dict):
+        reports.append(result["budget_report"])
+    for ctx in result.get("by_context") or []:
+        if isinstance(ctx.get("budget_report"), dict):
+            reports.append(ctx["budget_report"])
+    return reports
+
+
+def _critical_context_score(
+    result: dict[str, Any], *, critical: bool
+) -> dict[str, Any]:
+    """
+    Cobertura crítica no budget: casos critical exigem report sem omissões silenciosas.
+
+    Sem budget_report (runs antigas) → n/a (não falha o gate).
+    """
+    reports = _budget_reports_from_result(result)
+    if not reports:
+        return {
+            "present": False,
+            "complete": True,  # n/a — cobertura crítica permanece via fixtures critical
+            "silent_critical_loss": False,
+            "statuses": [],
+        }
+    statuses = [str(r.get("status") or "") for r in reports]
+    silent = False
+    complete = True
+    for r in reports:
+        cov = r.get("critical_coverage") or {}
+        if cov and not cov.get("complete", True):
+            complete = False
+        # omissão crítica sem diagnosis/status de split/block = perda silenciosa
+        crit_om = r.get("critical_omissions") or []
+        if crit_om and str(r.get("status") or "") not in {
+            "blocked",
+            "split_required",
+        }:
+            silent = True
+            complete = False
+        if str(r.get("status") or "") in {"blocked", "split_required"}:
+            # explícito — não é silencioso; complete=False é esperado
+            complete = False
+    return {
+        "present": True,
+        "complete": complete,
+        "silent_critical_loss": silent,
+        "statuses": statuses,
+    }
+
+
 def score_case(
     expected: dict[str, Any],
     result: dict[str, Any],
@@ -856,6 +912,7 @@ def score_case(
             "errors": selection_errors,
             "files_used": list(selection.files_used) if selection else [],
         },
+        "critical_context": _critical_context_score(result, critical=critical),
     }
 
     return CaseScore(
@@ -1073,6 +1130,7 @@ def _metric_block(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[s
 
 
 def _improved(metrics: dict[str, Any]) -> bool:
+    """Benefício demonstrável — latência/jitter não conta para promoção."""
     for key in _QUALITY_UP:
         if float((metrics.get(key) or {}).get("delta") or 0) > 0:
             return True
@@ -1082,13 +1140,130 @@ def _improved(metrics: dict[str, Any]) -> bool:
     return False
 
 
-def compare_evals(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+def _tolerance_index(
+    tolerances: list[dict[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
+    """Índice case_id → tolerância explícita (justificativa obrigatória)."""
+    out: dict[str, dict[str, Any]] = {}
+    for raw in tolerances or []:
+        if not isinstance(raw, dict):
+            continue
+        case_id = str(raw.get("case_id") or "").strip()
+        justification = str(raw.get("justification") or raw.get("reason") or "").strip()
+        if not case_id or not justification:
+            continue
+        out[case_id] = {
+            "case_id": case_id,
+            "justification": justification,
+            "dimension": raw.get("dimension"),
+            "recorded": True,
+        }
+    return out
+
+
+def _required_gates_of(case: dict[str, Any]) -> dict[str, bool]:
+    score = case.get("score") or {}
+    gates = score.get("required_gates") if isinstance(score, dict) else None
+    if isinstance(gates, dict):
+        return {str(k): bool(v) for k, v in gates.items()}
+    return {}
+
+
+def _dimension_regressions(
+    b_case: dict[str, Any], c_case: dict[str, Any]
+) -> list[str]:
+    """Dimensões True→False; uma dimensão nunca compensa outra."""
+    b_gates = _required_gates_of(b_case)
+    c_gates = _required_gates_of(c_case)
+    if not b_gates or not c_gates:
+        return []
+    flipped: list[str] = []
+    for name, was_ok in b_gates.items():
+        if was_ok and name in c_gates and not c_gates[name]:
+            flipped.append(name)
+    return flipped
+
+
+def _comparable_sets(
+    b_ids: set[str], c_ids: set[str]
+) -> tuple[bool, list[str], list[str], list[str]]:
+    missing_in_candidate = sorted(b_ids - c_ids)
+    extra_in_candidate = sorted(c_ids - b_ids)
+    reasons: list[str] = []
+    if missing_in_candidate:
+        reasons.append(
+            "incomparable_missing_cases:" + ",".join(missing_in_candidate)
+        )
+    if extra_in_candidate:
+        reasons.append(
+            "incomparable_extra_cases:" + ",".join(extra_in_candidate)
+        )
+    return (not reasons), missing_in_candidate, extra_in_candidate, reasons
+
+
+def partition_cases(
+    cases: tuple[str, ...] | list[str],
+    *,
+    reserved: tuple[str, ...] | list[str] | None = None,
+) -> dict[str, tuple[str, ...]]:
+    """Separa suíte de comparação vs casos reservados (hold-out P3)."""
+    reserved_set = set(reserved if reserved is not None else RESERVED_CASES)
+    ordered = tuple(str(c) for c in cases)
+    eval_cases = tuple(c for c in ordered if c not in reserved_set)
+    reserved_cases = tuple(c for c in ordered if c in reserved_set)
+    return {"eval_cases": eval_cases, "reserved_cases": reserved_cases}
+
+
+def build_experiment_record(
+    *,
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+    comparison: dict[str, Any],
+    diff: str = "",
+    conditions: dict[str, Any] | None = None,
+    reserved_cases: tuple[str, ...] | list[str] | None = None,
+) -> dict[str, Any]:
+    """Registro P3: referência, candidato, diff, condições e hold-out."""
+    ws = comparison.get("workspaces") or {}
+    return {
+        "reference": ws.get("baseline") or baseline.get("workspace"),
+        "candidate": ws.get("candidate") or candidate.get("workspace"),
+        "diff": diff or str(comparison.get("diff") or ""),
+        "conditions": dict(conditions or {}),
+        "reserved_cases": list(
+            reserved_cases if reserved_cases is not None else RESERVED_CASES
+        ),
+        "comparable": bool(comparison.get("comparable", True)),
+        "decision": comparison.get("decision"),
+        "reasons": list(comparison.get("reasons") or []),
+        "tolerances_applied": list(comparison.get("tolerances_applied") or []),
+        "metrics": comparison.get("metrics") or {},
+    }
+
+
+def compare_evals(
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    tolerances: list[dict[str, Any]] | None = None,
+    reserved_cases: tuple[str, ...] | list[str] | None = None,
+) -> dict[str, Any]:
+    """
+    Compara evals com gate por caso/dimensão — sem compensação silenciosa.
+
+    Pass→fail em qualquer caso marca regressão (mesmo com pass_rate igual).
+    Crítico bloqueia; tolerância não crítica exige justificativa explícita.
+    Conjuntos de casos distintos → comparação não conclusiva (reject).
+    """
     b = baseline.get("summary") or {}
     c = candidate.get("summary") or {}
     regression = False
     critical_regression = False
+    comparable = True
     reasons: list[str] = []
     case_gates: list[dict[str, Any]] = []
+    tolerances_applied: list[dict[str, Any]] = []
+    tol_idx = _tolerance_index(tolerances)
 
     if float(c.get("pass_rate") or 0) < float(b.get("pass_rate") or 0):
         regression = True
@@ -1101,23 +1276,87 @@ def compare_evals(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[s
 
     b_cases = _case_map(baseline)
     c_cases = _case_map(candidate)
-    for case_id, b_case in b_cases.items():
-        c_case = c_cases.get(case_id)
-        if not c_case:
-            continue
+    comparable, missing, extra, set_reasons = _comparable_sets(
+        set(b_cases), set(c_cases)
+    )
+    if set_reasons:
+        reasons.extend(set_reasons)
+        # conjunto incompatível / caso removido: não é comparação conclusiva
+        regression = True
+
+    shared_ids = sorted(set(b_cases) & set(c_cases))
+    for case_id in shared_ids:
+        b_case = b_cases[case_id]
+        c_case = c_cases[case_id]
         critical = bool(b_case.get("critical") or c_case.get("critical"))
-        gate = {
+        baseline_ok = bool(b_case.get("ok"))
+        candidate_ok = bool(c_case.get("ok"))
+        dim_regs = _dimension_regressions(b_case, c_case)
+        pass_to_fail = baseline_ok and not candidate_ok
+        regressed = pass_to_fail or bool(dim_regs)
+        gate: dict[str, Any] = {
             "case_id": case_id,
             "critical": critical,
-            "baseline_ok": bool(b_case.get("ok")),
-            "candidate_ok": bool(c_case.get("ok")),
+            "baseline_ok": baseline_ok,
+            "candidate_ok": candidate_ok,
+            "regressed": regressed,
+            "dimension_regressions": dim_regs,
+            "tolerated": False,
         }
-        if critical and b_case.get("ok") and not c_case.get("ok"):
-            critical_regression = True
-            regression = True
-            reasons.append(f"critical_case_regressed:{case_id}")
-            gate["regressed"] = True
+        if regressed:
+            if critical:
+                critical_regression = True
+                regression = True
+                if pass_to_fail:
+                    reasons.append(f"critical_case_regressed:{case_id}")
+                for dim in dim_regs:
+                    reasons.append(f"critical_dimension_regressed:{case_id}:{dim}")
+            else:
+                tol = tol_idx.get(case_id)
+                # tolerância não crítica: explícita + justificada + registrada
+                if tol:
+                    gate["tolerated"] = True
+                    gate["tolerance"] = tol
+                    tolerances_applied.append(
+                        {**tol, "dimension_regressions": dim_regs}
+                    )
+                else:
+                    regression = True
+                    if pass_to_fail:
+                        reasons.append(f"case_regressed:{case_id}")
+                    for dim in dim_regs:
+                        reasons.append(f"dimension_regressed:{case_id}:{dim}")
         case_gates.append(gate)
+
+    # casos só no baseline (já em missing) — marcar gate explícito
+    for case_id in missing:
+        b_case = b_cases[case_id]
+        case_gates.append(
+            {
+                "case_id": case_id,
+                "critical": bool(b_case.get("critical")),
+                "baseline_ok": bool(b_case.get("ok")),
+                "candidate_ok": None,
+                "regressed": True,
+                "missing_in_candidate": True,
+                "dimension_regressions": [],
+                "tolerated": False,
+            }
+        )
+    for case_id in extra:
+        c_case = c_cases[case_id]
+        case_gates.append(
+            {
+                "case_id": case_id,
+                "critical": bool(c_case.get("critical")),
+                "baseline_ok": None,
+                "candidate_ok": bool(c_case.get("ok")),
+                "regressed": True,
+                "extra_in_candidate": True,
+                "dimension_regressions": [],
+                "tolerated": False,
+            }
+        )
 
     distinct, ws_info = _workspaces_distinct(baseline, candidate)
     if (baseline.get("workspace") or candidate.get("workspace")) and not distinct:
@@ -1125,11 +1364,21 @@ def compare_evals(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[s
         reasons.append("workspaces_not_distinct")
 
     metrics = _metric_block(b, c)
-    improved = (not regression) and (not critical_regression) and _improved(metrics)
-    reject = regression or critical_regression
+    # promoção: benefício real (sem latência), conjuntos comparáveis, sem regressão
+    improved = (
+        comparable
+        and (not regression)
+        and (not critical_regression)
+        and _improved(metrics)
+    )
+
+    reject = regression or critical_regression or (not comparable)
+    decision = "reject" if reject else "accept"
+    reserved = list(reserved_cases if reserved_cases is not None else RESERVED_CASES)
     return {
         "regression": regression,
         "critical_regression": critical_regression,
+        "comparable": comparable,
         "improved": improved,
         "reasons": reasons,
         "baseline": b,
@@ -1137,5 +1386,8 @@ def compare_evals(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[s
         "case_gates": case_gates,
         "metrics": metrics,
         "workspaces": ws_info,
-        "decision": "reject" if reject else "accept",
+        "tolerances_applied": tolerances_applied,
+        "reserved_cases": reserved,
+        "reported_only_metrics": list(_REPORTED_ONLY),
+        "decision": decision,
     }

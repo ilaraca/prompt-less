@@ -13,6 +13,47 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PROFILES = ROOT / "config" / "permission_profiles.yaml"
 KNOWN_LAYERS = ("bff", "api", "mfe", "gtw", "worker", "batch")
 
+# Capacidades de enforcement durante a execução (≠ auditoria pós-fato).
+ENFORCEMENT_CAPABILITIES = frozenset(
+    {
+        "commands",
+        "writes",
+        "credentials",
+        "time",
+        "processes",
+        "network",
+        "resources",
+    }
+)
+
+DEFAULT_LIMITS: dict[str, Any] = {
+    "timeout_seconds": 3600.0,
+    "max_processes": 32,
+    "memory_mb": 2048,
+    "network": "deny",  # deny | allow
+    "credentials": "scrub",  # scrub | passthrough
+    "required_capabilities": sorted(ENFORCEMENT_CAPABILITIES),
+}
+
+# CLIs de rede bloqueados quando network=deny (além do guard Python).
+NETWORK_CLI_DENY = frozenset(
+    {
+        "curl",
+        "wget",
+        "nc",
+        "ncat",
+        "netcat",
+        "ssh",
+        "scp",
+        "sftp",
+        "telnet",
+        "ftp",
+        "aria2c",
+        "httpie",
+        "http",
+    }
+)
+
 # Metacaracteres de shell — presença = comando composto / injection
 _SHELL_META = re.compile(r"[;&|`$()<>\n]|\s&&\s|\s\|\|\s")
 _FLAG_RE = re.compile(r"^--?[A-Za-z0-9][\w.-]*(=.*)?$")
@@ -243,6 +284,12 @@ def check_command_allowed(
     if any(_SHELL_META.search(a) for a in argv):
         return False
 
+    limits = normalize_limits(profile)
+    if limits.get("network") == "deny":
+        exe = Path(argv[0]).name.lower()
+        if exe in NETWORK_CLI_DENY:
+            return False
+
     for denied in profile.get("commands_deny") or []:
         prefix = _rule_prefix(denied)
         if prefix and _argv_matches_prefix(argv, prefix):
@@ -261,3 +308,60 @@ def check_command_allowed(
         if extra_args_allowed(argv, len(prefix), repo_root=repo_root):
             return True
     return False
+
+
+def normalize_limits(profile: dict[str, Any] | None) -> dict[str, Any]:
+    """Mescla ``profile['limits']`` com defaults tipados."""
+    raw = dict(DEFAULT_LIMITS)
+    if not profile:
+        return raw
+    overrides = profile.get("limits") or {}
+    if not isinstance(overrides, dict):
+        return raw
+    for key, value in overrides.items():
+        if key == "required_capabilities" and value is not None:
+            caps = {str(c) for c in value}
+            unknown = caps - ENFORCEMENT_CAPABILITIES
+            if unknown:
+                raise ValueError(f"capabilities desconhecidas em limits: {sorted(unknown)}")
+            raw["required_capabilities"] = sorted(caps)
+        elif key == "timeout_seconds" and value is not None:
+            raw["timeout_seconds"] = float(value)
+        elif key == "max_processes" and value is not None:
+            raw["max_processes"] = int(value)
+        elif key == "memory_mb" and value is not None:
+            raw["memory_mb"] = int(value)
+        elif key == "network" and value is not None:
+            mode = str(value).lower()
+            if mode not in {"deny", "allow"}:
+                raise ValueError(f"limits.network inválido: {value!r}")
+            raw["network"] = mode
+        elif key == "credentials" and value is not None:
+            mode = str(value).lower()
+            if mode not in {"scrub", "passthrough"}:
+                raise ValueError(f"limits.credentials inválido: {value!r}")
+            raw["credentials"] = mode
+    return raw
+
+
+def required_capabilities(profile: dict[str, Any] | None) -> frozenset[str]:
+    limits = normalize_limits(profile)
+    return frozenset(str(c) for c in limits["required_capabilities"])
+
+
+def resolve_layer_profile(
+    layer: str | None,
+    *,
+    profiles: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Fail-closed: layer ausente/desconhecida não devolve profile vazio."""
+    if not layer or not str(layer).strip():
+        raise ValueError("layer de execução ausente — profile obrigatório para enforcement")
+    name = str(layer).strip().lower()
+    data = profiles if profiles is not None else load_profiles()
+    if name not in data:
+        raise ValueError(f"profile inexistente para layer={name!r}")
+    profile = data[name]
+    if not isinstance(profile, dict):
+        raise ValueError(f"profile inválido para layer={name!r}")
+    return profile

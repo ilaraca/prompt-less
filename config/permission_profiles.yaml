@@ -1,6 +1,9 @@
 version: 1
 # Profiles de permissão por camada (policy executável).
 # Camadas conhecidas: bff, api, mfe, gtw, worker, batch. Qualquer outra é fail-closed.
+#
+# limits.* são enforcement durante a execução (EnforcedRunner), não só auditoria.
+# Sem capabilities ⊇ required_capabilities o despacho é bloqueado (DispatchBlocked).
 profiles:
   bff:
     write_allow:
@@ -27,6 +30,20 @@ profiles:
         args: [apply]
       - executable: kubectl
         args: [delete]
+    limits:
+      timeout_seconds: 3600
+      max_processes: 32
+      memory_mb: 2048
+      network: deny
+      credentials: scrub
+      required_capabilities:
+        - commands
+        - writes
+        - credentials
+        - time
+        - processes
+        - network
+        - resources
   api:
     write_allow:
       - "src/**"
@@ -43,6 +60,20 @@ profiles:
     commands_deny:
       - executable: terraform
         args: [apply]
+    limits:
+      timeout_seconds: 3600
+      max_processes: 32
+      memory_mb: 2048
+      network: deny
+      credentials: scrub
+      required_capabilities:
+        - commands
+        - writes
+        - credentials
+        - time
+        - processes
+        - network
+        - resources
   mfe:
     write_allow:
       - "src/**"
@@ -61,6 +92,20 @@ profiles:
     commands_deny:
       - executable: terraform
         args: [apply]
+    limits:
+      timeout_seconds: 3600
+      max_processes: 32
+      memory_mb: 2048
+      network: deny
+      credentials: scrub
+      required_capabilities:
+        - commands
+        - writes
+        - credentials
+        - time
+        - processes
+        - network
+        - resources
   gtw:
     write_allow:
       - "src/**"
@@ -81,6 +126,20 @@ profiles:
         args: [apply]
       - executable: kubectl
         args: [delete]
+    limits:
+      timeout_seconds: 3600
+      max_processes: 32
+      memory_mb: 2048
+      network: deny
+      credentials: scrub
+      required_capabilities:
+        - commands
+        - writes
+        - credentials
+        - time
+        - processes
+        - network
+        - resources
   worker:
     write_allow:
       - "src/**"
@@ -98,6 +157,20 @@ profiles:
     commands_deny:
       - executable: terraform
         args: [apply]
+    limits:
+      timeout_seconds: 3600
+      max_processes: 32
+      memory_mb: 2048
+      network: deny
+      credentials: scrub
+      required_capabilities:
+        - commands
+        - writes
+        - credentials
+        - time
+        - processes
+        - network
+        - resources
   batch:
     write_allow:
       - "src/**"
@@ -115,3 +188,17 @@ profiles:
     commands_deny:
       - executable: terraform
         args: [apply]
+    limits:
+      timeout_seconds: 3600
+      max_processes: 32
+      memory_mb: 2048
+      network: deny
+      credentials: scrub
+      required_capabilities:
+        - commands
+        - writes
+        - credentials
+        - time
+        - processes
+        - network
+        - resources

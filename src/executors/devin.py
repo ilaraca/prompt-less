@@ -1,4 +1,10 @@
-"""Adapter Devin — CLI real, JSONL estruturado e ExecutionResult do runner."""
+"""Adapter Devin — CLI real, JSONL estruturado e ExecutionResult do runner.
+
+Limites efetivos: worktree/`shell=False` ≠ sandbox. O despacho exige um
+``EnforcementContract`` cujas ``guarantees`` cubram ``limits.required_capabilities``
+do profile da camada (ou o runner local ``EnforcedRunner``). Sem isso,
+``DispatchBlocked``. Ver README § enforcement.
+"""
 from __future__ import annotations
 
 import json
@@ -10,13 +16,28 @@ from typing import Any, Callable
 from src.executors.base import ExecutionResult
 from src.executors.evidence import (
     GitEvidenceError,
+    HARNESS_EXECUTED_BY,
+    command_argv,
     full_commit_sha,
+    hash_bytes,
     inspect_commits,
+    is_non_behavioral_kind,
+    make_evidence_binding,
+    normalize_test_kind,
     run_git,
     worktree_dirty,
 )
+from src.executors.policy import load_profiles, resolve_layer_profile
+from src.executors.runner import (
+    DEVIN_EXTERNAL_CONTRACT,
+    DispatchBlocked,
+    EnforcementContract,
+    EnforcedRunner,
+    assert_dispatch_allowed,
+    local_enforcement_contract,
+)
 from src.executors.safe_exec import run_argv
-from src.runtime.atomic_io import atomic_write_json
+from src.runtime.atomic_io import atomic_write_json, sha256_of
 
 Runner = Callable[..., Any]
 
@@ -115,10 +136,30 @@ class DevinAdapter:
         result_path: Path | None = None,
         cli_bin: str = "devin",
         runner: Runner | None = None,
+        enforcement_contract: EnforcementContract | dict[str, Any] | None = None,
     ) -> None:
         self.result_path = result_path
         self.cli_bin = cli_bin
         self.runner = runner or run_argv
+        self.enforcement_contract = self._coerce_contract(enforcement_contract)
+
+    @staticmethod
+    def _coerce_contract(
+        value: EnforcementContract | dict[str, Any] | None,
+    ) -> EnforcementContract | None:
+        if value is None:
+            return None
+        if isinstance(value, EnforcementContract):
+            return value
+        return EnforcementContract.from_dict(value)
+
+    def resolve_enforcement_contract(self) -> EnforcementContract:
+        """Contrato efetivo: explícito, runner local, ou default externo (sem garantias)."""
+        if self.enforcement_contract is not None:
+            return self.enforcement_contract
+        if isinstance(self.runner, EnforcedRunner):
+            return local_enforcement_contract()
+        return DEVIN_EXTERNAL_CONTRACT
 
     def prepare(
         self,
@@ -165,17 +206,24 @@ class DevinAdapter:
         repo_path: Path | str,
         out_dir: Path | str,
         layer: str | None = None,
+        profile: dict[str, Any] | None = None,
         prompt: str | None = None,
         prompt_file: Path | str | None = None,
         timeout: float | None = 3600.0,
         auto_commit: bool = True,
         invoke_cli: bool = True,
         require_cli: bool = True,
+        require_enforcement: bool = True,
+        enforcement_contract: EnforcementContract | dict[str, Any] | None = None,
+        spec_hash: str | None = None,
     ) -> ExecutionResult:
         """Invoca o CLI, grava adapter-log.jsonl + execution.json e devolve o resultado.
 
         O ``ExecutionResult`` é montado pelo adapter a partir do Git e do JSONL —
         não aceita commits/arquivos só declarados pelo agente.
+
+        Com ``require_enforcement=True`` (default), o despacho só ocorre se o
+        contrato cobrir ``limits.required_capabilities`` do profile da camada.
         """
         repo = Path(repo_path)
         out = Path(out_dir)
@@ -186,6 +234,24 @@ class DevinAdapter:
 
         if not repo.is_dir():
             raise FileNotFoundError(f"repositório inexistente: {repo}")
+
+        if profile is None and layer:
+            profile = resolve_layer_profile(layer)
+        elif profile is None and require_enforcement and invoke_cli:
+            raise DispatchBlocked(
+                "despacho exige layer/profile para enforcement "
+                "(worktree ≠ sandbox; profile=None é recusado)",
+                missing=frozenset({"commands", "writes"}),
+            )
+
+        contract = self._coerce_contract(enforcement_contract) or self.resolve_enforcement_contract()
+        if require_enforcement and invoke_cli:
+            if profile is None:
+                raise DispatchBlocked(
+                    "profile ausente — não há como validar limits.required_capabilities",
+                    missing=frozenset({"commands"}),
+                )
+            assert_dispatch_allowed(profile, contract.capabilities())
 
         dirty, dirty_detail = worktree_dirty(repo)
         if dirty:
@@ -207,6 +273,8 @@ class DevinAdapter:
             "repository": repository,
             "repo_path": str(repo),
             "base_commit": base_commit,
+            "layer": layer,
+            "enforcement": contract.to_dict(),
             "events": [],
         }
 
@@ -222,6 +290,7 @@ class DevinAdapter:
                 session=session,
                 timeout=timeout,
                 require_cli=require_cli,
+                profile=profile,
             )
 
         dirty_after, _ = worktree_dirty(repo)
@@ -259,8 +328,24 @@ class DevinAdapter:
         if not isinstance(unresolved, list):
             unresolved = []
 
-        tests = _tests_from_sidecar(hints, log_dir=out)
-        self._materialize_test_evidence(tests, log_path=log_path, out_dir=out)
+        tests_suggested = _tests_from_sidecar(hints, log_dir=out)
+        binding = make_evidence_binding(
+            run_id=run_id,
+            repository=repository,
+            base_commit=git.base_sha or base_commit,
+            result_commit=git.result_sha or result_commit,
+            spec_hash=spec_hash,
+        )
+        profiles = load_profiles()
+        profile = profiles.get(layer) if layer else None
+        tests = self._materialize_test_evidence(
+            tests_suggested,
+            log_path=log_path,
+            out_dir=out,
+            repo=repo,
+            binding=binding,
+            profile=profile,
+        )
         commands = _commands_from_log(log_path)
         command_strs: list[str] = []
         for cmd in commands:
@@ -274,6 +359,7 @@ class DevinAdapter:
         session["result_commit"] = result_commit
         session["changed_files"] = list(git.changed_files)
         atomic_write_json(out / "devin-session.json", session)
+        atomic_write_json(out / "enforcement-contract.json", contract.to_dict())
 
         execution = ExecutionResult(
             run_id=run_id,
@@ -306,9 +392,14 @@ class DevinAdapter:
         session: dict[str, Any],
         timeout: float | None,
         require_cli: bool,
+        profile: dict[str, Any] | None = None,
     ) -> None:
         """Invoca o CLI. Metadados vão para ``devin-session.json``, não ao JSONL
         de evidência (o verify aplica policy de camada só aos comandos do log).
+
+        A invocação do binário ``devin`` é meta-harness (não passa pela allowlist
+        de comandos da camada). Limites efetivos dos *internos* do agente vêm do
+        ``EnforcementContract`` validado antes do despacho.
         """
         cli = self.cli_bin
         if require_cli and self.runner is run_argv and shutil.which(cli) is None:
@@ -317,15 +408,22 @@ class DevinAdapter:
             )
         argv = [cli, "--print", "--prompt-file", str(prompt_file)]
         ts = _now_iso()
+        run_kwargs: dict[str, Any] = {
+            "cwd": str(repo),
+            "timeout": timeout,
+            "capture_output": True,
+            "text": True,
+        }
+        # Runner local enforced: ainda não aplica profile ao binário do agente;
+        # profile=None no invoke evita negar `devin` (fora do commands_allow).
+        if isinstance(self.runner, EnforcedRunner):
+            # EnforcedRunner.run exige allowlist — use o callable bruto só para CLI.
+            # Comandos internos devem ser coletados pelo runner em outras vias.
+            proc_runner: Runner = run_argv
+        else:
+            proc_runner = self.runner
         try:
-            proc = self.runner(
-                argv,
-                profile=None,
-                cwd=str(repo),
-                timeout=timeout,
-                capture_output=True,
-                text=True,
-            )
+            proc = proc_runner(argv, profile=None, **run_kwargs)
             exit_code = int(getattr(proc, "returncode", 1))
             stdout = getattr(proc, "stdout", "") or ""
             stderr = getattr(proc, "stderr", "") or ""
@@ -337,6 +435,8 @@ class DevinAdapter:
                     "argv": argv,
                     "exit_code": 1,
                     "error": str(exc),
+                    "profile_applied_to_cli": False,
+                    "layer_profile": bool(profile),
                 }
             )
             raise DevinCliError(f"falha ao executar Devin CLI: {exc}") from exc
@@ -353,6 +453,8 @@ class DevinAdapter:
                 "argv": argv,
                 "exit_code": exit_code,
                 "log": cli_log.name,
+                "profile_applied_to_cli": False,
+                "layer_profile": bool(profile),
             }
         )
         if exit_code != 0:
@@ -379,44 +481,140 @@ class DevinAdapter:
             detail = (proc.stderr or proc.stdout or "").strip()
             raise DirtyWorktreeError(f"falha ao commitar resultado do Devin: {detail}")
 
-    @staticmethod
     def _materialize_test_evidence(
-        tests: list[dict[str, Any]], *, log_path: Path, out_dir: Path
-    ) -> None:
-        """Copia evidência de testes do sidecar para o JSONL consumido pelo verify."""
-        if not tests:
-            # JSONL vazio é válido (sem code change / sem testes reportados)
-            if not log_path.exists():
-                log_path.write_text("", encoding="utf-8")
-            return
-        # regrava o log só com comandos de teste (policy-checkáveis)
+        self,
+        suggestions: list[dict[str, Any]],
+        *,
+        log_path: Path,
+        out_dir: Path,
+        repo: Path,
+        binding: dict[str, Any],
+        profile: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Executa sugestões do sidecar via runner do harness.
+
+        ``passed=True`` do agente **nunca** vira ``exit_code=0`` sem execução.
+        Sidecar só sugere comando/kind/covers; argv/stdout/stderr/exit vêm do
+        runner controlado pelo harness e ficam vinculados ao binding.
+        """
+        materialized: list[dict[str, Any]] = []
         if log_path.exists():
             log_path.unlink()
-        for test in tests:
-            cmd = test.get("command")
-            if not cmd:
+        if not suggestions:
+            log_path.write_text("", encoding="utf-8")
+            return materialized
+
+        for index, suggestion in enumerate(suggestions):
+            name = str(suggestion.get("name") or f"test-{index}")
+            kind = normalize_test_kind(suggestion.get("kind"))
+            covers = suggestion.get("covers") or suggestion.get("acceptance_criteria") or []
+            if isinstance(covers, (str, int)):
+                covers = [covers]
+            covers_list = [str(c) for c in covers]
+
+            if is_non_behavioral_kind(kind):
+                # Stub/skip: registra separadamente; não executa nem finge passe.
+                materialized.append(
+                    {
+                        "name": name,
+                        "kind": kind,
+                        "passed": False,
+                        "suggestion_only": True,
+                        "executed_by": None,
+                        "covers": covers_list,
+                        "binding": dict(binding),
+                    }
+                )
                 continue
-            exit_code = test.get("exit_code")
-            if not isinstance(exit_code, int):
-                exit_code = 0 if test.get("passed") else 1
-            ts = test.get("timestamp") or _now_iso()
-            log_rel = test.get("log")
+
+            command = suggestion.get("command") or suggestion.get("cmd")
+            if command is None and isinstance(suggestion.get("argv"), list):
+                raw_argv = [str(a) for a in suggestion["argv"]]
+                command = (
+                    {"executable": raw_argv[0], "args": raw_argv[1:]}
+                    if raw_argv
+                    else None
+                )
+            argv_t = command_argv(command) if command is not None else None
+            if argv_t is None:
+                # Sem comando: não inventa exit_code a partir de passed=.
+                materialized.append(
+                    {
+                        "name": name,
+                        "kind": kind,
+                        "passed": False,
+                        "suggestion_only": True,
+                        "executed_by": None,
+                        "covers": covers_list,
+                        "binding": dict(binding),
+                        "error": "sidecar sem comando executável",
+                    }
+                )
+                continue
+
+            argv = [str(a) for a in argv_t]
+            ts = _now_iso()
+            stdout = ""
+            stderr = ""
+            try:
+                proc = self.runner(
+                    argv,
+                    profile=profile,
+                    cwd=str(repo),
+                    capture_output=True,
+                    text=True,
+                    repo_root=str(repo),
+                )
+                exit_code = int(getattr(proc, "returncode", 1))
+                stdout = getattr(proc, "stdout", "") or ""
+                stderr = getattr(proc, "stderr", "") or ""
+            except Exception as exc:  # noqa: BLE001 — captura real da falha
+                exit_code = 1
+                stderr = str(exc)
+
+            safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name)[:80]
+            log_name = f"harness-test-{safe or index}.log"
+            log_body = f"argv: {argv!r}\nexit_code: {exit_code}\n\nstdout:\n{stdout}\n\nstderr:\n{stderr}\n"
+            dest = out_dir / log_name
+            dest.write_text(log_body, encoding="utf-8")
+            log_digest = sha256_of(dest)
+
             rec: dict[str, Any] = {
                 "timestamp": ts,
-                "command": cmd,
+                "argv": argv,
+                "command": " ".join(argv),
                 "exit_code": exit_code,
+                "log": log_name,
+                "log_sha256": log_digest,
+                "stdout_sha256": hash_bytes(stdout.encode("utf-8")),
+                "stderr_sha256": hash_bytes(stderr.encode("utf-8")),
+                "executed_by": HARNESS_EXECUTED_BY,
+                "kind": kind,
+                "binding": dict(binding),
+                "name": name,
             }
-            if isinstance(log_rel, str) and log_rel:
-                src = Path(log_rel)
-                if not src.is_absolute():
-                    src = out_dir / log_rel
-                if src.is_file():
-                    dest = out_dir / src.name
-                    if src.resolve() != dest.resolve():
-                        dest.write_bytes(src.read_bytes())
-                    rec["log"] = dest.name
-                    test["log"] = dest.name
             append_adapter_log(log_path, rec)
+
+            materialized.append(
+                {
+                    "name": name,
+                    "kind": kind,
+                    "passed": exit_code == 0,
+                    "command": {"executable": argv[0], "args": argv[1:]},
+                    "argv": argv,
+                    "exit_code": exit_code,
+                    "timestamp": ts,
+                    "log": log_name,
+                    "log_sha256": log_digest,
+                    "executed_by": HARNESS_EXECUTED_BY,
+                    "covers": covers_list,
+                    "binding": dict(binding),
+                }
+            )
+
+        if not log_path.exists():
+            log_path.write_text("", encoding="utf-8")
+        return materialized
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -442,6 +640,17 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--cli", default="devin")
     p.add_argument("--timeout", type=float, default=3600.0)
     p.add_argument("--no-cli", action="store_true", help="só coleta/commit (sem invocar devin)")
+    p.add_argument(
+        "--enforcement-contract",
+        type=Path,
+        default=None,
+        help="JSON com guarantees/evidence do sandbox externo (obrigatório p/ Devin real)",
+    )
+    p.add_argument(
+        "--allow-unenforced",
+        action="store_true",
+        help="perigoso: despacha sem enforcement (só dry-run/lab)",
+    )
     p.add_argument("--close-loop", action="store_true", help="roda verify após a execução")
     p.add_argument(
         "--validations",
@@ -455,7 +664,12 @@ def main(argv: list[str] | None = None) -> None:
     repo = args.repo.resolve()
     repository = args.repository or repo.name
     out = (args.out or (Path("runs") / run_id / "executor")).resolve()
-    adapter = DevinAdapter(cli_bin=args.cli)
+    contract = None
+    if args.enforcement_contract:
+        contract = EnforcementContract.from_dict(
+            json.loads(Path(args.enforcement_contract).read_text(encoding="utf-8"))
+        )
+    adapter = DevinAdapter(cli_bin=args.cli, enforcement_contract=contract)
 
     # Gate: run blocked/failed ou identidade divergente não despacha ao executor.
     root = (args.root or Path(".")).resolve()
@@ -496,18 +710,36 @@ def main(argv: list[str] | None = None) -> None:
         if default_prompt.is_file():
             prompt_file = default_prompt
 
-    execution = adapter.execute(
-        run_id=run_id,
-        repository=repository,
-        repo_path=repo,
-        out_dir=out,
-        layer=args.layer,
-        prompt=args.prompt,
-        prompt_file=prompt_file,
-        timeout=args.timeout,
-        invoke_cli=not args.no_cli,
-        require_cli=not args.no_cli,
-    )
+    try:
+        execution = adapter.execute(
+            run_id=run_id,
+            repository=repository,
+            repo_path=repo,
+            out_dir=out,
+            layer=args.layer,
+            prompt=args.prompt,
+            prompt_file=prompt_file,
+            timeout=args.timeout,
+            invoke_cli=not args.no_cli,
+            require_cli=not args.no_cli,
+            require_enforcement=not args.allow_unenforced and not args.no_cli,
+        )
+    except DispatchBlocked as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "run_id": run_id,
+                    "reason": "enforcement_insufficient",
+                    "missing": sorted(exc.missing),
+                    "error": str(exc),
+                    "error_type": "DispatchBlocked",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        sys.exit(2)
     print(json.dumps(execution.to_dict(), ensure_ascii=False, indent=2))
 
     if args.close_loop:

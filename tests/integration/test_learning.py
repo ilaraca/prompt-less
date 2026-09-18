@@ -67,6 +67,164 @@ def test_compare_evals_rejects_critical_case_regression():
     assert any("access_denied" in r for r in cmp["reasons"])
 
 
+def test_compare_evals_marks_noncritical_pass_to_fail_without_compensation():
+    """Troca pass→fail compensada por outro caso: ainda é regressão."""
+    baseline = {
+        "summary": {
+            "pass_rate": 0.5,
+            "avg_est_tokens": 100,
+            "claim_recall": 0.8,
+            "traceability_rate": 1.0,
+            "unexpected_inferences": 0,
+        },
+        "cases": [
+            {"case_id": "a", "ok": True, "critical": False},
+            {"case_id": "b", "ok": False, "critical": False},
+        ],
+    }
+    candidate = {
+        "summary": {
+            "pass_rate": 0.5,
+            "avg_est_tokens": 90,
+            "claim_recall": 0.9,
+            "traceability_rate": 1.0,
+            "unexpected_inferences": 0,
+        },
+        "cases": [
+            {"case_id": "a", "ok": False, "critical": False},
+            {"case_id": "b", "ok": True, "critical": False},
+        ],
+    }
+    cmp = compare_evals(baseline, candidate)
+    assert cmp["regression"] is True
+    assert cmp["decision"] == "reject"
+    assert cmp["improved"] is False
+    gate_a = next(g for g in cmp["case_gates"] if g["case_id"] == "a")
+    assert gate_a["regressed"] is True
+    assert gate_a["tolerated"] is False
+    assert any(r == "case_regressed:a" for r in cmp["reasons"])
+
+
+def test_compare_evals_records_explicit_noncritical_tolerance():
+    # pass_rate agregado igual: isola o gate por caso (sem side-effect de summary)
+    baseline = {
+        "summary": {"pass_rate": 1.0, "avg_est_tokens": 100, "claim_recall": 0.8},
+        "cases": [{"case_id": "flaky", "ok": True, "critical": False}],
+    }
+    candidate = {
+        "summary": {"pass_rate": 1.0, "avg_est_tokens": 90, "claim_recall": 0.9},
+        "cases": [{"case_id": "flaky", "ok": False, "critical": False}],
+    }
+    cmp = compare_evals(
+        baseline,
+        candidate,
+        tolerances=[
+            {
+                "case_id": "flaky",
+                "justification": "fixture known-flake until ticket 99",
+            }
+        ],
+    )
+    assert cmp["regression"] is False
+    assert cmp["decision"] == "accept"
+    assert cmp["tolerances_applied"]
+    assert cmp["tolerances_applied"][0]["justification"]
+    gate = cmp["case_gates"][0]
+    assert gate["regressed"] is True
+    assert gate["tolerated"] is True
+    assert cmp["improved"] is True  # claim_recall subiu; tolerância registrada
+
+
+def test_compare_evals_blocks_missing_or_incompatible_case_sets():
+    baseline = {
+        "summary": {"pass_rate": 1.0, "avg_est_tokens": 100},
+        "cases": [
+            {"case_id": "happy_path", "ok": True, "critical": False},
+            {"case_id": "access_denied", "ok": True, "critical": True},
+        ],
+    }
+    candidate = {
+        "summary": {"pass_rate": 1.0, "avg_est_tokens": 90},
+        "cases": [{"case_id": "happy_path", "ok": True, "critical": False}],
+    }
+    cmp = compare_evals(baseline, candidate)
+    assert cmp["comparable"] is False
+    assert cmp["decision"] == "reject"
+    assert any("incomparable_missing_cases" in r for r in cmp["reasons"])
+    missing_gate = next(
+        g for g in cmp["case_gates"] if g["case_id"] == "access_denied"
+    )
+    assert missing_gate.get("missing_in_candidate") is True
+
+
+def test_compare_evals_latency_jitter_alone_does_not_improve():
+    baseline = {
+        "summary": {
+            "pass_rate": 1.0,
+            "avg_est_tokens": 100,
+            "claim_recall": 1.0,
+            "traceability_rate": 1.0,
+            "unexpected_inferences": 0,
+            "avg_latency_ms": 50.0,
+        },
+        "cases": [{"case_id": "happy_path", "ok": True, "critical": False}],
+    }
+    candidate = {
+        "summary": {
+            "pass_rate": 1.0,
+            "avg_est_tokens": 100,
+            "claim_recall": 1.0,
+            "traceability_rate": 1.0,
+            "unexpected_inferences": 0,
+            "avg_latency_ms": 10.0,
+        },
+        "cases": [{"case_id": "happy_path", "ok": True, "critical": False}],
+    }
+    cmp = compare_evals(baseline, candidate)
+    assert cmp["regression"] is False
+    assert cmp["decision"] == "accept"
+    assert cmp["improved"] is False
+    assert cmp["metrics"]["avg_latency_ms"]["delta"] < 0
+
+
+def test_compare_evals_marks_dimension_regression():
+    baseline = {
+        "summary": {"pass_rate": 1.0, "avg_est_tokens": 100, "claim_recall": 1.0},
+        "cases": [
+            {
+                "case_id": "happy_path",
+                "ok": True,
+                "critical": False,
+                "score": {
+                    "required_gates": {
+                        "status_ok": True,
+                        "traceable": True,
+                    }
+                },
+            }
+        ],
+    }
+    candidate = {
+        "summary": {"pass_rate": 1.0, "avg_est_tokens": 100, "claim_recall": 1.0},
+        "cases": [
+            {
+                "case_id": "happy_path",
+                "ok": True,
+                "critical": False,
+                "score": {
+                    "required_gates": {
+                        "status_ok": True,
+                        "traceable": False,
+                    }
+                },
+            }
+        ],
+    }
+    cmp = compare_evals(baseline, candidate)
+    assert cmp["regression"] is True
+    assert any("dimension_regressed:happy_path:traceable" in r for r in cmp["reasons"])
+
+
 def test_decide_rejects_on_regression(tmp_path: Path):
     proposals = [
         {

@@ -319,6 +319,8 @@ def build_live_telemetry(
         "cache_read_tokens": live.usage.cache_read_tokens,
         "cache_hit": live.usage.cache_hit_ratio,
         "cost_usd": cost,
+        "cost_kind": "observed_billing",
+        "is_invoice": False,  # tabela local / billable observado ≠ fatura do vendor
         "live_provider": live.provider,
         "live_model": live.model,
         "response_id": live.response_id,

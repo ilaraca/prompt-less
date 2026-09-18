@@ -28,9 +28,43 @@ OVERLAY_NAME = "proposal-overlay.yaml"
 JOURNAL_NAME = "apply-journal.json"
 LOCK_NAME = ".apply-lock"
 
+# Política, verificador e dados de eval não podem ser alterados pelo candidato.
+PROTECTED_CONFIG_STEMS = frozenset(
+    {
+        "failure-patterns",
+        "playbook",
+        "permission_profiles",
+    }
+)
+PROTECTED_CHANGE_PREFIXES = (
+    "failure-patterns.",
+    "failure_patterns.",
+    "playbook.",
+    "playbooks.",
+    "permission_profiles.",
+    "evals.",
+    "learning.evals.",
+)
+
 
 class WorkspaceCollision(RuntimeError):
     """O diretório do workspace já existe e não foi pedido resume."""
+
+
+class ProtectedSurfaceError(RuntimeError):
+    """Candidato tentou mutar política, verificador ou dados de avaliação."""
+
+
+def is_protected_change(key: str) -> bool:
+    """True se a chave do playbook tocasse superfície protegida do avaliador."""
+    text = str(key or "").strip().lower().replace("_", "-")
+    if not text:
+        return False
+    stem = text.split(".", 1)[0]
+    if stem in {s.replace("_", "-") for s in PROTECTED_CONFIG_STEMS}:
+        return True
+    lowered = str(key or "").strip().lower()
+    return any(lowered.startswith(p) for p in PROTECTED_CHANGE_PREFIXES)
 
 
 def source_commit(root: Path) -> str:
@@ -295,6 +329,10 @@ def apply_proposals_to_candidate(
             key = change.get("key")
             if not key:
                 continue
+            if is_protected_change(str(key)):
+                raise ProtectedSurfaceError(
+                    f"candidato não pode alterar superfície protegida: {key}"
+                )
             _set_dotted(overlay, str(key), change.get("value"))
             applied_ids.append(str(proposal["id"]))
             proposal["status"] = "applied_to_candidate"

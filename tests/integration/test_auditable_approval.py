@@ -24,6 +24,7 @@ from src.runtime.approval import (
     request_approval,
     show_history,
 )
+from src.executors.evidence import make_evidence_binding, spec_content_hash
 from src.runtime.atomic_io import read_json
 from src.spec.builder import build_canonical_spec
 
@@ -63,9 +64,31 @@ def _passing_execution(
     )
     runner = tmp_path / "runner"
     log_file = runner / "mvnw-test.txt"
-    adapter_log = write_adapter_log(runner / "adapter-log.jsonl", [mvnw_log_record()])
-    rf = spec.requirements[0].id
+    bind = make_evidence_binding(
+        run_id=run_id,
+        repository="bff-cliente",
+        base_commit=base,
+        result_commit=result,
+        spec_hash=spec_content_hash(spec),
+    )
     ac = spec.acceptance_criteria[0].id
+    test = evidenced_test(
+        name="ClienteServiceTest",
+        log_file=log_file,
+        covers=[ac],
+        binding=bind,
+    )
+    adapter_log = write_adapter_log(
+        runner / "adapter-log.jsonl",
+        [
+            mvnw_log_record(
+                log=log_file.name,
+                binding=bind,
+                log_sha256=test["log_sha256"],
+            )
+        ],
+    )
+    rf = spec.requirements[0].id
     execution = ExecutionResult(
         run_id=run_id,
         agent="devin",
@@ -78,7 +101,7 @@ def _passing_execution(
             "tests/ClienteServiceTest.java",
         ],
         commands_executed=[MVNW_TEST],
-        tests=[evidenced_test(name="ClienteServiceTest", log_file=log_file)],
+        tests=[test],
         requirement_traceability={
             rf: ["src/main/java/ClienteService.java"],
             ac: ["tests/ClienteServiceTest.java"],

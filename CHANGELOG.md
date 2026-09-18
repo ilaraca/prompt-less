@@ -7,8 +7,44 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Added
+
+- **Contexto crítico e custo completo** (`38-critical-context-budget`):
+  `_fit_to_budget` reserva RF/AC/contratos/evidências (`dynamic.critical`) e
+  deixa de cortar conteúdo crítico em silêncio. Omissões não-críticas trazem
+  `reason` + `ref` recuperável; excesso do mínimo crítico bloqueia ou exige
+  split (`CRITICAL_BUDGET_*`, `budget_report.diagnosis` / `split_plan`).
+  `task_metrics` inclui `attempts` e duração de validação/reparo; custo distingue
+  `estimate` vs `observed_billing` e nunca marca estimativa como fatura
+  (`is_invoice=false`). Compressão/híbrido enriquecem omissões com refs.
+  Testes: `tests/integration/test_critical_context_budget.py`.
+- **Regressões por caso e experimento controlado** (`39-case-regression-gates`):
+  `compare_evals` marca pass→fail em qualquer caso (mesmo com `pass_rate`
+  agregado igual), bloqueia conjuntos incomparáveis e exige tolerância não
+  crítica explícita (`justification` → `tolerances_applied`). Dimensões
+  `required_gates` True→False também regressam. Promoção ignora jitter de
+  latência. `improve` registra experimento (referência, candidato, diff,
+  condições, `reserved_cases`; hold-out default `eval_adversarial`) e o
+  candidato não pode mutar `failure-patterns` / `playbook` /
+  `permission_profiles`.
+- **Limites efetivos do executor** (`37-executor-enforcement`):
+  `EnforcedRunner` aplica writes/comandos, scrub de credenciais, timeout,
+  processos/memória e negação de rede *durante* a execução; profiles ganham
+  `limits` + `required_capabilities`; despacho Devin exige
+  `EnforcementContract` (evidência em `enforcement-contract.json`) ou bloqueia
+  (`DispatchBlocked`). Worktree/`shell=False` documentados como ≠ sandbox.
+  Testes: `tests/integration/test_executor_enforcement.py`.
+
 ### Changed
 
+- **Política completa no reparo** (`36-repair-policy`): `build_repair_request`
+  deixa de filtrar só padrões protegidos — reaplica profile da camada +
+  `repo_root` (`resolve_repo_path` / realpath / symlink) a cada tentativa.
+  Escapes (absoluto, `..`, symlink fora do repo) e writes negados vão para
+  `denied_paths`; `TEST_FAILED` só amplia `editable_surface` se autorizado;
+  IDs RF/AC não são caminhos; `FILE_OUT_OF_SCOPE` permanece só em
+  `required_reverts`; `attempt > max` → `exhausted` com `unresolved=true`.
+  `close_loop` passa profile/`--repo` e sempre re-verifica antes do repair.
 - **Gates obrigatórios de avaliação** (`30-eval-required-gates`): `score_case()`
   separa diagnóstico (`layer_scores`) de aprovação (`required_gates` /
   `fail_reasons`). Dimensões obrigatórias — spec presente/com sinais, artefatos
@@ -20,6 +56,17 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Evidência de teste independente** (`35-independent-test-evidence`):
+  `_materialize_test_evidence` deixa de traduzir `passed=True` do sidecar em
+  `exit_code=0` — o runner do harness executa o comando sugerido, captura
+  argv/stdout/stderr/exit reais e grava binding (`run_id`, repositório,
+  commits, `spec_hash`) no JSONL. Sidecar é só sugestão (`command`/`kind`/
+  `covers`). Verify exige `executed_by=harness`, rejeita log ausente/
+  incompleto/adulterado/de outra run, e bloqueia AC obrigatório sem prova
+  comportamental (`AC_WITHOUT_BEHAVIORAL_EVIDENCE` — arquivo existente não
+  basta). Stubs/skips ficam em `evidence_hashes.test_kinds.stub_or_skip`,
+  separados de E2E real. Testes em
+  `tests/integration/test_independent_test_evidence.py`.
 - **Revisão obrigatória bloqueante** (`33-required-review-gate`): match lexical
   com `requires_review=true` deixa de ser só warning — o gate emite
   `REQUIRED_REVIEW_PENDING` até `review_decisions` registrar ator, justificativa

@@ -12,6 +12,7 @@ from src.domain.spec import CanonicalSpec
 from src.executors import DevinAdapter, build_repair_request, verify_execution
 from src.executors.base import ExecutionResult
 from src.executors.policy import check_command_allowed, check_write_allowed, load_profiles
+from src.executors.evidence import make_evidence_binding, spec_content_hash
 from src.spec.builder import build_canonical_spec
 
 from tests.integration.evidence_support import (
@@ -52,11 +53,34 @@ def _passing_bundle(tmp_path: Path, spec: CanonicalSpec) -> tuple[ExecutionResul
     )
     runner = tmp_path / "runner"
     log_file = runner / "mvnw-test.txt"
-    adapter_log = write_adapter_log(runner / "adapter-log.jsonl", [mvnw_log_record()])
-    rf = spec.requirements[0].id
+    run_id = "run-ok-001"
+    bind = make_evidence_binding(
+        run_id=run_id,
+        repository="bff-cliente",
+        base_commit=base,
+        result_commit=result,
+        spec_hash=spec_content_hash(spec),
+    )
     ac = spec.acceptance_criteria[0].id
+    test = evidenced_test(
+        name="ClienteServiceTest",
+        log_file=log_file,
+        covers=[ac],
+        binding=bind,
+    )
+    adapter_log = write_adapter_log(
+        runner / "adapter-log.jsonl",
+        [
+            mvnw_log_record(
+                log=log_file.name,
+                binding=bind,
+                log_sha256=test["log_sha256"],
+            )
+        ],
+    )
+    rf = spec.requirements[0].id
     execution = ExecutionResult(
-        run_id="run-ok-001",
+        run_id=run_id,
         agent="devin",
         repository="bff-cliente",
         layer="bff",
@@ -67,7 +91,7 @@ def _passing_bundle(tmp_path: Path, spec: CanonicalSpec) -> tuple[ExecutionResul
             "tests/ClienteServiceTest.java",
         ],
         commands_executed=[MVNW_TEST],
-        tests=[evidenced_test(name="ClienteServiceTest", log_file=log_file)],
+        tests=[test],
         requirement_traceability={
             rf: ["src/main/java/ClienteService.java"],
             ac: ["tests/ClienteServiceTest.java"],
@@ -151,18 +175,40 @@ def test_verify_fails_out_of_scope_and_unmapped(tmp_path: Path):
     )
     runner = tmp_path / "runner"
     log_file = runner / "mvnw-test.txt"
+    run_id = "run-bad-001"
+    bind = make_evidence_binding(
+        run_id=run_id,
+        repository="bff-cliente",
+        base_commit=base,
+        result_commit=result_sha,
+        spec_hash=spec_content_hash(spec),
+    )
+    test = evidenced_test(
+        name="ClienteServiceTest",
+        log_file=log_file,
+        command="terraform apply",
+        exit_code=1,
+        binding=bind,
+    )
     adapter_log = write_adapter_log(
         runner / "adapter-log.jsonl",
         [
             {
                 "timestamp": TEST_TS,
+                "argv": ["terraform", "apply"],
                 "command": "terraform apply",
                 "exit_code": 1,
+                "executed_by": "harness",
+                "kind": "unit",
+                "name": "ClienteServiceTest",
+                "binding": bind,
+                "log": log_file.name,
+                "log_sha256": test["log_sha256"],
             }
         ],
     )
     result = ExecutionResult(
-        run_id="run-bad-001",
+        run_id=run_id,
         agent="devin",
         repository="bff-cliente",
         layer="bff",
@@ -174,14 +220,7 @@ def test_verify_fails_out_of_scope_and_unmapped(tmp_path: Path):
             ".github/workflows/deploy.yml",
         ],
         commands_executed=["terraform apply"],
-        tests=[
-            evidenced_test(
-                name="ClienteServiceTest",
-                log_file=log_file,
-                command="terraform apply",
-                exit_code=1,
-            )
-        ],
+        tests=[test],
         unresolved_items=["auth edge case"],
         requirement_traceability={},
         approved=True,
@@ -204,8 +243,16 @@ def test_verify_no_tests_is_error_for_code_change(tmp_path: Path):
         base_files={"README.md": "# x\n"},
         extra_result={"src/main/java/Foo.java": "class Foo {}\n"},
     )
+    bind = make_evidence_binding(
+        run_id="r",
+        repository="bff-cliente",
+        base_commit=base,
+        result_commit=result_sha,
+        spec_hash=spec_content_hash(spec),
+    )
     adapter_log = write_adapter_log(
-        tmp_path / "runner" / "adapter-log.jsonl", [mvnw_log_record()]
+        tmp_path / "runner" / "adapter-log.jsonl",
+        [mvnw_log_record(binding=bind)],
     )
     result = ExecutionResult(
         run_id="r",
@@ -234,7 +281,7 @@ def test_needs_approval_gate(tmp_path: Path):
     spec = _mini_spec()
     result, repo, adapter_log = _passing_bundle(tmp_path, spec)
     result.approved = False
-    result.run_id = "run-pending-001"
+    # Mantém o mesmo run_id do binding — só muda approved.
     verify = verify_execution(
         result, spec, layer="bff", repo_path=repo, adapter_log=adapter_log
     )
@@ -285,7 +332,9 @@ def test_repair_request_requires_approval(tmp_path: Path):
     verify = verify_execution(
         result, spec, layer="bff", repo_path=repo, adapter_log=adapter_log
     )
-    repair = build_repair_request(verify, result, attempt=1)
+    repair = build_repair_request(
+        verify, result, attempt=1, profile=load_profiles()["bff"], layer="bff", repo_root=repo
+    )
     assert repair is not None
     assert repair["status"] == "repair_requested"
     assert repair["requires_approval"] is True
@@ -293,8 +342,12 @@ def test_repair_request_requires_approval(tmp_path: Path):
     assert ".github/workflows/deploy.yml" in repair["required_reverts"]
     assert "infra/prod/deploy.yaml" not in repair["editable_surface"]
     assert "RF-001" not in repair["editable_surface"]
-    exhausted = build_repair_request(verify, result, attempt=3)
+    assert "src/main/java/ClienteService.java" in repair["editable_surface"]
+    exhausted = build_repair_request(
+        verify, result, attempt=3, profile=load_profiles()["bff"], layer="bff"
+    )
     assert exhausted["status"] == "exhausted"
+    assert exhausted["unresolved"] is True
 
 
 def test_devin_adapter_prepare_and_collect(tmp_path: Path):
