@@ -1085,8 +1085,10 @@ Vínculo claim → RF/AC/erro é um `ClaimLink` (`method`, `score`, `requires_re
 Matching lexical com score < 0.6 marca revisão **obrigatória**: o quality gate
 emite erro `REQUIRED_REVIEW_PENDING` e bloqueia implementação até haver
 `review_decisions` explícita (responsável, justificativa, `reviewed_spec_version`
-+ fingerprint do claim). Aprovação libera; rejeição (`REQUIRED_REVIEW_REJECTED`)
-e evidência/spec incompatível (`REQUIRED_REVIEW_STALE`) continuam bloqueando.
++ fingerprint do claim **e** do conteúdo do RF/AC/erro). Aprovação libera;
+rejeição (`REQUIRED_REVIEW_REJECTED`) e evidência/spec/conteúdo incompatível
+(`REQUIRED_REVIEW_STALE`) continuam bloqueando — inclusive quando só o texto do
+requisito muda com os mesmos IDs, claim e versão de schema.
 Confiança numérica do match **não** substitui evidência nem aprovação humana.
 O `status` do requisito não muda por causa do score (`max_unreviewed_inferences`
 nos evals continua contando só `ResolvedInt`). Avisos informativos

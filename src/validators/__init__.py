@@ -91,8 +91,13 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
 
     claims_by_id = {c.id: c for c in spec.claims}
 
-    def _check_required_review(subject_id: str, links: list[Any]) -> None:
+    def _check_required_review(subject: Any, links: list[Any]) -> None:
         """requires_review em ClaimLink bloqueia até decisão humana compatível."""
+        subject_id = (
+            subject.id
+            if hasattr(subject, "id")
+            else str((subject or {}).get("id") or "")
+        )
         for link in links:
             requires = (
                 link.requires_review
@@ -134,6 +139,7 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                 decision,
                 spec_version=spec.version,
                 claim=claim,
+                subject=subject,
                 link=link,
             ):
                 issues.append(
@@ -142,8 +148,9 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                         severity="error",
                         message=(
                             f"{subject_id}/{claim_id}: decisão de "
-                            f"{decision.actor} inválida — evidência ou "
-                            f"spec mudaram desde a revisão "
+                            f"{decision.actor} inválida — evidência, "
+                            f"conteúdo do requisito/aceite ou spec "
+                            f"mudaram desde a revisão "
                             f"(spec {decision.reviewed_spec_version!r})"
                         ),
                         subject_id=subject_id,
@@ -234,7 +241,7 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                 )
             )
         _check_source_claims(rf.id, list(rf.source_claims))
-        _check_required_review(rf.id, getattr(rf, "claim_links", None) or [])
+        _check_required_review(rf, getattr(rf, "claim_links", None) or [])
 
     for ac in spec.acceptance_criteria:
         if ac.requirement_id not in rf_ids:
@@ -247,11 +254,11 @@ def validate_traceability(spec: CanonicalSpec) -> list[ValidationIssue]:
                 )
             )
         _check_source_claims(ac.id, list(ac.source_claims))
-        _check_required_review(ac.id, getattr(ac, "claim_links", None) or [])
+        _check_required_review(ac, getattr(ac, "claim_links", None) or [])
 
     for err in spec.errors:
         _check_source_claims(err.id, list(err.source_claims))
-        _check_required_review(err.id, getattr(err, "claim_links", None) or [])
+        _check_required_review(err, getattr(err, "claim_links", None) or [])
 
     for q in spec.open_questions:
         _check_source_claims(q.id, list(q.source_claims))
