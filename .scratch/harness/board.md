@@ -232,7 +232,7 @@ Base: pai .
 
 | Ticket | Kanban | Papel | Onde está o código |
 |---|---|---|---|
-| 38-critical-context-budget | **In progress** | filha |  ·  |
+| 38-critical-context-budget | **In progress** | filha | `.worktrees/38-critical-context-budget` · `feature/critical-context-budget` |
 | (pai) onda-frontier | — | integra |  ·  |
 
 ## Série 4 — Conformidade com o roadmap (frontier ativa)
