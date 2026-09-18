@@ -222,7 +222,7 @@ Base: pai `87487fd`. Filhas **não** abrem PR contra `main`.
 | 35-independent-test-evidence | **In progress** | filha | `.worktrees/35-independent-test-evidence` · `feature/independent-test-evidence` |
 | 36-repair-policy | **Feedback** | filha | `.worktrees/36-repair-policy` · `feature/repair-policy` |
 | 37-executor-enforcement | **Feedback** | filha, HEAD `e4d458b` | `.worktrees/37-executor-enforcement` · `feature/executor-enforcement` |
-| 39-case-regression-gates | **In progress** | filha | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
+| 39-case-regression-gates | **Feedback** | filha, HEAD `e453a3d` | `.worktrees/39-case-regression-gates` · `feature/case-regression-gates` |
 | (pai) onda-frontier | — | integra filhas | `.worktrees/onda-merge` · `feature/onda-frontier` |
 
 
@@ -252,7 +252,7 @@ ao board, não números de issues do GitHub; o detalhamento desta série está a
 | 36-repair-policy | P1.2 | Reaplicar política a toda superfície de reparo | **Feedback** | 30, 31, 32, 33, 34 |
 | 37-executor-enforcement | P1.1 | Limites efetivos durante a execução do agente | **Feedback** | 30, 31, 32, 33, 34 |
 | 38-critical-context-budget | P2.2 | Preservação de conteúdo crítico e custo completo | Todo | 35, 36, 37 |
-| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **In progress** | 30, 31, 32 |
+| 39-case-regression-gates | P0.1 / P3 | Regressões por caso e experimento controlado | **Feedback** | 30, 31, 32 |
 
 ### Ordem de implementação e fechamento
 
@@ -474,15 +474,18 @@ sob condições equivalentes e proteger política, verificador e avaliações.
 
 **Aceite:**
 
-- [ ] Caso aprovado → reprovado é explicitamente marcado mesmo com taxa igual.
-- [ ] Regressão crítica bloqueia; qualquer tolerância não crítica é explícita,
+- [x] Caso aprovado → reprovado é explicitamente marcado mesmo com taxa igual.
+- [x] Regressão crítica bloqueia; qualquer tolerância não crítica é explícita,
       justificada e registrada, nunca compensação silenciosa.
-- [ ] Caso removido ou conjunto incompatível impede comparação conclusiva.
-- [ ] Experimento registra referência, candidato, diff, condições e casos reservados.
-- [ ] Promoção exige benefício demonstrável, sem depender de jitter de latência.
-- [ ] Avaliador e dados de avaliação não são alterados pelo candidato avaliado.
+- [x] Caso removido ou conjunto incompatível impede comparação conclusiva.
+- [x] Experimento registra referência, candidato, diff, condições e casos reservados.
+- [x] Promoção exige benefício demonstrável, sem depender de jitter de latência.
+- [x] Avaliador e dados de avaliação não são alterados pelo candidato avaliado.
 
 **Código:** `src/learning/evals.py`, `accept.py`, workspaces e apply/rollback.
+
+**Kanban:** Feedback · HEAD filha `e453a3d` · ver
+`issues/39-case-regression-gates.md` § Implementation note.
 
 ## Dependências (visão histórica — séries 1–3)
 
