@@ -45,7 +45,7 @@ Receber insumos de produto/UX/negócio e emitir **artefato(s) finais sem prosa**
 | **Gate antes de implementar** | Canonical Spec bloqueia ambiguidade (ex.: HTTP indefinido) com `PipelineBlocked` |
 | **Verify pós-executor** | `close_loop` confere o que ocorreu no Git e nos logs do adapter (não o payload) vs spec + policy |
 | **Promoção com aprovação humana** | `src.approval` vincula ator + spec + relatório + commit; HMAC detecta adulteração |
-| **Plano coordenado multi-repo** | `plan_repos` gera ondas/contratos a partir do mapa de serviços |
+| **Plano coordenado multi-repo** | `plan_repos` gera ondas/contratos a partir de dependências observadas (código + Canonical Spec); camada é fallback revisável |
 | **Melhoria sem regressão silenciosa** | `improve` aplica a proposta só no candidato, compara evals distintas e só então promove status |
 
 ### Onde *não* é a melhor ferramenta (ainda)
@@ -99,7 +99,7 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
         (pós-execução, opcional)
  [close_loop] ───────────── Git diff × adapter log × spec × policy → verify / repair
  [approval] ─────────────── request-approval → approve|reject → promote (HMAC)
- [plan_repos] ───────────── mapa-servicos → implementation_plan (ondas)
+ [plan_repos] ───────────── mapa + evidência de código/contratos → implementation_plan (ondas)
  [improve] ──────────────── diagnose → apply no candidato → evals distintas → accepted / approved_for_experiment / rejected
 ```
 
@@ -1135,10 +1135,13 @@ Fora deste ticket: scan de dependência no CI (`25`), cadeia tamper-evident (`19
 
 ### Plano multi-repo (`plan_repos`)
 
+O plano usa **dependências observadas** (OpenAPI clients, imports, URLs, eventos, arquivos de build e contratos do Canonical Spec). Cada aresta tem `from`, `to`, tipo, arquivo/símbolo, confiança e o **motivo**. Topologia por camada permanece só como fallback `origin: heuristic` + `requires_review`. Ciclos, contratos ausentes e repositório compartilhado sem `coordenacao` bloqueiam o scheduler. `ready_for_parallel_execution` exige `--reviewed` e ausência de conflito — a execução concorrente em si é o ticket `13`.
+
 ```bash
 .venv/bin/python -m src.plan_repos
 .venv/bin/python -m src.plan_repos --service gestao-de-ofertas --out runs/plan/
-# → implementation_plan.yaml + .json (ondas, contratos, origin: heuristic, requires_review)
+.venv/bin/python -m src.plan_repos --workspace ~/dev/repos --spec runs/<id>/artifacts/canonical-spec.yaml --reviewed
+# → implementation_plan.yaml + .json (dependencies, ondas, cycles, scheduler_blockers)
 ```
 
 ### Autoaperfeiçoamento (`improve`)
@@ -1238,7 +1241,7 @@ pipeline/
     ├── renderers/                 # história/PRD/OpenAPI/Mermaid a partir do IR
     ├── executors/                 # policy, verify, evidence (Git+logs), loop, Devin, safe_exec
     ├── hardening/                 # debugger, input scan, claim tools, recall
-    ├── planning/                  # grafo, camadas, plan
+    ├── planning/                  # grafo observado, camadas (fallback), plan
     └── learning/                  # evals, proposals, accept, failure_patterns
 ```
 
@@ -1460,6 +1463,8 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
   na rota casada (`origin: observed`); fora disso permanece `unresolved`
 - Sem `repo_index`, história/PRD declaram *índice não aplicado* e não afirmam
   “sem gaps”; heurística nunca é apresentada como fato
+- Plano multi-repo sem evidência de código cai na topologia por camada
+  (`origin: heuristic`, exige revisão); execução paralela das ondas ainda não roda (ticket `13`)
 - Resumo de docs é **extrativo por regex**, não LLM small (bom custo; pode perder nuance)
 - Tokenizer oficial cobre OpenAI via `tiktoken`; Anthropic/Gemini e ausência da lib usam heurística `chars÷4` (`method=heuristic`), nunca como contagem exata
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`

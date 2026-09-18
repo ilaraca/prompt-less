@@ -19,6 +19,15 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Added
 
+- **Plano multi-repo baseado em evidência** (`24-evidence-based-planning`):
+  dependências observadas (OpenAPI clients, imports, URLs, eventos, arquivos
+  de build e contratos do Canonical Spec) passam a ser a autoridade do
+  `implementation_plan`; cada aresta registra `from`/`to`, tipo, arquivo/símbolo,
+  confiança e o motivo
+- Grafo global detecta repositórios compartilhados e ciclos; fallback por
+  camada fica `origin: heuristic` e `requires_review`;
+  `ready_for_parallel_execution` só fica verdadeiro com plano `--reviewed` e
+  sem conflito (ciclos e contratos ausentes bloqueiam o scheduler)
 - **Evals de candidato** (`23-candidate-evals`): `improve` materializa workspaces
   distintos, aplica a proposta só no candidato e compara evals com gate por
   caso crítico (não só pass rate agregado)
@@ -164,6 +173,9 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### Changed
 
+- `ready_for_parallel_execution` no relatório do plano exige plano revisado e
+  ausência de conflito (ciclo, contrato ausente, repo compartilhado sem
+  `coordenacao`); topologia por camada deixa de ser autoridade
 - `improve` deixa de comparar a mesma eval duas vezes: baseline e candidate
   são workspaces/commits distintos; `accepted` só existe depois do apply no
   candidato
