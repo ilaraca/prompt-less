@@ -29,7 +29,12 @@ from src.preprocess import preprocess  # noqa: E402
 from src.rag_compress import compress_rag  # noqa: E402
 from src.runtime.atomic_io import atomic_write_json, atomic_write_text  # noqa: E402
 from src.reason import build_llm_package, dry_run_scaffold  # noqa: E402
-from src.renderers import render_historia, render_prd  # noqa: E402
+from src.renderers import (  # noqa: E402
+    render_historia,
+    render_mermaid,
+    render_openapi,
+    render_prd,
+)
 from src.repo_index import load_index, service_evidence  # noqa: E402
 from src.runtime import RunContext, RunStore, context_subdir  # noqa: E402
 from src.servicos import (  # noqa: E402
@@ -41,7 +46,11 @@ from src.servicos import (  # noqa: E402
 )
 from src.spec.builder import build_canonical_spec  # noqa: E402
 from src.state_store import write_state  # noqa: E402
-from src.validators import PipelineBlocked, validate_spec  # noqa: E402
+from src.validators import (  # noqa: E402
+    PipelineBlocked,
+    validate_derived_artifact,
+    validate_spec,
+)
 
 
 def load_cfg() -> dict:
@@ -51,6 +60,42 @@ def load_cfg() -> dict:
 def _also_emit(cfg: dict, tipo: str) -> list[str]:
     art = (cfg.get("artifacts") or {}).get(tipo) or {}
     return list(art.get("also_emit") or [])
+
+
+def _validations_dir(artifacts_root: Path, context: str | None) -> Path:
+    base = artifacts_root.parent / "validations"
+    return base / context if context else base
+
+
+def _gate_derived(
+    tipo: str,
+    artifact: str,
+    spec: Any,
+    *,
+    context: str | None,
+    artifacts_root: Path | None,
+) -> None:
+    """Artefato derivado só é emitido se não divergir do IR (fail-closed)."""
+    validation = validate_derived_artifact(tipo, artifact, spec)
+    if not validation.issues:
+        return
+    report_path: Path | None = None
+    if artifacts_root is not None:
+        val_dir = _validations_dir(artifacts_root, context)
+        val_dir.mkdir(parents=True, exist_ok=True)
+        report_path = val_dir / f"{tipo}-validation.json"
+        report_path.write_text(
+            json.dumps(validation.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    if validation.has_errors:
+        raise PipelineBlocked(
+            validation,
+            spec,
+            context=context,
+            reason="derived_artifact_divergence",
+            report_path=str(report_path) if report_path else None,
+        )
 
 
 def _build_one(
@@ -118,6 +163,10 @@ def _build_one(
                 engenharia=slim.get("engenharia") or {},
                 consolidated=rag.get("consolidated") or "",
             )
+        elif tipo == "openapi" and canonical_spec is not None:
+            artifact = render_openapi(canonical_spec, template)
+        elif tipo == "mermaid" and canonical_spec is not None:
+            artifact = render_mermaid(canonical_spec, template)
         else:
             artifact = dry_run_scaffold(
                 tipo,
@@ -130,6 +179,15 @@ def _build_one(
             )
     else:
         raise NotImplementedError("Mode --live: plugar client OpenAI/Claude no reason.py")
+
+    if canonical_spec is not None:
+        _gate_derived(
+            tipo,
+            artifact,
+            canonical_spec,
+            context=context,
+            artifacts_root=artifacts_root,
+        )
 
     out = emit(tipo, artifact, context=context, root=emit_root, subdir=emit_subdir)
     return out, pkg_path, context_pkg
@@ -376,11 +434,12 @@ def run(
             errors=len(exc.validation.errors),
             context=ctx,
         )
-        report = (
-            run_ctx.context_validations_dir(ctx) / "spec-validation.json"
-            if ctx
-            else run_ctx.validations_dir / "spec-validation.json"
-        )
+        if exc.report_path:
+            report = Path(exc.report_path)
+        elif ctx:
+            report = run_ctx.context_validations_dir(ctx) / "spec-validation.json"
+        else:
+            report = run_ctx.validations_dir / "spec-validation.json"
         claims: list[dict[str, Any]] = []
         for claim in (exc.spec.claims if exc.spec else []):
             payload = claim.to_dict()
@@ -391,7 +450,7 @@ def run(
         return {
             "context": ctx,
             "status": "blocked",
-            "reason": "spec_validation_failed",
+            "reason": exc.reason,
             "validation": exc.validation.to_dict(),
             "report": str(report) if report.exists() else None,
             "questions": [i.message for i in exc.validation.errors],

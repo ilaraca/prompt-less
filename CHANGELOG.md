@@ -43,6 +43,21 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 - Testes (`tests/integration/test_contextual_provenance.py`): multi-contexto
   sem perda, dedup por identidade, adulteração de evento/artefato e match
   de baixa confiança
+- **OpenAPI e Mermaid derivados do IR** (`src/renderers/openapi.py`,
+  `src/renderers/mermaid.py`): `run openapi|mermaid` passa a renderizar a partir
+  do Canonical Spec — paths, métodos, schemas e status saem de
+  `operations`/`errors`, não do scaffold legado
+- **Schemas de request/response no Canonical Spec** (`DataSchema`/`SchemaField`):
+  campos da UI viram schema rastreável, com `origin` e `requires_review` por
+  campo (tipo inferido nunca aparece como declarado)
+- **Gate de artefato derivado** (`validate_derived_artifact`): validação
+  estrutural do OpenAPI gerado (versão, paths, responses, `$ref`, parâmetros de
+  path) mais checagem anti-divergência contra o IR; divergência bloqueia o emit
+  (`reason: derived_artifact_divergence`) e grava
+  `validations/<tipo>-validation.json`
+- **Golden tests** (`tests/integration/test_derived_artifacts.py`,
+  `tests/fixtures/golden/`): falham se IR, história, PRD, OpenAPI e Mermaid
+  divergirem, e se um status/campo/path inventado escapar
 
 ### Changed
 
@@ -58,10 +73,15 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   arquivo já commitado)
 - História/PRD passam a listar os claims utilizados na seção Proveniência
 - `provenance.json` agrega `spec.claims` (inclui sintéticos `CLM-*-SYN-*`)
+- `Operation` do IR ganha `request_schema`, `response_schema` e `unresolved`;
+  `success_status` só é resolvido com evidência (um único 2xx declarado nas
+  decisões e uma única operação) e agora carrega `source_claims`
+- Método/path ausentes na UI ficam `unresolved`, viram pergunta aberta não
+  bloqueante e aparecem como `x-unresolved-operations` no OpenAPI
+- PRD lista ações com o status de sucesso do IR ou `unresolved` explícito
 
 ### Planejado (série 2)
 
-- IR → OpenAPI / Mermaid a partir do Canonical Spec
 - Modo `--live` (OpenAI / Claude)
 - Devin CLI real no `close_loop`
 - Orquestração declarativa via `pipeline.yaml` (stages)

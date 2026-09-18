@@ -73,6 +73,12 @@ class ResolvedInt:
     origin: str = "default"  # default | declared | inferred | observed
     confidence: float = 0.4
     requires_review: bool = True
+    source_claims: list[str] = field(default_factory=list)
+
+    @property
+    def resolved(self) -> bool:
+        """Só é resolvido quando há valor e evidência que não exige revisão."""
+        return self.value is not None and not self.requires_review
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -89,6 +95,7 @@ class ResolvedInt:
                     0.4 if raw.get("confidence") is None else raw["confidence"]
                 ),
                 requires_review=bool(raw.get("requires_review", True)),
+                source_claims=[str(c) for c in (raw.get("source_claims") or [])],
             )
         if raw is None:
             return cls(value=None, origin="default", confidence=0.4, requires_review=True)
@@ -101,6 +108,66 @@ class ResolvedInt:
 
 
 @dataclass
+class SchemaField:
+    """Campo de schema com tipo rastreado — tipo inferido exige revisão."""
+
+    name: str
+    type: str | None = None
+    required: bool = False
+    origin: str = "declared"  # declared | inferred | default
+    requires_review: bool = False
+    source_claims: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> "SchemaField":
+        if isinstance(raw, SchemaField):
+            return raw
+        data = dict(raw or {})
+        origin = str(data.get("origin") or "declared")
+        return cls(
+            name=str(data.get("name") or ""),
+            type=data.get("type"),
+            required=bool(data.get("required")),
+            origin=origin,
+            requires_review=bool(data.get("requires_review", origin != "declared")),
+            source_claims=[str(c) for c in (data.get("source_claims") or [])],
+        )
+
+
+@dataclass
+class DataSchema:
+    """Schema de request/response derivado do IR (sem campo fora do IR)."""
+
+    id: str
+    fields: list[SchemaField] = field(default_factory=list)
+    origin: str = "declared"
+
+    def field_names(self) -> list[str]:
+        return [f.name for f in self.fields]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "origin": self.origin,
+            "fields": [f.to_dict() for f in self.fields],
+        }
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> "DataSchema":
+        if isinstance(raw, DataSchema):
+            return raw
+        data = dict(raw or {})
+        return cls(
+            id=str(data.get("id") or ""),
+            fields=[SchemaField.from_raw(f) for f in (data.get("fields") or [])],
+            origin=str(data.get("origin") or "declared"),
+        )
+
+
+@dataclass
 class Operation:
     id: str
     name: str
@@ -109,6 +176,14 @@ class Operation:
     path: str | None = None
     success_status: ResolvedInt | int | None = None
     error_ids: list[str] = field(default_factory=list)
+    request_schema: DataSchema | None = None
+    response_schema: DataSchema | None = None
+    unresolved: list[str] = field(default_factory=list)
+
+    def resolved_success_status(self) -> int | None:
+        """Status de sucesso apenas quando há evidência (nunca default)."""
+        status = ResolvedInt.from_raw(self.success_status)
+        return status.value if status.resolved else None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -126,7 +201,27 @@ class Operation:
                 confidence=1.0,
                 requires_review=False,
             ).to_dict()
+        data["request_schema"] = (
+            self.request_schema.to_dict() if self.request_schema else None
+        )
+        data["response_schema"] = (
+            self.response_schema.to_dict() if self.response_schema else None
+        )
         return data
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> "Operation":
+        if isinstance(raw, Operation):
+            return raw
+        data = {
+            k: v for k, v in dict(raw or {}).items() if k in cls.__dataclass_fields__
+        }
+        if "success_status" in data:
+            data["success_status"] = ResolvedInt.from_raw(data["success_status"])
+        for key in ("request_schema", "response_schema"):
+            if data.get(key) is not None:
+                data[key] = DataSchema.from_raw(data[key])
+        return cls(**data)
 
 
 @dataclass
@@ -191,3 +286,20 @@ class CanonicalSpec:
 
     def requirement_ids(self) -> set[str]:
         return {r.id for r in self.requirements}
+
+    def errors_by_id(self) -> dict[str, SpecError]:
+        return {e.id: e for e in self.errors}
+
+    def errors_of(self, operation: Operation) -> list[SpecError]:
+        """Erros do IR referenciados pela operação, na ordem do IR."""
+        wanted = set(operation.error_ids)
+        return [e for e in self.errors if e.id in wanted]
+
+    def http_statuses(self) -> set[int]:
+        """Único conjunto de status que artefatos derivados podem declarar."""
+        statuses = {int(e.status) for e in self.errors}
+        for op in self.operations:
+            resolved = op.resolved_success_status()
+            if resolved is not None:
+                statuses.add(int(resolved))
+        return statuses

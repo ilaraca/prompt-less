@@ -27,7 +27,6 @@ from src.domain.spec import (  # noqa: E402
     OpenQuestion,
     Operation,
     Requirement,
-    ResolvedInt,
     SpecError,
 )
 from src.executors import DevinAdapter, build_repair_request, verify_execution  # noqa: E402
@@ -60,12 +59,7 @@ def _load_spec(path: Path) -> CanonicalSpec:
                 ],
             )
         )
-    operations = []
-    for o in raw.get("operations") or []:
-        op_data = dict(o)
-        if "success_status" in op_data:
-            op_data["success_status"] = ResolvedInt.from_raw(op_data["success_status"])
-        operations.append(Operation(**op_data))
+    operations = [Operation.from_raw(o) for o in (raw.get("operations") or [])]
     return CanonicalSpec(
         version=str(raw.get("spec_version") or "1.0"),
         service_id=str((svc.get("id") or "default")),

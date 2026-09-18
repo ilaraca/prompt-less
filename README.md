@@ -255,8 +255,9 @@ Estimativa de tokens: `len(texto) // 4` (heurística, não tokenizer oficial).
 - **`build_llm_package`**: gera JSON dual:
   - `openai`: `instructions` + `input` + `store: true` (encadeamento futuro via `previous_response_id`)
   - `claude`: `system` com `cache_control: ephemeral` + `messages`
-- **`dry_run_scaffold`**: preenche o template localmente (sem API) para `openapi`, `mermaid`, `historia` e **`prd`**.
-- Na história/PRD, o scaffold usa UI + regras + **`engenharia`** + `consolidated` (RF/AC + stack/NFR + handoff SDD).
+- **`src/renderers/`**: com Canonical Spec disponível, os quatro artefatos são renderizados do IR (`render_historia`, `render_prd`, `render_openapi`, `render_mermaid`).
+- **`dry_run_scaffold`**: fallback legado (sem IR) que preenche o template localmente, sem API.
+- Na história/PRD, o render usa o IR + **`engenharia`** + `consolidated` (RF/AC + stack/NFR + handoff SDD).
 - **`--live`**: slot ainda não implementado — deve consumir o pacote já comprimido.
 
 ### 8. `emit` (`src/emit.py` + `also_emit` em `run.py`)
@@ -288,8 +289,8 @@ state/workflow.json ◄── só metadados                               contex
 
 | Comando | Template | Saída |
 |---------|----------|--------|
-| `openapi` | `templates/openapi.skeleton.yaml` | `outputs/openapi.yaml` (+ `canonical-spec.yaml` na run) |
-| `mermaid` | `templates/mermaid.skeleton.md` | `outputs/sequence.mmd` |
+| `openapi` | `templates/openapi.skeleton.yaml` | `outputs/openapi.yaml` derivado do IR (+ `canonical-spec.yaml` na run) |
+| `mermaid` | `templates/mermaid.skeleton.md` | `outputs/sequence.mmd` derivado do IR |
 | `historia` | `templates/historia.skeleton.md` | `outputs/historia.md` **+** `outputs/PRD.md` |
 | `prd` | `templates/prd.skeleton.md` | `outputs/PRD.md` |
 
@@ -325,19 +326,24 @@ Figma + regras + docs
                         → architecture / api / tasks
 ```
 
-### Regras de tradução (quando o LLM/live estiver ativo)
+### Regras de tradução
 
-**OpenAPI**
+**OpenAPI** (já vale no dry-run: `render_openapi(spec)` lê o Canonical Spec)
 
-- `inputs` do Figma → propriedades de `requestBody` (tipos inferidos: idade→integer, etc.)
-- listas/tabelas → schema da resposta `200`
-- bloqueios em regras → respostas `400/401/403/404/422` referenciando `components.schemas.Error`
+- `operations[].request_schema` → propriedades de `requestBody` (só em POST/PUT/PATCH)
+- `operations[].response_schema` (listas/tabelas da UI) → schema da resposta de sucesso
+- `errors` do IR → respostas `4xx` referenciando `components.schemas.Error`,
+  com `x-error-ids`, `x-error-codes` e `x-source-claims`
+- `{param}` no path → `parameters` obrigatórios tipados pelo schema do IR
+- sem evidência no IR → `x-unresolved` na operação, `x-unresolved-operations`
+  no documento; **nenhum** `200`/`201` inventado
 
-**Mermaid**
+**Mermaid** (`render_mermaid(spec)`)
 
 - Atores fixos: Frontend (Tela), BFF, API de Domínio
-- Condições de regra → blocos `alt` / `opt`
-- Verbos/paths alinhados às actions da UI / OpenAPI
+- `errors` da operação → blocos `alt` rotulados com `OP-xxx` + `ERR-xxx`
+- Verbos/paths vêm de `operations`; status de sucesso não resolvido aparece como
+  `sucesso não resolvido no IR — requer revisão humana`
 
 **História**
 
@@ -564,8 +570,8 @@ Artefatos:
 
 | Arquivo | Uso |
 |---------|-----|
-| `outputs/openapi.yaml` | Contrato (ainda com markers no dry-run) |
-| `outputs/sequence.mmd` | Sequência Frontend → BFF → API |
+| `outputs/openapi.yaml` | Contrato derivado do Canonical Spec |
+| `outputs/sequence.mmd` | Sequência Frontend → BFF → API derivada do Canonical Spec |
 | `outputs/historia.md` | História BFF/MFE (BDD) |
 | `outputs/PRD.md` | PRD canônico para SDD |
 
@@ -956,6 +962,44 @@ Antes de renderizar história/PRD, a pipeline monta o IR (`src/spec/builder.py`)
 
 Artefato: `canonical-spec.yaml` ao lado dos demais outputs da run.
 
+### Artefatos derivados do IR (OpenAPI / Mermaid)
+
+`openapi.yaml` e `sequence.mmd` são renderizados **do Canonical Spec**, a mesma
+fonte da história e do PRD — os cinco artefatos não podem divergir.
+
+```bash
+.venv/bin/python -m src.run openapi --dry-run   # → outputs/openapi.yaml + canonical-spec.yaml
+.venv/bin/python -m src.run mermaid --dry-run   # → outputs/sequence.mmd
+```
+
+O que o IR carrega para isso:
+
+| Campo do IR | Efeito no artefato |
+|---|---|
+| `operations[].method` / `path` | path item + método do OpenAPI e chamadas da sequência |
+| `operations[].request_schema` / `response_schema` | `components.schemas.*` com `origin` por campo |
+| `operations[].success_status` | resposta de sucesso **só** se `requires_review: false` |
+| `operations[].unresolved` | `x-unresolved` / `x-unresolved-operations` e comentário `%%` no Mermaid |
+| `errors` | respostas `4xx` + blocos `alt`, com `x-error-ids` e `x-source-claims` |
+
+Antes de gravar, o artefato passa por dois gates (`src/validators/`):
+
+1. **estrutural** — `openapi` 3.x, `info`, paths com `/`, operações com
+   `operationId` e `responses`, `$ref` resolvível, parâmetro de path declarado
+   e obrigatório
+2. **anti-divergência** — status, path, operação, erro ou campo fora do IR é
+   erro; sucesso `2xx` sem `success_status` resolvido é
+   `ARTIFACT_RESOLVED_WITHOUT_EVIDENCE`; `unresolved` do IR omitido no artefato é
+   `ARTIFACT_MISSING_UNRESOLVED_MARK`
+
+Falha de gate **não** emite o arquivo: a run volta `status: blocked`,
+`reason: derived_artifact_divergence` e grava
+`runs/<id>/validations/<tipo>-validation.json`.
+
+Sucesso sem evidência permanece `unresolved` de propósito: só vira `200`/`201`
+quando as decisões declaram um único 2xx e existe uma única operação (aí o
+`success_status` guarda `origin: declared` e os `source_claims`).
+
 ### Ciclo executor (`close_loop`)
 
 Fecha o loop **spec × ExecutionResult × policy de camada**:
@@ -1002,10 +1046,10 @@ Fluxo: diagnose (padrões em `failure-patterns.yaml`) → propostas limitadas (`
 
 ```bash
 .venv/bin/pytest -v --tb=short
-# esperado: 83 passed
+# esperado: 97 passed
 ```
 
-Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`. CI em `.github/workflows/ci.yml` (compileall + YAML de profiles + pytest + smoke `plan_repos`).
+Fixtures em `tests/fixtures/` (happy_path, access_denied, ambiguous_status, two_services) e goldens de artefato derivado em `tests/fixtures/golden/` (`openapi.yaml`, `sequence.mmd`). Scoring por camada: `ingestion` / `canonical_spec` / `artifacts` / `provenance`. CI em `.github/workflows/ci.yml` (compileall + YAML de profiles + pytest + smoke `plan_repos`).
 
 ---
 
@@ -1056,7 +1100,7 @@ pipeline/
     ├── runtime/                   # RunContext, RunStore, EventStore, atomic_io
     ├── spec/                      # builder do IR
     ├── validators/                # quality gate
-    ├── renderers/                 # história/PRD a partir do IR
+    ├── renderers/                 # história/PRD/OpenAPI/Mermaid a partir do IR
     ├── executors/                 # policy, verify, loop, Devin adapter
     ├── planning/                  # grafo, camadas, plan
     └── learning/                  # evals, proposals, accept, failure_patterns
@@ -1195,22 +1239,24 @@ Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `sr
 - Modo `--live` (chamada real OpenAI/Claude) ainda não implementado
 - Adapter Devin no `close_loop` é stub (E2E real = série 2)
 - `improve` não aplica propostas nem faz rollback — só `approved_for_experiment`
-- IR ainda não regenera OpenAPI/Mermaid a partir do Canonical Spec
+- OpenAPI/Mermaid derivam do IR, mas as `operations` **não** são fatiadas por
+  serviço: com `--all-contexts` cada contexto recebe todas as actions da UI
+- Status de sucesso só é resolvido no caso inequívoco (uma operação + um 2xx
+  declarado); fora dele o contrato sai sem resposta de sucesso, por decisão
 - Resumo de docs é **extrativo por regex**, não LLM small (bom custo; pode perder nuance)
 - Estimativa de tokens é heurística (`len/4`), não tokenizer oficial
 - State backend `redis` está previsto no YAML, implementação atual é **arquivo** / `runs/`
 
 **Próximos passos (série 2 — ver CHANGELOG [Unreleased])**
 
-1. IR → OpenAPI / Mermaid a partir do Canonical Spec
-2. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`)
-3. Devin CLI real no `close_loop`
-4. Orquestração declarativa via stages em `pipeline.yaml`
-5. Tokenizer oficial + Redis opcional
-6. Execução concorrente por ondas + apply/rollback de propostas
-7. Hardening profundo (debugger, injection, recovery, golden recall)
-8. Consumidor SDD que leia `outputs/PRD.md` e gere architecture/tasks com RF + NFR
-9. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
+1. Plugar OpenAI Responses / Claude Messages no `reason.py` (`--live`)
+2. Devin CLI real no `close_loop`
+3. Orquestração declarativa via stages em `pipeline.yaml`
+4. Tokenizer oficial + Redis opcional
+5. Execução concorrente por ondas + apply/rollback de propostas
+6. Hardening profundo (debugger, injection, recovery, golden recall)
+7. Consumidor SDD que leia `outputs/PRD.md` e gere architecture/tasks com RF + NFR
+8. Evoluir `engenharia.yaml` v2+ (circuit breaker, metrics, tracing) sem inchir o prompt
 
 ---
 
