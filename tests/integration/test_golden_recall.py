@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 
 from src.hardening.recall import score_claim_recall
-from src.run import run
+from src.runtime.run import run
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 GOLDEN = FIXTURES / "golden" / "expected_claims.yaml"

@@ -7,9 +7,9 @@ from typing import Any
 
 import yaml
 
-from src.docs_ingest import load_documents
+from src.ingest.docs import load_documents
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 INPUTS = ROOT / "inputs"
 TEMPLATES = ROOT / "templates"
 

@@ -13,7 +13,7 @@ import pytest
 from src.runtime import RunNotReady, assert_run_ready_for_executor
 from src.runtime.handlers import default_registry
 from src.runtime.stage import HandlerRegistry, StageContext, StageError
-from src.run import run
+from src.runtime.run import run
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 ROOT = Path(__file__).resolve().parents[2]
@@ -30,7 +30,7 @@ def _cli_env(tmp_path: Path) -> dict[str, str]:
 
 def _run_cli(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [PYTHON, "-m", "src.run", *args],
+        [PYTHON, "-m", "src.runtime.run", *args],
         cwd=str(ROOT),
         env=_cli_env(tmp_path),
         capture_output=True,

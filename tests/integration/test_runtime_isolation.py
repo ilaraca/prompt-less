@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from src.runtime import EventStore, RunContext, RunStore, new_run_id
-from src.run import run
+from src.runtime.run import run
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 

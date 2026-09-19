@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from src.domain.provenance import claim_fingerprint, merge_claims
-from src.run import run
+from src.runtime.run import run
 from src.runtime import verify_run_dir
 from src.spec.builder import build_canonical_spec
 from src.validators import validate_spec

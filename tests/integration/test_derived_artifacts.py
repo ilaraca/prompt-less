@@ -10,7 +10,7 @@ import yaml
 
 from src.domain.spec import CanonicalSpec
 from src.renderers import render_mermaid, render_openapi
-from src.run import run
+from src.runtime.run import run
 from src.spec.builder import build_canonical_spec
 from src.validators import (
     validate_derived_artifact,
@@ -241,7 +241,7 @@ def _build_from_fixture(case_id: str) -> CanonicalSpec:
     """Reconstrói o IR do fixture sem RAG (só UI + regras + mapa)."""
     from src.ingest import load_inputs
     from src.preprocess import preprocess
-    from src.servicos import load_mapa
+    from src.repos.servicos import load_mapa
 
     slim = preprocess(load_inputs("openapi", inputs_dir=FIXTURES / case_id))
     mapa = load_mapa(FIXTURES / case_id / "mapa-servicos.yaml")
@@ -377,7 +377,7 @@ def test_validate_derived_artifact_aceita_artefato_do_ir():
 def _two_services_pack() -> tuple[dict[str, Any], dict[str, Any]]:
     from src.ingest import load_inputs
     from src.preprocess import preprocess
-    from src.servicos import load_mapa
+    from src.repos.servicos import load_mapa
 
     slim = preprocess(load_inputs("openapi", inputs_dir=FIXTURES / "two_services"))
     mapa = load_mapa(FIXTURES / "two_services" / "mapa-servicos.yaml")
@@ -401,7 +401,7 @@ def test_operation_owner_preenchido_na_montagem_do_ir():
 
 def test_context_contem_so_operacoes_do_servico():
     slim, mapa = _two_services_pack()
-    from src.servicos import get_service
+    from src.repos.servicos import get_service
 
     cliente = build_canonical_spec(
         ui=slim["ui"],

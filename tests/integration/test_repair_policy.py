@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from src.close_loop import close_loop
+from src.executors.close_loop import close_loop
 from src.executors.base import ExecutionResult
 from src.executors.loop import MAX_REPAIR_ATTEMPTS, build_repair_request
 from src.executors.policy import load_profiles

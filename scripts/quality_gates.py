@@ -102,7 +102,7 @@ def gate_commands(reports_dir: Path) -> list[tuple[str, list[str]]]:
                 f"--junitxml={reports}/pytest.xml",
             ],
         ),
-        ("smoke", [PY, "-m", "src.plan_repos", "--help"]),
+        ("smoke", [PY, "-m", "src.planning.plan_repos", "--help"]),
     ]
 
 

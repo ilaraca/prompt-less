@@ -6,7 +6,7 @@ from typing import Any
 
 import yaml
 
-from src.context_builder import (
+from src.context.builder import (
     CriticalItem,
     build_context,
     extract_critical_items,
@@ -24,8 +24,8 @@ from src.runtime.atomic_io import sha256_of
 from src.runtime.integrity import seal_hmac
 from src.runtime.run_context import RunContext
 from src.runtime.run_store import RunStore
-from src.task_metrics import build_cost_section, build_task_metrics
-from src.tokenizer import TokenEstimate, using_tokenizer
+from src.context.task_metrics import build_cost_section, build_task_metrics
+from src.context.tokenizer import TokenEstimate, using_tokenizer
 
 
 def _seed_minimal_completed(root: Path, run_id: str) -> Path:
@@ -230,7 +230,7 @@ def test_critical_does_not_silently_disappear():
 
 
 def test_excess_critical_split_or_block(monkeypatch):
-    import src.context_builder as cb
+    import src.context.builder as cb
 
     items = [
         CriticalItem(

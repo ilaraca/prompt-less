@@ -4,9 +4,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from src.doc_compress import compress_documents, summarize_document_chunk, build_document_chunks
+from src.compress.doc_compress import compress_documents, summarize_document_chunk, build_document_chunks
 from src.domain import ClaimOrigin
-from src.run import run
+from src.runtime.run import run
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 

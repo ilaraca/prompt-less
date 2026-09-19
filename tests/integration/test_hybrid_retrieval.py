@@ -5,8 +5,8 @@ from pathlib import Path
 
 import yaml
 
-from src.doc_compress import SIGNAL_RE, compress_documents
-from src.hybrid_retrieval import (
+from src.compress.doc_compress import SIGNAL_RE, compress_documents
+from src.compress.hybrid_retrieval import (
     build_query_from_ctx,
     compress_documents_hybrid,
     dedupe_hits,

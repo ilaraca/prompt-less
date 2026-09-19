@@ -1,7 +1,7 @@
 """Engineering baseline v2: schema, seleção por camada/criticidade, gaps."""
 from __future__ import annotations
 
-from src.engenharia import (
+from src.preprocess.engenharia import (
     dehydrate_engenharia,
     detect_nfr_signals,
     nfr_gaps_from_code,

@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 
-from src.engenharia import dehydrate_engenharia
+from src.preprocess.engenharia import dehydrate_engenharia
 
 
 TYPE_HINTS = {

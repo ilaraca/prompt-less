@@ -3,10 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.runtime.atomic_io import atomic_write_text
-from src.runtime.run_context import context_subdir
-
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 # arquivos na raiz de outputs/ (legado / single-context)
 OUTPUTS = {
@@ -26,6 +23,10 @@ def emit(
     root: Path | None = None,
     subdir: str = "outputs",
 ) -> Path:
+    # Lazy: evita ciclo runtime.__init__ → handlers → emit.writer → runtime
+    from src.runtime.atomic_io import atomic_write_text
+    from src.runtime.run_context import context_subdir
+
     name = OUTPUTS[tipo]
     base = root or ROOT
     if context:
