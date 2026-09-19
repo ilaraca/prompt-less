@@ -5,8 +5,8 @@ from pathlib import Path
 
 from src.domain.spec import CanonicalSpec
 from src.renderers import render_historia, render_prd
-from src.repo_index import index_repo
-from src.run import run
+from src.repos.repo_index import index_repo
+from src.runtime.run import run
 from src.spec.builder import build_canonical_spec
 
 ROOT = Path(__file__).resolve().parents[2]

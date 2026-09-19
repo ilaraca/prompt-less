@@ -12,7 +12,7 @@ from threading import Semaphore
 from typing import Any, Callable, Protocol
 
 from src.executors.base import ExecutionResult
-from src.state_store import FileStateBackend, StateBackend, update_state
+from src.runtime.state_store import FileStateBackend, StateBackend, update_state
 
 TaskRunner = Callable[["ScheduledTask"], "TaskRunResult"]
 VerifyFn = Callable[[ExecutionResult, "ScheduledTask"], dict[str, Any]]
@@ -374,7 +374,7 @@ def _init_state_slot(
         update_state(mutate, state.path, timeout_s=state.lock_timeout_s)
         return
     current = state.read()
-    from src.state_store import state_version
+    from src.runtime.state_store import state_version
 
     state.compare_and_set(state_version(current), mutate(current))
 
@@ -397,7 +397,7 @@ def _persist_wave(state: StateBackend, key: str, wave: WaveOutcome) -> None:
         update_state(mutate, state.path, timeout_s=state.lock_timeout_s)
         return
     current = state.read()
-    from src.state_store import state_version
+    from src.runtime.state_store import state_version
 
     state.compare_and_set(state_version(current), mutate(current))
 
@@ -418,6 +418,6 @@ def _persist_final(
         update_state(mutate, state.path, timeout_s=state.lock_timeout_s)
         return
     current = state.read()
-    from src.state_store import state_version
+    from src.runtime.state_store import state_version
 
     state.compare_and_set(state_version(current), mutate(current))

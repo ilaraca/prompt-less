@@ -35,7 +35,7 @@ def load_expected():
 @pytest.fixture
 def run_case(tmp_path: Path):
     """Executa `run` dry-run com inputs/outputs/state isolados."""
-    from src.run import run
+    from src.runtime.run import run
 
     def _run(case_id: str, **kwargs):
         inputs_dir = FIXTURES / case_id

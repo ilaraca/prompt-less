@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 from src.ingest import load_inputs
-from src.run import load_cfg, run
+from src.runtime.run import load_cfg, run
 from src.runtime import (
     GraphError,
     HandlerRegistry,

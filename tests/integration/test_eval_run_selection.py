@@ -11,7 +11,7 @@ from src.runtime.atomic_io import sha256_of
 from src.runtime.integrity import seal_hmac
 from src.runtime.run_context import RunContext
 from src.runtime.run_store import RunStore
-from src.run import run
+from src.runtime.run import run
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 

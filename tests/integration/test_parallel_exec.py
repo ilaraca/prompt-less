@@ -14,7 +14,7 @@ from src.executors.scheduler import (
     run_plan_waves,
     waves_from_plan,
 )
-from src.state_store import (
+from src.runtime.state_store import (
     FileStateBackend,
     StateConflict,
     StateLockTimeout,
@@ -294,7 +294,7 @@ def test_open_state_backend_rejects_redis():
 
 
 def test_parallel_exec_cli_dry_run(tmp_path: Path, capsys):
-    from src.parallel_exec import main
+    from src.runtime.parallel_exec import main
 
     plan_path = tmp_path / "implementation_plan.json"
     plan_path.write_text(
@@ -310,7 +310,7 @@ def test_parallel_exec_cli_dry_run(tmp_path: Path, capsys):
 
 
 def test_parallel_exec_cli_stub(tmp_path: Path):
-    from src.parallel_exec import main
+    from src.runtime.parallel_exec import main
 
     plan_path = tmp_path / "plan.json"
     plan_path.write_text(

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from src.emit import emit
-from src.run import run
+from src.runtime.run import run
 from src.runtime import (
     InvalidContextId,
     InvalidRunId,
@@ -23,7 +23,7 @@ from src.runtime import (
     new_run_id,
     validate_run_id,
 )
-from src.state_store import write_state
+from src.runtime.state_store import write_state
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from src.run import run
+from src.runtime.run import run
 from src.spec.builder import build_canonical_spec
 from src.validators import validate_spec
 

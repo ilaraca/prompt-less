@@ -5,9 +5,9 @@ from typing import Any
 
 import pytest
 
-from src.context_builder import build_context
+from src.context.builder import build_context
 from src.reason import build_llm_package
-from src.tokenizer import (
+from src.context.tokenizer import (
     TokenEstimate,
     clear_strategies,
     count_tokens,
@@ -71,7 +71,7 @@ def test_openai_official_when_tiktoken_present():
 
 
 def test_fail_open_heuristic_when_tiktoken_missing(monkeypatch):
-    import src.tokenizer as tok
+    import src.context.tokenizer as tok
 
     monkeypatch.setattr(tok, "_load_tiktoken", lambda: None)
     est = tok.estimate("hello world", provider="openai", model="gpt-4o")
@@ -147,7 +147,7 @@ def test_budget_truncates_when_over_limit():
 
 
 def test_budget_allows_exact_limit(monkeypatch):
-    import src.context_builder as cb
+    import src.context.builder as cb
 
     template = "TEMPLATE_OK"
 
@@ -175,7 +175,7 @@ def test_budget_allows_exact_limit(monkeypatch):
 
 
 def test_budget_clips_when_one_over_limit(monkeypatch):
-    import src.context_builder as cb
+    import src.context.builder as cb
 
     template = "T" * 500
     calls = {"n": 0}

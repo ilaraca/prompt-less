@@ -670,7 +670,7 @@ def main(argv: list[str] | None = None) -> None:
     import argparse
     import sys
 
-    from src.close_loop import close_loop
+    from src.executors.close_loop import close_loop
     from src.runtime.consume import RunNotReady, assert_run_ready_for_executor, resolve_run_dir
     from src.runtime.run_context import new_run_id, validate_run_id
 

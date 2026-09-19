@@ -11,7 +11,7 @@ from src.planning.plan import (
     build_plans_from_mapa,
     integrate_report,
 )
-from src.repo_index import index_repo
+from src.repos.repo_index import index_repo
 from src.spec.builder import build_canonical_spec
 
 FIXTURES_MAPA = {
@@ -122,7 +122,7 @@ def test_plan_repos_cli(tmp_path):
 
     import yaml
 
-    from src.plan_repos import main
+    from src.planning.plan_repos import main
 
     mapa = tmp_path / "mapa.yaml"
     mapa.write_text(yaml.safe_dump(FIXTURES_MAPA), encoding="utf-8")

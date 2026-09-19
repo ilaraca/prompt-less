@@ -8,7 +8,7 @@ import pytest
 import yaml
 
 from src.approval import main as approval_main
-from src.close_loop import close_loop
+from src.executors.close_loop import close_loop
 from src.domain.spec import CanonicalSpec
 from src.executors.base import ExecutionResult
 from src.runtime.approval import (

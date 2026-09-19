@@ -23,12 +23,12 @@ warn_unused_configs = true
 # Superfície legado (YAML/dicts frouxos). O gate ainda type-checka o resto de src/.
 [[tool.mypy.overrides]]
 module = [
-    "src.economia",
-    "src.engenharia",
+    "src.reason.economia",
+    "src.preprocess.engenharia",
     "src.executors.evidence",
-    "src.marcar",
+    "src.repos.marcar",
     "src.preprocess",
-    "src.run",
+    "src.runtime.run",
     "src.spec.builder",
 ]
 disable_error_code = ["union-attr", "dict-item", "arg-type", "assignment", "index"]

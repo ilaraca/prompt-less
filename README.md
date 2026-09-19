@@ -108,6 +108,26 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
  [apply] ────────────────── snapshot → change.key/value em config/ → re-eval → keep ou rollback
 ```
 
+### Layout de `src/` (por estágio)
+
+Os estágios do grafo vivem em pacotes alinhados a `config/pipeline.yaml`. A CLI pública **não mudou**: `python -m src.run`, `src.close_loop`, `src.approval`, etc. continuam via shims na raiz de `src/`.
+
+| Pacote | Estágios / papel | Path canônico |
+|--------|------------------|---------------|
+| `src/ingest/` | ingest + docs | `src.ingest`, `src.ingest.docs` |
+| `src/preprocess/` | preprocess + engenharia | `src.preprocess`, `src.preprocess.engenharia` |
+| `src/compress/` | doc_compress, rag_retrieve, rag_compress | `src.compress.*` |
+| `src/context/` | context_build, tokenizer, métricas | `src.context.builder`, `src.context.tokenizer` |
+| `src/reason/` | reason + economia de tokens | `src.reason`, `src.reason.economia` |
+| `src/emit/` | emit | `src.emit` / `src.emit.writer` |
+| `src/repos/` | repo_index, marcar, mapa de serviços | `src.repos.*` |
+| `src/runtime/` | orquestração, `run`, state, parallel_exec | `src.runtime.run` |
+| `src/planning/` | plan_repos | `src.planning.plan_repos` |
+| `src/learning/` | improve, apply/rollback | `src.learning.improve` |
+| `src/executors/` | close_loop + adapters | `src.executors.close_loop` |
+
+Pacotes transversais (sem mudança nesta reorganização): `domain`, `spec`, `renderers`, `hardening`, `validators`.
+
 ### Técnicas de economia de tokens (mapeamento do artigo)
 
 | Técnica do artigo | Implementação nesta pipeline |
@@ -125,9 +145,9 @@ Dados brutos (figma.json, regras.yaml, engenharia.yaml, *.txt/*.docx/*.doc/*.md)
 
 ## Como a estrutura funciona (camada a camada)
 
-A orquestração está declarada em `config/pipeline.yaml` (`stages` com `handler`, `depends_on`, `gates`). `src/run.py` carrega o grafo e o executa; cada etapa continua num módulo próprio e o dado flui **sempre desidratando**.
+A orquestração está declarada em `config/pipeline.yaml` (`stages` com `handler`, `depends_on`, `gates`). `src.runtime.run` (CLI: `python -m src.run`) carrega o grafo e o executa; cada etapa continua num pacote próprio e o dado flui **sempre desidratando**.
 
-### 1. `ingest` (`src/ingest.py` + `src/docs_ingest.py`)
+### 1. `ingest` (`src/ingest/` + `src/ingest/docs.py`)
 
 **Papel:** carregar insumos do disco, sem transformar ainda.
 
@@ -145,7 +165,7 @@ A orquestração está declarada em `config/pipeline.yaml` (`stages` com `handle
 
 **Saída desta etapa:** um dict `raw` com `tipo`, `figma`, `regras`, `engenharia`, `template`, `documents[]`.
 
-### 2. `preprocess` (`src/preprocess.py`)
+### 2. `preprocess` (`src/preprocess/`)
 
 **Papel:** camada “modelo pequeno” **local** (sem LLM) — tira metadados visuais e prosa.
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from src.close_loop import close_loop
+from src.executors.close_loop import close_loop
 from src.domain.spec import CanonicalSpec
 from src.executors import DevinAdapter, build_repair_request, verify_execution
 from src.executors.base import ExecutionResult
@@ -391,7 +391,7 @@ def test_close_loop_cli_rejects_legacy_approve(tmp_path: Path, monkeypatch, caps
     spec_path = tmp_path / "canonical-spec.yaml"
     import yaml
 
-    from src.close_loop import main as close_loop_main
+    from src.executors.close_loop import main as close_loop_main
 
     spec_path.write_text(
         yaml.safe_dump(spec.to_dict(), allow_unicode=True, sort_keys=False),

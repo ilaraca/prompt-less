@@ -6,13 +6,13 @@ from typing import Any
 
 import yaml
 
-from src.context_builder import build_context
-from src.hybrid_retrieval import build_query_from_ctx, compress_documents_hybrid
+from src.context.builder import build_context
+from src.compress.hybrid_retrieval import build_query_from_ctx, compress_documents_hybrid
 from src.domain.provenance import stamp_claim_identity
-from src.emit import emit
+from src.emit.writer import emit
 from src.ingest import ARTIFACT_TEMPLATES, load_inputs
 from src.preprocess import preprocess as preprocess_inputs
-from src.rag_compress import compress_rag, retrieve_chunks
+from src.compress.rag_compress import compress_rag, retrieve_chunks
 from src.hardening.input_scan import collect_untrusted_blobs, scan_blobs
 from src.reason import (
     LiveApiError,
@@ -22,10 +22,10 @@ from src.reason import (
     live_generate,
 )
 from src.renderers import render_historia, render_mermaid, render_openapi, render_prd, render_sdd
-from src.repo_index import load_index, service_evidence
+from src.repos.repo_index import load_index, service_evidence
 from src.runtime.stage import HandlerRegistry, StageContext, StageError
-from src.tokenizer import TokenEstimate
-from src.servicos import (
+from src.context.tokenizer import TokenEstimate
+from src.repos.servicos import (
     docs_for_service,
     get_service,
     list_service_ids,
@@ -33,7 +33,7 @@ from src.servicos import (
     partition_documents,
 )
 from src.spec.builder import build_canonical_spec
-from src.state_store import write_state
+from src.runtime.state_store import write_state
 from src.validators import (
     PipelineBlocked,
     ValidationIssue,
@@ -621,7 +621,7 @@ def emit_stage(ctx: StageContext) -> None:
     task_metrics = dict(context_pkg.get("task_metrics") or {})
     if token_usage and isinstance(token_usage, dict):
         # live preenche billable — recalcula seção de custo sem marcar como fatura
-        from src.task_metrics import build_task_metrics
+        from src.context.task_metrics import build_task_metrics
 
         task_metrics = build_task_metrics(
             attempts=int(task_metrics.get("attempts") or getattr(ctx, "attempt", 1) or 1),

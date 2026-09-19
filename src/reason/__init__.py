@@ -8,8 +8,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from src.economia import MODELOS, custo_chamada
-from src.engenharia import (
+from src.reason.economia import MODELOS, custo_chamada
+from src.preprocess.engenharia import (
     format_arquitetura,
     format_documentacao,
     format_nfr_stack_arch,
@@ -26,7 +26,7 @@ from src.hardening.claim_tools import (
     openai_tools,
 )
 from src.hardening.input_scan import InputScanBlocked, scan_blobs
-from src.tokenizer import TokenEstimate, observe_billable, provider_for_model
+from src.context.tokenizer import TokenEstimate, observe_billable, provider_for_model
 
 # Transporte HTTP injetável: (method, url, headers, body, timeout) → (status, body).
 Transport = Callable[[str, str, dict[str, str], bytes, float], tuple[int, bytes]]
@@ -678,7 +678,7 @@ def _ownership_md(svc: dict) -> str:
 
 
 SEM_INDICE = (
-    "- _(sem índice de código — rode `python -m src.repo_index --workspace ~/dev/repos`)_"
+    "- _(sem índice de código — rode `python -m src.repos.repo_index --workspace ~/dev/repos`)_"
 )
 
 

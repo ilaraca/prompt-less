@@ -7,6 +7,16 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Layout de `src/` por estágio**: módulos flat da raiz foram para pacotes
+  alinhados ao grafo (`ingest`, `preprocess`, `compress`, `context`,
+  `reason`, `emit`, `repos`) e aos pacotes existentes (`runtime`,
+  `planning`, `learning`, `executors`). Paths canônicos internos mudaram
+  (ex.: `src.runtime.run`, `src.compress.rag_compress`); shims na raiz
+  preservam `python -m src.run` / `src.close_loop` / imports legados.
+  README documenta o mapa.
+
 ### Added
 
 - **README — desenvolvimento paralelo**: seção que documenta o fluxo

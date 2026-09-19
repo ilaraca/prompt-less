@@ -13,7 +13,7 @@ from src.hardening.claim_tools import (
     search_claims,
 )
 from src.reason import build_llm_package
-from src.run import run
+from src.runtime.run import run
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from src.close_loop import close_loop
+from src.executors.close_loop import close_loop
 from src.executors import DevinAdapter, verify_execution
 from src.executors.base import ExecutionResult
 from src.executors.devin import DevinCliError, DirtyWorktreeError

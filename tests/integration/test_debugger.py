@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from src.close_loop import close_loop
+from src.executors.close_loop import close_loop
 from src.domain.spec import CanonicalSpec
 from src.executors.base import ExecutionResult
 from src.executors.verify import verify_execution

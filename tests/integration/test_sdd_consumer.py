@@ -7,7 +7,7 @@ import yaml
 from src.domain.spec import CanonicalSpec, OpenQuestion, Operation
 from src.planning.plan import build_implementation_plan
 from src.renderers.sdd import build_sdd_package, render_sdd
-from src.run import run
+from src.runtime.run import run
 from src.spec.builder import build_canonical_spec
 from src.validators import validate_derived_artifact, validate_sdd_package
 

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.improve import improve_from_verify
+from src.learning.improve import improve_from_verify
 from src.learning.accept import decide_proposals, load_history
 from src.learning.evals import compare_evals, run_eval_suite, score_case
 from src.learning.workspaces import (
@@ -736,7 +736,7 @@ def test_improve_rejects_when_holdout_regresses_despite_dev_gain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """Melhora no desenvolvimento + regressão crítica no hold-out → reject."""
-    import src.improve as improve_mod
+    import src.learning.improve as improve_mod
 
     calls: list[tuple[str, ...]] = []
 

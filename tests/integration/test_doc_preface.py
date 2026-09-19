@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.doc_preface import (
+from src.compress.doc_preface import (
     PREFACE_END,
     PREFACE_START,
     apply_to_file,

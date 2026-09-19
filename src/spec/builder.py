@@ -27,8 +27,8 @@ from src.domain.spec import (
     SchemaField,
     SpecError,
 )
-from src.servicos import fold, resolve_service_id
-from src.engenharia import (
+from src.repos.servicos import fold, resolve_service_id
+from src.preprocess.engenharia import (
     dehydrate_engenharia,
     detect_nfr_signals,
     layers_from_repos,

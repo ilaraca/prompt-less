@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 
 from src.domain.spec import ResolvedInt
-from src.run import run
+from src.runtime.run import run
 from src.runtime.atomic_io import UnsafePath
 from src.runtime.integrity import verify_run_dir
 from src.runtime.run_context import InvalidRunId, RunContext, validate_run_id

@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.domain.spec import CanonicalSpec, CodeEvidence, Gap
-from src.engenharia import (
+from src.preprocess.engenharia import (
     format_arquitetura,
     format_documentacao,
     format_nfr_stack_arch,
@@ -214,7 +214,7 @@ def render_historia(
     *,
     engenharia: dict[str, Any] | None = None,
 ) -> str:
-    from src.engenharia import SelectedNfr, layers_from_repos, select_nfrs
+    from src.preprocess.engenharia import SelectedNfr, layers_from_repos, select_nfrs
 
     eng = dict(engenharia or {})
     repos: list[str] = []
@@ -268,7 +268,7 @@ def render_prd(
     engenharia: dict[str, Any] | None = None,
     consolidated: str = "",
 ) -> str:
-    from src.engenharia import SelectedNfr, layers_from_repos, select_nfrs
+    from src.preprocess.engenharia import SelectedNfr, layers_from_repos, select_nfrs
 
     eng = dict(engenharia or {})
     titulo = spec.service_name or spec.service_id or "PRD"
