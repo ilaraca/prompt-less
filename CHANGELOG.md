@@ -7,6 +7,14 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ## [Unreleased]
 
+### Added
+
+- **README — desenvolvimento paralelo**: seção que documenta o fluxo
+  worktree filha / pai (`onda-merge`), o vínculo com
+  `.scratch/harness/` (board + issues canônicos), sync do Kanban para
+  `feature/onda-frontier`, e o passo a passo para replicar o mesmo
+  modelo noutro repositório.
+
 ### Fixed
 
 - **EnforcedRunner sitecustomize único**: FS-deny e network-deny passam a
