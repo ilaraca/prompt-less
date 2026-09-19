@@ -15,7 +15,8 @@ e este projeto adere a [Semantic Versioning](https://semver.org/lang/pt-BR/).
   `planning`, `learning`, `executors`). Paths canônicos internos mudaram
   (ex.: `src.runtime.run`, `src.compress.rag_compress`); shims na raiz
   preservam `python -m src.run` / `src.close_loop` / imports legados.
-  README documenta o mapa.
+  README documenta o mapa; seções “camada a camada” e árvore de arquivos
+  alinhadas aos paths canônicos (CLI legada `python -m src.*` permanece).
 
 ### Added
 
