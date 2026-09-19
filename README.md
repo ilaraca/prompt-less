@@ -135,7 +135,7 @@ Pacotes transversais (sem mudança nesta reorganização): `domain`, `spec`, `re
 | Não reenviar histórico completo | `state/workflow.json` com campos mínimos |
 | Tools compactas | `config/tools.compact.yaml` (assinaturas curtas) |
 | System prompt estável / cache | `prompts/system.compact.txt` + pacote Claude `cache_control` |
-| Comprimir RAG | `rag_compress.py` + `doc_compress.py` |
+| Comprimir RAG | `src.compress.rag_compress` + `src.compress.doc_compress` |
 | Compressão hierárquica | chunks → resumos → consolidado |
 | Modelo pequeno no pré-processamento | Extrativo local (regex de sinais); slot para LLM small depois |
 | Encadeamento OpenAI Responses | Pacote com `store: true` (pronto para `previous_response_id`) |
@@ -153,11 +153,11 @@ A orquestração está declarada em `config/pipeline.yaml` (`stages` com `handle
 
 | Fonte | Módulo | O que entra |
 |-------|--------|-------------|
-| `inputs/figma.json` | `ingest.py` | JSON da UI |
-| `inputs/regras.yaml` | `ingest.py` | YAML de negócio |
-| `inputs/engenharia.yaml` | `ingest.py` | Stack, padrões, arquitetura, NFR baseline |
-| Template do tipo pedido | `ingest.py` | esqueleto OpenAPI / Mermaid / História / PRD |
-| `*.txt`, `*.md`, `*.docx`, `*.doc` | `docs_ingest.py` | texto extraído + metadados (`name`, `lines`, `chars`, `est_tokens_raw`) |
+| `inputs/figma.json` | `src.ingest` | JSON da UI |
+| `inputs/regras.yaml` | `src.ingest` | YAML de negócio |
+| `inputs/engenharia.yaml` | `src.ingest` | Stack, padrões, arquitetura, NFR baseline |
+| Template do tipo pedido | `src.ingest` | esqueleto OpenAPI / Mermaid / História / PRD |
+| `*.txt`, `*.md`, `*.docx`, `*.doc` | `src.ingest.docs` | texto extraído + metadados (`name`, `lines`, `chars`, `est_tokens_raw`) |
 
 - `.docx` → `python-docx` (parágrafos + tabelas).
 - `.doc` → `textutil` (macOS) ou `antiword`.
@@ -176,7 +176,7 @@ A orquestração está declarada em `config/pipeline.yaml` (`stages` com `handle
 
 **Saída:** `slim` = UI + regras + engenharia desidratadas + documents + template.
 
-### 3. `state_write` (`src/state_store.py`)
+### 3. `state_write` (`src/runtime/state_store.py`)
 
 **Papel:** substituir histórico de conversa por **estado externo** (padrão do artigo).
 
@@ -189,7 +189,7 @@ Grava em `state/workflow.json` apenas:
 
 **Não grava** o texto dos documentos nem o Figma bruto. Assim, requests seguintes (quando houver agent loop) não reenviam 3000 linhas.
 
-### 4. Compressão de documentos (`src/doc_compress.py`)
+### 4. Compressão de documentos (`src/compress/doc_compress.py`)
 
 **Papel:** compressão hierárquica de texto longo **antes** de misturar com UI/regras.
 
@@ -206,7 +206,7 @@ documento (N linhas)
 - Chunk **sem** sinal → resumo vazio (ruído/telemetria descartados).
 - Consolidado prioriza resumos com sinal e respeita o budget de caracteres.
 
-### 5. Camada RAG (`src/rag_compress.py`) — o que é e o que não é
+### 5. Camada RAG (`src/compress/rag_compress.py`) — o que é e o que não é
 
 Esta pipeline usa um **RAG estrutural / lexical**, não um RAG vetorial clássico.
 
@@ -251,7 +251,7 @@ Esse `consolidated` é o que vai para o campo `contexto_comprimido` do pacote LL
 | Similarity search / top-k por query | Não |
 | Índice persistente entre execuções | **Sim** — `state/repo_index.json` (código dos repos, ver seção 13) |
 | Reranker cross-encoder | Não |
-| Ponderação por IDF | **Sim** — no de/para de serviços (`src/marcar.py`) |
+| Ponderação por IDF | **Sim** — no de/para de serviços (`src/repos/marcar.py`) |
 
 **Por quê assim?** O corpus por execução é **pequeno e conhecido** (Figma + regras + poucos docs da pasta `inputs/`). Para esse caso, retrieve estrutural + filtro lexical é mais barato, determinístico e suficiente para controlar tokens. RAG vetorial passa a valer quando houver **base grande** (wiki, Confluence, dezenas de specs) e queries variáveis.
 
@@ -260,7 +260,7 @@ Esse `consolidated` é o que vai para o campo `contexto_comprimido` do pacote LL
 - **RAG desta pipeline:** “pegue estes arquivos desta pasta, fatie, filtre o que parece regra/API, comprima, entregue ao modelo.”
 - **RAG vetorial:** “indexe milhares de docs; para esta pergunta, busque os k trechos mais similares semanticamente.”
 
-Além do caminho flat (`doc_compress`), o roteador em `src/hybrid_retrieval.py`
+Além do caminho flat (`doc_compress`), o roteador em `src/compress/hybrid_retrieval.py`
 classifica o insumo (`structured` | `flat`). Documento com títulos usa âncoras
 de seção (`doc_preface.parse_sections` + TF-IDF); documento plano mantém
 chunk + `SIGNAL_RE`. Segunda camada semântica é **opcional** e limitada por
@@ -270,7 +270,7 @@ scrubados antes. Índice invertido por seção em `state/doc_section_index.json`
 
 Evolução natural (próximo passo): manter `doc_compress` / budget e trocar só o **Retrieve** por embeddings + top-k, sem mudar o resto do pipeline.
 
-### 6. `context_build` (`src/context_builder.py`)
+### 6. `context_build` (`src/context/builder.py`)
 
 **Papel:** montar o prompt em duas partes (favorável a **prompt caching**):
 
@@ -296,7 +296,7 @@ uso observado de fatura.
 
 Estimativa de tokens: tokenizer do provider configurado em `models.provider` / `models.name` (`tiktoken` para OpenAI). Se a lib oficial não estiver disponível, fail-open para `chars÷4` com `method=heuristic` — o fallback **não** é contagem exata.
 
-### 7. `reason` (`src/reason.py`)
+### 7. `reason` (`src/reason/`)
 
 **Papel:** preparar a geração, sem prosa na saída.
 
@@ -310,12 +310,12 @@ Estimativa de tokens: tokenizer do provider configurado em `models.provider` / `
 - Na história/PRD, o render usa o IR + **`engenharia`** + `consolidated` (RF/AC + stack/NFR + handoff SDD). Estado atual e gaps saem de `current_state` / `gaps` do Canonical Spec — sem índice a seção declara *índice não aplicado*, nunca “sem gaps”.
 - **`--live`**: chama OpenAI Responses ou Claude Messages consumindo o `llm_package_*.json` já comprimido (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`).
 
-### 8. `emit` (`src/emit.py` + `also_emit` em `run.py`)
+### 8. `emit` (`src/emit/` + `also_emit` em `src.runtime.run`)
 
 **Papel:** gravar o arquivo do tipo pedido em `outputs/` (+ `llm_package_*.json`).
 
 - Um tipo → um arquivo principal (`openapi.yaml`, `sequence.mmd`, `historia.md`, `PRD.md`, `sdd-package.yaml`).
-- Exceção: `historia` declara `also_emit: [prd, sdd]` em `config/pipeline.yaml` — `run.py` gera **história, PRD e pacote SDD** na mesma execução. `prd` também emite o SDD.
+- Exceção: `historia` declara `also_emit: [prd, sdd]` em `config/pipeline.yaml` — `src.runtime.run` gera **história, PRD e pacote SDD** na mesma execução. `prd` também emite o SDD.
 
 ### Diagrama de dados (o que viaja vs o que para)
 
@@ -325,7 +325,7 @@ regras.yaml ─────► preprocess ──► regras {bloqueios, …} ─�
 engenharia.yaml ► preprocess ──► engenharia {stack, NFR v2 selecionados} ─┼─► rag_compress ─► consolidated
 docs *.txt ──────► doc_compress ─► resumos/consolidado docs ─────┘         │
                                                                             ▼
-state/workflow.json ◄── só metadados                               context_builder
+state/workflow.json ◄── só metadados                               context_build
                                                                             │
                                                                             ▼
                                                                    llm_package_*.json
@@ -560,7 +560,7 @@ Com `inputs/amostra_3000.txt` + `inputs/amostra_regras.docx`:
 | Ruído tipo “telemetria” no prompt | **não entra** |
 | Sinais (HTTP, regras, endpoints) | **preservados** |
 
-Se o documento **não tiver sinais lexicais**, o consolidado pode ficar vazio ou muito curto — nesse caso, enriqueça o texto com termos de regra/API ou ajuste `SIGNAL_RE` em `src/doc_compress.py`.
+Se o documento **não tiver sinais lexicais**, o consolidado pode ficar vazio ou muito curto — nesse caso, enriqueça o texto com termos de regra/API ou ajuste `SIGNAL_RE` em `src/compress/doc_compress.py`.
 
 ---
 
@@ -587,7 +587,7 @@ Gera scaffold do artefato + pacote LLM comprimido:
 
 ### Live (API)
 
-Por padrão a pipeline é **dry-run** (sem rede). Com `--live`, `src/reason.py` envia o `llm_package_*.json` ao vendor conforme `models.provider` em `config/pipeline.yaml`:
+Por padrão a pipeline é **dry-run** (sem rede). Com `--live`, `src.reason` envia o `llm_package_*.json` ao vendor conforme `models.provider` em `config/pipeline.yaml`:
 
 | Provider | API | Variável de ambiente |
 |---|---|---|
@@ -600,7 +600,7 @@ export PROMPTLESS_INTEGRITY_KEY="$(openssl rand -hex 32)"
 .venv/bin/python -m src.run historia --live
 ```
 
-Telemetria real grava em `token_usage` / `llm_package.meta`: `billable`, `delta` (vs estimado), `cache_hit` / `cache_read_tokens` quando o vendor reporta, e `cost_usd` (tabela de `src/economia.py`). Falha de API aborta o estágio `reason` **sem** gravar o pacote/artefato live daquele tipo — `runs/<id>/` permanece íntegro (manifest `failed`).
+Telemetria real grava em `token_usage` / `llm_package.meta`: `billable`, `delta` (vs estimado), `cache_hit` / `cache_read_tokens` quando o vendor reporta, e `cost_usd` (tabela de `src.reason.economia`). Falha de API aborta o estágio `reason` **sem** gravar o pacote/artefato live daquele tipo — `runs/<id>/` permanece íntegro (manifest `failed`).
 
 ### Testes e CI
 
@@ -880,7 +880,7 @@ Devin por repo dono:
 
 ### 12. De/para automático: pasta de repos → mapa → marcadores
 
-Se você já trabalha numa pasta com **todos os repositórios** (padrão de uso do Devin CLI), não precisa escrever o `mapa-servicos.yaml` à mão. O `scripts/scan-repos.sh` deriva o mapa dos nomes dos repos e o `src/marcar.py` injeta os marcadores no texto de negócio.
+Se você já trabalha numa pasta com **todos os repositórios** (padrão de uso do Devin CLI), não precisa escrever o `mapa-servicos.yaml` à mão. O `scripts/scan-repos.sh` deriva o mapa dos nomes dos repos e o `src.repos.marcar` (CLI: `python -m src.marcar`) injeta os marcadores no texto de negócio.
 
 ```
 ~/dev/repos/                          inputs/mapa-servicos.yaml
@@ -901,7 +901,7 @@ Se você já trabalha numa pasta com **todos os repositórios** (padrão de uso 
 
 **Injeção dos marcadores (de/para)**
 
-`src/marcar.py` corta o doc **por seção** (títulos `## …`, `2.`, `2.1)`, `SEÇÃO …`), pontua cada seção com as keywords do mapa e escreve `[[service:<id>]]` na primeira linha da seção vencedora.
+`src/repos/marcar.py` corta o doc **por seção** (títulos `## …`, `2.`, `2.1)`, `SEÇÃO …`), pontua cada seção com as keywords do mapa e escreve `[[service:<id>]]` na primeira linha da seção vencedora.
 
 ```bash
 ./scripts/scan-repos.sh --workspace ~/dev/repos      # gera o mapa (--dry-run p/ só ver)
@@ -939,7 +939,7 @@ Detalhes de comportamento:
 
 Cada repo recebe um `DEVIN_PROMPT.md` **escopado pela camada** — o `-api` é instruído a implementar só a API, o `-mfe` só o front — com o resto do serviço declarado como fora de escopo. Use `--no-scan` para reaproveitar o mapa atual e `--no-marcar` para não tocar nos docs.
 
-### 13. Índice do código: assertividade sem LLM (`src/repo_index.py`)
+### 13. Índice do código: assertividade sem LLM (`src/repos/repo_index.py`)
 
 O nome do repositório é um sinal pobre. Um documento pode falar de "vitrine", "cupom" e "carrinho" sem nunca escrever "ofertas" — e aí o de/para por nome de repo erra. O `repo_index` resolve isso lendo o **código real** e transformando-o em vocabulário.
 
@@ -1472,30 +1472,27 @@ pipeline/
 │   ├── fixtures/                  # evals + executor samples
 │   └── integration/
 └── src/
-    ├── apply.py                   # apply em config + snapshot/rollback
-    ├── run.py                     # pipeline + Canonical Spec + runtime
-    ├── close_loop.py              # verify por evidência (Git + logs) / repair
-    ├── parallel_exec.py           # scheduler CLI: ondas + semáforo + relatório
-    ├── approval.py                # request-approval / approve / promote (HMAC)
-    ├── plan_repos.py              # implementation_plan multi-repo
-    ├── improve.py                 # diagnose → propose → eval → gate
-    ├── ingest.py / docs_ingest.py / preprocess.py / engenharia.py
-    ├── servicos.py / marcar.py / repo_index.py
-    ├── state_store.py             # workflow state + CAS/lock (file; redis=12b)
-    ├── doc_compress.py / rag_compress.py
-    ├── context_builder.py / reason.py / emit.py / economia.py
+    ├── apply.py / approval.py     # CLIs (shims) sobre learning/ / runtime/
+    ├── run.py / close_loop.py …   # shims CLI legados → pacotes abaixo
+    ├── ingest/                    # load inputs + docs
+    ├── preprocess/                # desidrata UI/regras + engenharia
+    ├── compress/                  # doc_compress, hybrid_retrieval, rag_compress
+    ├── context/                   # builder, tokenizer, task_metrics
+    ├── reason/                    # LLM package / live + economia
+    ├── emit/                      # grava artefatos
+    ├── repos/                     # servicos, marcar, repo_index
     ├── domain/                    # Claim, SourceRef, DocumentChunk, CanonicalSpec
-    ├── runtime/                   # RunContext, RunStore, EventStore, atomic_io, approval
+    ├── runtime/                   # run, state_store, parallel_exec, orchestrator, approval
     ├── spec/                      # builder do IR
     ├── validators/                # quality gate
     ├── renderers/                 # história/PRD/OpenAPI/Mermaid/SDD a partir do IR
-    ├── executors/                 # policy, verify, evidence, loop, Devin, scheduler, safe_exec
+    ├── executors/                 # close_loop, policy, verify, Devin, scheduler
     ├── hardening/                 # debugger, input scan, claim tools, recall
-    ├── planning/                  # grafo observado, camadas (fallback), plan
-    └── learning/                  # evals, proposals, accept, failure_patterns
+    ├── planning/                  # plan_repos + grafo observado
+    └── learning/                  # improve, evals, apply_rollback, proposals
 ```
 
-Leitura recomendada: `run.py` → `spec/builder.py` → `validators/` → `executors/verify.py` → `learning/evals.py`. Para o caminho clássico de tokens: `rag_compress.py` → `doc_compress.py` → `context_builder.py`.
+Leitura recomendada: `runtime/run.py` → `spec/builder.py` → `validators/` → `executors/verify.py` → `learning/evals.py`. Para o caminho clássico de tokens: `compress/rag_compress.py` → `compress/doc_compress.py` → `context/builder.py`.
 
 Como o time implementa tickets em paralelo (worktrees + Kanban em `.scratch`):
 [Desenvolvimento paralelo](#desenvolvimento-paralelo-worktrees--kanban-em-scratch).
@@ -1754,7 +1751,7 @@ Cada execução imprime JSON com:
 
 Use essas métricas para validar que a pipeline continua “barata” ao crescer o volume de insumos. Casos `critical: true` no conjunto de evals (`access_denied`, `eval_adversarial`, `eval_multi_context`, …) cobrem preservação de sinais críticos.
 
-### Calculadora de economia (`src/economia.py`)
+### Calculadora de economia (`src/reason/economia.py`)
 
 Mede o custo estimado de gerar o mesmo artefato de **duas formas** e mostra a diferença em tokens e USD.
 
@@ -1819,7 +1816,7 @@ Na amostra incluída (~3000 linhas + microserviços + docx), a calculadora típi
 **Contagem naive (baseline):** docs brutos + figma/regras/engenharia/template + ~2,5k system + ~1,8k tools + ~3k histórico.  
 **Contagem Prompt-less:** pacote de `build_context` (system compacto + state + consolidado + template) + tools compactas — **sem** histórico e **sem** texto bruto.
 
-Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `src/economia.py` se o vendor mudar a lista. A contagem pré-chamada usa o tokenizer do `--modelo` (`method=official` via tiktoken no OpenAI). Sem a lib oficial, ou em Anthropic/Gemini, o fallback é `chars÷4` com `method=heuristic` e **não** é apresentado como contagem exata. No `--live`, `token_usage.billable` / `delta` / `cache_hit` vêm da resposta do vendor (`observe_billable`).
+Preços são tabelas de referência (USD / 1M tokens). Atualize `MODELOS` em `src/reason/economia.py` se o vendor mudar a lista. A contagem pré-chamada usa o tokenizer do `--modelo` (`method=official` via tiktoken no OpenAI). Sem a lib oficial, ou em Anthropic/Gemini, o fallback é `chars÷4` com `method=heuristic` e **não** é apresentado como contagem exata. No `--live`, `token_usage.billable` / `delta` / `cache_hit` vêm da resposta do vendor (`observe_billable`).
 
 ---
 
