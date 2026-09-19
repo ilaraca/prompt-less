@@ -1445,6 +1445,9 @@ pipeline/
 ├── outputs/                       # espelho compatível (Devin/scripts)
 ├── docs/
 │   └── rag-e-cli.md
+├── .scratch/harness/              # Kanban canônico (board + issues) — ver § abaixo
+│   ├── board.md                   # frontier, Blocked by, Versionamento
+│   └── issues/<NN>-<slug>.md      # aceite + Implementation note
 ├── tests/
 │   ├── fixtures/                  # evals + executor samples
 │   └── integration/
@@ -1473,6 +1476,9 @@ pipeline/
 ```
 
 Leitura recomendada: `run.py` → `spec/builder.py` → `validators/` → `executors/verify.py` → `learning/evals.py`. Para o caminho clássico de tokens: `rag_compress.py` → `doc_compress.py` → `context_builder.py`.
+
+Como o time implementa tickets em paralelo (worktrees + Kanban em `.scratch`):
+[Desenvolvimento paralelo](#desenvolvimento-paralelo-worktrees--kanban-em-scratch).
 
 ---
 
@@ -1592,6 +1598,122 @@ gh api -X PUT repos/ilaraca/prompt-less/branches/main/protection \
 ```
 
 Até essa regra existir, merge em `main` **não** está protegido pelo GitHub — só pelo workflow que falha na PR.
+
+---
+
+## Desenvolvimento paralelo (worktrees + Kanban em `.scratch`)
+
+O harness evolui em **ondas**: vários tickets em paralelo, **um** ponto de
+integração, **um** PR contra `main`. O estado do trabalho (quem pode começar,
+o que espera review humano) vive em **`.scratch/harness/`**, versionado no
+mesmo git do código — não é um segundo repositório.
+
+### Como `.scratch` se liga ao resto
+
+| Peça | Onde | Papel |
+|------|------|--------|
+| Kanban canônico | **`pipeline/.scratch/harness/`** | Única fonte de verdade do board e das issues |
+| Board | `.scratch/harness/board.md` | Tabela ID · título · Kanban · `Blocked by`; notas da onda |
+| Issues | `.scratch/harness/issues/<NN>-<slug>.md` | Aceite, worktree/branch, `## Implementation note` |
+| Clone estável | `pipeline/` na branch `workspace/stable` | Edita só o Kanban; rastreia `origin/feature/onda-frontier` enquanto a onda está aberta |
+| Worktree filha | `../.worktrees/<id-slug>/` · `feature/<slug>` | Implementa **um** ticket; commits de código (+ README/CHANGELOG do slice) |
+| Worktree pai | `../.worktrees/onda-merge/` · `feature/onda-frontier` | Merge das filhas Done; quality gates; **único** PR → `main` |
+| Rules Cursor | `.cursor/rules/` (clone) e regras do workspace | Impedem PR da filha, Kanban fora de `.scratch`, etc. |
+
+Layout típico do workspace Cursor (pasta-mãe **não** é git):
+
+```text
+techlead-docs/                         ← workspace Cursor (sem .git)
+├── pipeline/                          ← clone ilaraca/prompt-less
+│   ├── .scratch/harness/board.md      ← editar Kanban AQUI
+│   ├── .scratch/harness/issues/…
+│   └── (código)
+└── .worktrees/                        ← irmã do clone (git worktree)
+    ├── 38-critical-context-budget/    · feature/critical-context-budget
+    ├── 39-case-regression-gates/      · feature/case-regression-gates
+    └── onda-merge/                    · feature/onda-frontier
+```
+
+**Proibido:** editar board/issues em `.worktrees/**/.scratch/harness/`,
+recriar `.scratch` na raiz do workspace, ou abrir PR da filha contra `main`.
+
+Sync do Kanban (governança sobe na branch da onda; o pai faz ff-only):
+
+```bash
+cd pipeline   # workspace/stable
+git add .scratch/harness
+git commit -m "docs: …"
+git push origin HEAD:feature/onda-frontier
+cd ../.worktrees/onda-merge && git fetch && git merge --ff-only origin/feature/onda-frontier
+bash scripts/check_kanban_sync.sh   # no clone
+```
+
+Cada issue aponta para a worktree (`Worktree: … · feature/…`) e para o pai;
+“já subiu?” = o commit da filha é ancestral de `feature/onda-frontier` (e,
+depois do merge, de `main`) — não comparar `ahead/behind` da filha contra
+`main` como se ela devesse conter as irmãs.
+
+### Passo a passo (neste repo e para replicar noutro)
+
+**1. Layout** — clone + pasta `../.worktrees/`. Criar o pai uma vez:
+
+```bash
+cd /path/to/clone
+git fetch origin
+git worktree add ../.worktrees/onda-merge -b feature/onda-frontier origin/main
+```
+
+**2. Slices no `.scratch`** — quebrar o PRD em tickets E2E (não “só camada”):
+
+- ID estável (`01-slug`, `38-critical-context-budget`)
+- `Blocked by` no board e na issue
+- Colunas: `Todo` → `In progress` → `Feedback` → `Done`
+- Aceite testável na issue
+
+Só a **frontier** (blockers todos `Done`) pode entrar em `In progress`.
+
+**3. Rules alwaysApply** (Cursor) — no mínimo:
+
+- frontier + Feedback humano obrigatório (agente para em Feedback)
+- filha nunca abre PR; só o pai integra
+- Kanban só no path canônico (aqui: `pipeline/.scratch/harness/`)
+- opcional: feature observável exige README + CHANGELOG
+
+**4. Ciclo de uma onda**
+
+```text
+1. Ler board.md → listar frontier
+2. Por ticket: git worktree add ../.worktrees/<id-slug> -b feature/<slug> …
+3. Um agente por filha → implementa → Feedback + Implementation note → PARA
+4. Humano marca Done na issue + board (só em pipeline/.scratch/harness/)
+5. No onda-merge: merge feature/<slug>; PYTHONPATH=. python scripts/quality_gates.py
+6. Um gh pr create do pai → main
+7. Após merge: não rebasear filhas; próxima onda em cima de main
+```
+
+**5. Quality gate** — o mesmo comando do CI (`scripts/quality_gates.py`).
+`pytest` sozinho não fecha o ticket. Ver [Gates de qualidade](#gates-de-qualidade).
+
+**6. Documentação do slice** — CLI/gate/artefato novo: README + entrada em
+`CHANGELOG.md` `[Unreleased]` no mesmo commit (ou no imediatamente seguinte).
+A Implementation note da issue em `.scratch` deve citar isso.
+
+### Checklist “fluxo replicado?”
+
+- [ ] `.scratch/<feature>/board.md` + `issues/` com `Blocked by`
+- [ ] Só frontier em `In progress`
+- [ ] Feedback → Done só por humano
+- [ ] Worktree filha por ticket; worktree pai para integração
+- [ ] Zero PRs de filha contra `main`
+- [ ] Kanban num único path versionado (nunca nas filhas)
+- [ ] Script local = CI remoto
+
+O que **não** precisa copiar: o nome `workspace/stable` (conveniência local),
+o conteúdo deste harness, nem dezenas de worktrees antigas (pode remover
+filhas depois que o pai merjou). Em outro repo, `.scratch/<nome-da-feature>/`
+serve no lugar de `.scratch/harness/`.
+
+Detalhe operacional e histórico das séries: [`.scratch/harness/board.md`](./.scratch/harness/board.md) § Versionamento.
 
 ---
 
